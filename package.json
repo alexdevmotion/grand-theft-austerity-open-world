@@ -1,0 +1,29 @@
+{
+  "name": "grand-theft-austerity-open-world",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Third-person open-world Bucharest — B★ BUILDERSTAR GAMES",
+  "scripts": {
+    "dev": "vite --port 5273 --strictPort",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview --port 5274 --strictPort",
+    "shot": "node tools/shot.mjs",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "0.19.3",
+    "n8ao": "2.0.0",
+    "postprocessing": "6.39.4",
+    "three": "0.185.1",
+    "three-mesh-bvh": "0.9.13"
+  },
+  "devDependencies": {
+    "@types/node": "24",
+    "@types/three": "0.185.0",
+    "typescript": "5.9.3",
+    "vite": "8.1.5",
+    "vite-plugin-glsl": "1.5.1"
+  }
+}

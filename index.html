@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ro">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>GRAND THEFT AUSTERITY — București</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; overflow: hidden; background: #08050e; }
+      body { font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+      #app { position: fixed; inset: 0; }
+      canvas#viewport { display: block; width: 100%; height: 100%; touch-action: none; }
+      #ui-root { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+      #boot {
+        position: fixed; inset: 0; z-index: 100; display: grid; place-items: center;
+        background: radial-gradient(ellipse at 50% 65%, #3a1350 0%, #150a24 45%, #07040d 100%);
+        color: #f7e9ff; transition: opacity .6s ease; font-weight: 700; letter-spacing: .18em;
+      }
+      #boot .b-inner { text-align: center; }
+      #boot .b-studio { font-size: 12px; color: #ff9c3f; letter-spacing: .5em; margin-bottom: 18px; }
+      #boot .b-title { font-size: clamp(28px, 6vw, 68px); letter-spacing: .06em;
+        background: linear-gradient(180deg, #ffd9a0 0%, #ff7ac2 55%, #a25cff 100%);
+        -webkit-background-clip: text; background-clip: text; color: transparent; }
+      #boot .b-bar { margin: 26px auto 0; width: min(420px, 60vw); height: 3px; background: #2c1b45; overflow: hidden; }
+      #boot .b-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #ff7a2f, #ff4fa3, #9b5cff); transition: width .25s ease; }
+      #boot .b-status { margin-top: 14px; font-size: 11px; letter-spacing: .3em; color: #9a86b8; font-weight: 500; }
+      #boot.hidden { opacity: 0; pointer-events: none; }
+      #fatal { position: fixed; inset: 0; z-index: 200; display: none; padding: 6vh 6vw;
+        background: #120610; color: #ffb4c8; font: 13px/1.6 ui-monospace, monospace; overflow: auto; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="viewport"></canvas>
+      <div id="ui-root"></div>
+    </div>
+    <div id="boot">
+      <div class="b-inner">
+        <div class="b-studio">B★ BUILDERSTAR GAMES</div>
+        <div class="b-title">GRAND THEFT AUSTERITY</div>
+        <div class="b-bar"><div class="b-fill" id="boot-fill"></div></div>
+        <div class="b-status" id="boot-status">SE ÎNCARCĂ BUCUREȘTIUL…</div>
+      </div>
+    </div>
+    <pre id="fatal"></pre>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

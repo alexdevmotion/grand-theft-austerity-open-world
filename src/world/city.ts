@@ -96,6 +96,9 @@ export class CitySystem implements System, CityService {
   /** Alive road segments, as node-id pairs, for spawn sampling. */
   private segments: Array<[number, number]> = [];
 
+  /** Raised walkable slabs (plaza decks, landmark forecourts), world-space. */
+  private raisedSlabs: Array<{ x0: number; z0: number; x1: number; z1: number; top: number }> = [];
+
   private drawDistance = 1600;
   private night = 0;
   private readonly camPos = new THREE.Vector3();
@@ -112,6 +115,10 @@ export class CitySystem implements System, CityService {
       },
       groundHeight(x, z) {
         if (Math.abs(x) > HALF + blockSize || Math.abs(z) > HALF + blockSize) return -Infinity;
+        // Raised landmark slabs win: they overlap road tiles that would
+        // otherwise report 0, which is what put characters inside the stone.
+        const slab = self.slabTopAt(x, z);
+        if (slab !== null) return slab;
         return self.onPavement(x, z) ? KERB_H : 0;
       },
       isBlocked(x, z) {
@@ -328,6 +335,24 @@ export class CitySystem implements System, CityService {
           new THREE.Vector3(bx.x, bx.h / 2, bx.z),
         );
       }
+
+      // Raised walkable slabs — plaza decks and forecourts. These sit inside
+      // LANDMARK_VOIDS, so the block's kerb ring is skipped and nothing else
+      // gave them a floor: they had no collider, and `groundHeight` reported
+      // the carriageway. Everything standing on a plaza was a kerb inside the
+      // stone. Register both the physics box and the analytic height so the
+      // collider, the footing probe and the crowd all agree.
+      for (const sl of r.slabs) {
+        this.raisedSlabs.push(sl);
+        const hx = (sl.x1 - sl.x0) / 2;
+        const hz = (sl.z1 - sl.z0) / 2;
+        phys?.addStaticBox(
+          new THREE.Vector3(hx, sl.top / 2 + 0.1, hz),
+          new THREE.Vector3(sl.x0 + hx, sl.top / 2 - 0.1, sl.z0 + hz),
+          undefined,
+          GROUP.terrain,
+        );
+      }
     }
 
     // Builders House: real lit floors behind the curtain wall, so the tower
@@ -511,6 +536,16 @@ export class CitySystem implements System, CityService {
       if (Math.abs(x - b.x) < b.hx && Math.abs(z - b.z) < b.hz) return true;
     }
     return false;
+  }
+
+  /** Top of the raised landmark slab under (x, z), or null if there isn't one. */
+  private slabTopAt(x: number, z: number): number | null {
+    let best: number | null = null;
+    for (const s of this.raisedSlabs) {
+      if (x < s.x0 || x > s.x1 || z < s.z0 || z > s.z1) continue;
+      if (best === null || s.top > best) best = s.top;
+    }
+    return best;
   }
 
   private onPavement(x: number, z: number): boolean {

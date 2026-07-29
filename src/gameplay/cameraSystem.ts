@@ -26,7 +26,7 @@
 
 import * as THREE from 'three';
 import type { GameContext, System } from '../core/engine';
-import { CG, PhysicsWorld, groups } from '../physics/physics';
+import { CG, PhysicsWorld, probeGroups } from '../physics/physics';
 import { Rng } from '../core/rng';
 import { Services, type CameraService, type CityService } from '../core/services';
 
@@ -234,7 +234,7 @@ export class CameraSystem implements System, CameraService {
         this._pivot,
         toCam,
         dist + 0.4,
-        groups(CG.SENSOR, CG.STATIC | CG.TERRAIN),
+        probeGroups(CG.STATIC | CG.TERRAIN),
       );
       if (hit && !this.isThinObstacle(hit.distance, dist, toCam)) {
         const pulled = Math.max(rig.hardMin, hit.distance - 0.35);
@@ -256,7 +256,7 @@ export class CameraSystem implements System, CameraService {
               this._pivot,
               this._tmp2,
               liftLen,
-              groups(CG.SENSOR, CG.STATIC | CG.TERRAIN),
+              probeGroups(CG.STATIC | CG.TERRAIN),
             );
             if (up) {
               this._desired.copy(this._pivot)
@@ -420,7 +420,7 @@ export class CameraSystem implements System, CameraService {
       this._probe,
       this._tmp2,
       boomLen,
-      groups(CG.SENSOR, CG.STATIC | CG.TERRAIN),
+      probeGroups(CG.STATIC | CG.TERRAIN),
     );
     // No far surface => the camera is inside the solid. Definitely not thin.
     if (!back) return false;
@@ -452,7 +452,7 @@ export class CameraSystem implements System, CameraService {
       this._probe,
       CameraSystem.DOWN,
       FLOOR_PROBE_LENGTH,
-      groups(CG.SENSOR, CG.STATIC | CG.TERRAIN),
+      probeGroups(CG.STATIC | CG.TERRAIN),
     );
     if (hit) {
       const surface = this._probe.y - hit.distance;

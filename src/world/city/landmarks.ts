@@ -75,6 +75,19 @@ export interface LandmarkResult {
   position: THREE.Vector3;
   radius: number;
   boxes: Array<{ x: number; z: number; hx: number; hz: number; h: number }>;
+  /**
+   * WALKABLE RAISED SLABS — plaza decks and forecourts, in world-space rects.
+   *
+   * These are drawn a kerb-height above the road but sit inside
+   * `LANDMARK_VOIDS`, so the block's kerb ring is skipped and nothing else ever
+   * told the world they exist: they had no collider and `spatial.groundHeight`
+   * returned the carriageway height for them. Everything standing on a plaza —
+   * the player and every pedestrian — was a full kerb inside the stone.
+   *
+   * The city registers these as static boxes AND as analytic ground, so the
+   * physics floor, the footing probe and the crowd all agree.
+   */
+  slabs: Array<{ x0: number; z0: number; x1: number; z1: number; top: number }>;
 }
 
 /* ------------------------------------------------------------------ */
@@ -198,6 +211,7 @@ export function buildBuildersHouse(sink: LandmarkSink, rng: Rng): LandmarkResult
   }
 
   /* ---- forecourt: plaza, steps, barriers, hazard tape, pallets ---- */
+  const forecourt = { x0: cx - 40, z0: cz - 40, x1: cx + 34, z1: cz - towerD / 2 - 2, top: 0.17 };
   s.rect(cx - 40, cz - 40, cx + 34, cz - towerD / 2 - 2, 0.17,
     { kind: Surf.plaza, a: 0, b: 0, seed: 7 });
   // Entrance steps.
@@ -229,6 +243,7 @@ export function buildBuildersHouse(sink: LandmarkSink, rng: Rng): LandmarkResult
     position: new THREE.Vector3(cx, 0, cz - 30),
     radius: 55,
     boxes,
+    slabs: [forecourt],
   };
 }
 
@@ -301,6 +316,7 @@ export function buildParliament(sink: LandmarkSink, rng: Rng): LandmarkResult {
   d.box(cx, 34.2, porticoZ, W * 0.40, 2.2, 3.0, 0, { color: lin(0xefe6d2), mr: MR.stone });
 
   /* ---- monumental forecourt and its lamps ---- */
+  const forecourt = { x0: cx - W * 0.7, z0: cz + D / 2 + 8, x1: cx + W * 0.7, z1: cz + D / 2 + 120, top: 0.17 };
   s.rect(cx - W * 0.7, cz + D / 2 + 8, cx + W * 0.7, cz + D / 2 + 120, 0.17,
     { kind: Surf.plaza, a: 0, b: 0, seed: 21 });
   for (let i = 0; i < 5; i++) {
@@ -327,6 +343,7 @@ export function buildParliament(sink: LandmarkSink, rng: Rng): LandmarkResult {
     position: new THREE.Vector3(cx, 0, cz + D / 2 + 70),
     radius: 190,
     boxes,
+    slabs: [forecourt],
   };
 }
 
@@ -355,6 +372,7 @@ export function buildPlaza(sink: LandmarkSink, p: PlazaSpec, rng: Rng): Landmark
   const s = sink.surf(p.x, p.z);
   const r = p.radius;
 
+  const deck = { x0: p.x - r, z0: p.z - r, x1: p.x + r, z1: p.z + r, top: 0.175 };
   s.rect(p.x - r, p.z - r, p.x + r, p.z + r, 0.175, { kind: Surf.plaza, a: 0, b: 0, seed: 33 });
 
   const lamps = 10;
@@ -390,5 +408,6 @@ export function buildPlaza(sink: LandmarkSink, p: PlazaSpec, rng: Rng): Landmark
     position: new THREE.Vector3(p.x, 0, p.z),
     radius: p.radius,
     boxes: [],
+    slabs: [deck],
   };
 }

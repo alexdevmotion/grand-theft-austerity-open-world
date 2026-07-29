@@ -194,8 +194,11 @@ export class Input {
   wasPressed(code: string): boolean {
     return this.enabled && this.pressedThisFrame.has(code);
   }
+  /** Actions held down by the debug harness during automated playtests. */
+  readonly forcedActions = new Set<ActionName>();
+
   action(a: ActionName): boolean {
-    return this.enabled && this.actionsDown.has(a);
+    return this.enabled && (this.actionsDown.has(a) || this.forcedActions.has(a));
   }
   actionPressed(a: ActionName): boolean {
     return this.enabled && this.actionsPressed.has(a);
@@ -208,7 +211,7 @@ export class Input {
   }
   /** Handbrake is Space while driving — resolved by the vehicle system. */
   get handbrake(): boolean {
-    return this.isDown('Space');
+    return this.isDown('Space') || (this.enabled && this.forcedActions.has('handbrake'));
   }
 
   private pollGamepad(): { lx: number; ly: number; rx: number; ry: number; lt: number; rt: number } | null {

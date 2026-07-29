@@ -102,13 +102,50 @@ export class DebugSystem implements System {
       releaseCamera: () => {
         this.scriptedCamera = null;
       },
+      /**
+       * Spawn a vehicle and put the player in it.
+       *
+       * The car is placed ON the nearest road node and turned to face along a
+       * road, rather than at a fixed offset with heading 0. A fixed offset
+       * routinely dropped the car against a building or a barrier, so scripted
+       * throttle produced a crawl and made automated driving tests read as a
+       * broken vehicle when the vehicle was fine.
+       */
       giveVehicle: (kind = 'dacia') => {
         const p = ctx.tryGet(Services.Player);
         const v = ctx.tryGet(Services.Vehicles);
         if (!p || !v) return;
         if (p.inVehicle) p.exitVehicle();
-        const pos = p.position.clone().add(new THREE.Vector3(3, 1, 0));
-        const handle = v.spawn(kind as never, pos, 0, { faction: 'player' });
+
+        const city = ctx.tryGet(Services.City);
+        const pos = p.position.clone();
+        let heading = 0;
+
+        if (city) {
+          const id = city.nearestNode(p.position);
+          const node = id >= 0 ? city.roadNodes[id] : undefined;
+          if (node) {
+            const link = node.links.length ? city.roadNodes[node.links[0]] : undefined;
+            if (link) {
+              const dx = link.position.x - node.position.x;
+              const dz = link.position.z - node.position.z;
+              heading = Math.atan2(dx, dz);
+              // Sit a little way along the link so the car starts on tarmac
+              // rather than in the middle of the junction box.
+              const len = Math.hypot(dx, dz) || 1;
+              pos.set(
+                node.position.x + (dx / len) * 6,
+                node.position.y,
+                node.position.z + (dz / len) * 6,
+              );
+            } else {
+              pos.copy(node.position);
+            }
+          }
+        }
+
+        pos.y += 1;
+        const handle = v.spawn(kind as never, pos, heading, { faction: 'player' });
         p.enterVehicle(handle);
       },
       setInput: (i) => {
@@ -116,6 +153,9 @@ export class DebugSystem implements System {
       },
       clearInput: () => {
         this.synthetic = {};
+        ctx.input.forcedActions.clear();
+        ctx.input.axes.moveX = ctx.input.axes.moveY = 0;
+        ctx.input.axes.throttle = ctx.input.axes.steer = 0;
       },
       stats: () => {
         const info = ctx.renderer.info;
@@ -171,15 +211,39 @@ export class DebugSystem implements System {
     (window as unknown as { __GTA_DEBUG__: DebugApi }).__GTA_DEBUG__ = api;
   }
 
-  update(_dt: number, ctx: GameContext): void {
-    this.framesRendered++;
-
-    // Inject synthetic input for automated playtests.
+  /**
+   * Inject synthetic input for automated playtests.
+   *
+   * This MUST run in fixedUpdate, not update. The frame order is
+   * `input.update()` → fixedUpdate×N → update → lateUpdate, and both the
+   * player controller and the vehicle simulation read `input.axes` from
+   * *fixedUpdate*. Writing the axes in `update()` therefore lands after every
+   * consumer has already read them, and `input.update()` clears them again at
+   * the top of the next frame — so scripted walking and driving silently did
+   * nothing. DebugSystem.order is 1, ahead of the player (200) and the
+   * vehicles (110), so writing here reaches both in the same step.
+   */
+  fixedUpdate(_dt: number, ctx: GameContext): void {
     const s = this.synthetic;
     if (s.moveX !== undefined) ctx.input.axes.moveX = s.moveX;
     if (s.moveY !== undefined) ctx.input.axes.moveY = s.moveY;
     if (s.throttle !== undefined) ctx.input.axes.throttle = s.throttle;
     if (s.steer !== undefined) ctx.input.axes.steer = s.steer;
+
+    const forced = ctx.input.forcedActions;
+    if (s.sprint !== undefined) {
+      if (s.sprint) forced.add('sprint');
+      else forced.delete('sprint');
+    }
+    if (s.handbrake !== undefined) {
+      if (s.handbrake) forced.add('handbrake');
+      else forced.delete('handbrake');
+    }
+  }
+
+  update(_dt: number, ctx: GameContext): void {
+    this.framesRendered++;
+    void ctx;
 
     if (!this.visible) return;
     const st = (window as unknown as { __GTA_DEBUG__: DebugApi }).__GTA_DEBUG__.stats();

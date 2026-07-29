@@ -71,6 +71,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * three-quarter view of the glass tower at Builders House with the wet street
  * running to the horizon and the sun behind the building.
  */
+/**
+ * NEVER hardcode camera coordinates here — the city regenerates and they go
+ * stale, which silently produces screenshots taken from inside a wall.
+ * Always frame via __GTA_DEBUG__.frameLandmark / frameHere, which probe for a
+ * spot with a clear line of sight to the subject.
+ */
 const SHOTS = [
   {
     name: 'hero',
@@ -79,22 +85,24 @@ const SHOTS = [
       const D = window.__GTA_DEBUG__;
       D.goTo('buildersHouse');
       D.giveVehicle('dacia');
-      D.setCamera(-166, 2.4, 176, -184, 12, 150, 42);
+      return D.frameLandmark('buildersHouse', { distance: 42, height: 2.2, lookHeight: 26, fov: 44 });
     })()`,
   },
   {
     name: 'street',
-    note: 'Eye-level street view down a boulevard — traffic, peds, wet reflections.',
+    note: 'Eye-level street view — traffic, peds, wet reflections, dressing.',
     setup: `(() => {
       const D = window.__GTA_DEBUG__;
       D.goTo('buildersHouse');
-      D.setCamera(-160, 1.7, 150, -60, 6, 150, 58);
+      return D.frameHere({ distance: 30, height: 1.75, fov: 58 });
     })()`,
   },
   {
     name: 'skyline',
     note: 'Elevated wide — city density, silhouette variety, sky and cloud deck.',
-    setup: `(() => { window.__GTA_DEBUG__.setCamera(-420, 145, 420, 0, 20, 0, 48); })()`,
+    setup: `(() => {
+      return window.__GTA_DEBUG__.frameLandmark('buildersHouse', { distance: 420, height: 155, lookHeight: 30, fov: 46 });
+    })()`,
   },
   {
     name: 'plaza',
@@ -102,27 +110,25 @@ const SHOTS = [
     setup: `(() => {
       const D = window.__GTA_DEBUG__;
       D.goTo('broadcastPlaza');
-      D.setCamera(440, 4.0, 210, 460, 22, 184, 50);
+      return D.frameLandmark('broadcastPlaza', { distance: 55, height: 3.0, lookHeight: 16, fov: 50 });
     })()`,
   },
   {
     name: 'parliament',
     note: 'Palace of Parliament axis — the landmark that says Bucharest.',
     setup: `(() => {
-      const D = window.__GTA_DEBUG__;
-      D.setCamera(-560, 26, -320, -860, 40, -740, 44);
+      return window.__GTA_DEBUG__.frameLandmark('palatulParlamentului', { distance: 300, height: 26, lookHeight: 34, fov: 44 });
     })()`,
   },
   {
     name: 'chase',
-    note: 'Third-person driving at speed with police response at 3 stars.',
+    note: 'Third-person driving at speed — gameplay camera, not a scripted one.',
     setup: `(() => {
       const D = window.__GTA_DEBUG__;
       D.goTo('buildersHouse');
       D.giveVehicle('dacia');
       D.releaseCamera();
       D.setInput({ throttle: 1, steer: 0.12 });
-      if (window.__GTA_DEBUG__.stats) {}
     })()`,
     settle: 4200,
     teardown: `window.__GTA_DEBUG__.clearInput()`,
@@ -146,7 +152,7 @@ const SHOTS = [
       const D = window.__GTA_DEBUG__;
       D.setTimeOfDay(23.2); D.setWeather('night');
       D.goTo('buildersHouse');
-      D.setCamera(-160, 1.9, 152, -60, 7, 150, 55);
+      return D.frameHere({ distance: 34, height: 1.9, fov: 55 });
     })()`,
   },
   {
@@ -155,7 +161,8 @@ const SHOTS = [
     setup: `(() => {
       const D = window.__GTA_DEBUG__;
       D.setTimeOfDay(19.4); D.setWeather('stormRain');
-      D.setCamera(-160, 1.9, 152, -60, 7, 150, 55);
+      D.goTo('buildersHouse');
+      return D.frameHere({ distance: 34, height: 1.9, fov: 55 });
     })()`,
   },
 ];

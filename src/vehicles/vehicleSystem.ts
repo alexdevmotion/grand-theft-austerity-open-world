@@ -1,19 +1,22 @@
 /**
- * Raycast-vehicle driving.
+ * Vehicle simulation and bodywork.
  *
- * OWNER: vehicle agent. Baseline delivers a working 4-wheel raycast car with
- * suspension, weight transfer, slip-based grip, handbrake, and a placeholder
- * body. The vehicle agent must deliver: a real Dacia 1300 silhouette
- * (battered yellow/purple), per-class handling, damage deformation, working
- * lights/brake lights/indicators, skidmarks, exhaust, engine audio hooks,
- * and the other traffic classes.
+ * Raycast vehicle (4 suspension rays, slip-based grip, load transfer) plus the
+ * whole presentation layer: procedural bodies, working lamps, damage
+ * deformation, skidmarks, tyre smoke and exhaust.
+ *
+ * Handling brief for the Dacia: forgiving at low speed, slow to wind up, capped
+ * top speed, trivially easy to handbrake-turn, mildly oversteery once moving,
+ * with exaggerated *visual* body roll / squat / dive that never touches the
+ * collider — so it feels heavy and theatrical but cannot be flipped by its own
+ * animation.
  */
 
 import * as THREE from 'three';
 import type RAPIER from '@dimforge/rapier3d-compat';
 import type { GameContext, System } from '../core/engine';
 import { CG, GROUP, PhysicsWorld, groups } from '../physics/physics';
-import { Palette } from '../artDirection';
+import { Rng } from '../core/rng';
 import {
   Services,
   type Faction,
@@ -21,9 +24,20 @@ import {
   type VehicleHandle,
   type VehicleService,
 } from '../core/services';
+import { createCarMaterial, makeCarUniforms, type CarUniforms } from './builder';
+import { vehicleAtlas } from './texture';
+import { SPECS, VARIANTS, buildBody, type BodyAnchors, type VehicleSpec } from './bodies';
+import { wheelGeometry } from './wheels';
+import { VehicleLamps, VehicleLightPool, contactShadowAssets } from './lights';
+import { DamageModel, deform } from './damage';
+import { ParticlePool, SkidmarkPool } from './skidmarks';
+import { heroDents } from './dacia';
+
+/* ------------------------------------------------------------------ */
+/* Tuning                                                              */
+/* ------------------------------------------------------------------ */
 
 interface WheelSpec {
-  /** Local-space attachment point of the suspension. */
   offset: THREE.Vector3;
   radius: number;
   steered: boolean;
@@ -32,71 +46,146 @@ interface WheelSpec {
 }
 
 export interface VehicleTuning {
+  spec: VehicleSpec;
   mass: number;
-  /** Half-extents of the collision box. */
   halfExtents: THREE.Vector3;
-  /** Centre of mass offset — lower = more stable. */
+  colliderCentreY: number;
   comOffset: THREE.Vector3;
   suspensionRest: number;
   suspensionStiffness: number;
   suspensionDamping: number;
-  maxSuspensionTravel: number;
   engineForce: number;
   brakeForce: number;
   handbrakeForce: number;
   maxSteerRad: number;
-  /** Steering falls off with speed for stability. */
   steerSpeedFalloff: number;
-  /** Lateral grip coefficient per wheel. */
+  steerRate: number;
   gripFront: number;
   gripRear: number;
+  /** How much rear grip is lost at top speed — this is the oversteer dial. */
+  rearGripFade: number;
+  handbrakeSlide: number;
   topSpeed: number;
+  reverseSpeed: number;
   downforce: number;
+  /** Visual-only body motion gains. */
+  rollGain: number;
+  pitchGain: number;
+  /** How hard the chassis fights being tipped over. */
+  antiRoll: number;
   wheels: WheelSpec[];
+  seats: number;
 }
 
-const DACIA_TUNING: VehicleTuning = {
-  mass: 980,
-  halfExtents: new THREE.Vector3(0.82, 0.52, 2.02),
-  comOffset: new THREE.Vector3(0, -0.34, 0.06),
-  suspensionRest: 0.46,
-  suspensionStiffness: 30,
-  suspensionDamping: 3.6,
-  maxSuspensionTravel: 0.28,
-  engineForce: 7400,
-  brakeForce: 5200,
-  handbrakeForce: 8200,
-  maxSteerRad: 0.56,
-  steerSpeedFalloff: 0.045,
-  gripFront: 5.4,
-  gripRear: 4.7,
-  topSpeed: 41, // m/s ~ 148 km/h; the Dacia is not fast
-  downforce: 8,
-  wheels: [
-    { offset: new THREE.Vector3(-0.76, -0.24, 1.32), radius: 0.32, steered: true, driven: false, handbraked: false },
-    { offset: new THREE.Vector3(0.76, -0.24, 1.32), radius: 0.32, steered: true, driven: false, handbraked: false },
-    { offset: new THREE.Vector3(-0.76, -0.24, -1.28), radius: 0.32, steered: false, driven: true, handbraked: true },
-    { offset: new THREE.Vector3(0.76, -0.24, -1.28), radius: 0.32, steered: false, driven: true, handbraked: true },
-  ],
+interface HandlingOverride {
+  mass: number;
+  engineForce: number;
+  topSpeed: number;
+  gripFront?: number;
+  gripRear?: number;
+  rearGripFade?: number;
+  maxSteerRad?: number;
+  suspensionStiffness?: number;
+  rollGain?: number;
+  pitchGain?: number;
+  brakeForce?: number;
+  handbrakeForce?: number;
+  antiRoll?: number;
+  downforce?: number;
+}
+
+const HANDLING: Record<VehicleClass, HandlingOverride> = {
+  // Slow, soft, tail-happy. 112 km/h flat out and it takes a while to get there.
+  dacia: {
+    mass: 950, engineForce: 6200, topSpeed: 34, gripFront: 6.8, gripRear: 6.0,
+    rearGripFade: 0.30, maxSteerRad: 0.62, suspensionStiffness: 25,
+    rollGain: 1.0, pitchGain: 1.0, brakeForce: 6200, handbrakeForce: 9200, antiRoll: 1.25,
+  },
+  sedan: { mass: 1320, engineForce: 9600, topSpeed: 44, gripFront: 8.4, gripRear: 8.0, rearGripFade: 0.16, rollGain: 0.6, pitchGain: 0.7, suspensionStiffness: 32 },
+  hatch: { mass: 1080, engineForce: 8000, topSpeed: 40, gripFront: 8.0, gripRear: 7.4, rearGripFade: 0.2, rollGain: 0.75, pitchGain: 0.8, suspensionStiffness: 30 },
+  van: { mass: 1980, engineForce: 11500, topSpeed: 35, gripFront: 7.2, gripRear: 7.0, rearGripFade: 0.22, rollGain: 1.35, pitchGain: 1.0, suspensionStiffness: 28, antiRoll: 1.5 },
+  truck: { mass: 6200, engineForce: 30000, topSpeed: 28, gripFront: 7.4, gripRear: 7.4, rearGripFade: 0.1, rollGain: 1.4, pitchGain: 0.9, suspensionStiffness: 30, antiRoll: 1.9 },
+  bus: { mass: 11000, engineForce: 44000, topSpeed: 25, gripFront: 7.6, gripRear: 7.6, rearGripFade: 0.08, rollGain: 1.3, pitchGain: 0.8, suspensionStiffness: 30, antiRoll: 2.2, maxSteerRad: 0.42 },
+  police: { mass: 1420, engineForce: 13500, topSpeed: 50, gripFront: 9.4, gripRear: 9.0, rearGripFade: 0.14, rollGain: 0.55, pitchGain: 0.6, suspensionStiffness: 36, brakeForce: 9000, antiRoll: 1.4 },
+  tram: { mass: 26000, engineForce: 60000, topSpeed: 17, gripFront: 14, gripRear: 14, rearGripFade: 0, maxSteerRad: 0.06, rollGain: 0.18, pitchGain: 0.2, antiRoll: 3.2, suspensionStiffness: 42 },
+  scooter: { mass: 30, engineForce: 260, topSpeed: 8.5, gripFront: 9, gripRear: 9, rearGripFade: 0, maxSteerRad: 0.7, rollGain: 0.5, pitchGain: 0.5, antiRoll: 4.5, suspensionStiffness: 40 },
 };
 
-const TUNING: Record<VehicleClass, VehicleTuning> = {
-  dacia: DACIA_TUNING,
-  sedan: { ...DACIA_TUNING, mass: 1250, engineForce: 9200, topSpeed: 48, gripFront: 6.0, gripRear: 5.4 },
-  hatch: { ...DACIA_TUNING, mass: 1050, engineForce: 8200, topSpeed: 45 },
-  van: { ...DACIA_TUNING, mass: 1900, engineForce: 11000, topSpeed: 40, halfExtents: new THREE.Vector3(0.95, 0.85, 2.5) },
-  truck: { ...DACIA_TUNING, mass: 4200, engineForce: 20000, topSpeed: 32, halfExtents: new THREE.Vector3(1.15, 1.2, 3.6) },
-  bus: { ...DACIA_TUNING, mass: 8000, engineForce: 30000, topSpeed: 28, halfExtents: new THREE.Vector3(1.3, 1.5, 5.5) },
-  police: { ...DACIA_TUNING, mass: 1350, engineForce: 12500, topSpeed: 54, gripFront: 6.6, gripRear: 6.0 },
-  tram: { ...DACIA_TUNING, mass: 20000, engineForce: 40000, topSpeed: 18, halfExtents: new THREE.Vector3(1.3, 1.7, 8) },
-  scooter: { ...DACIA_TUNING, mass: 120, engineForce: 900, topSpeed: 12, halfExtents: new THREE.Vector3(0.25, 0.4, 0.6) },
-};
+function makeTuning(kind: VehicleClass): VehicleTuning {
+  const spec = SPECS[kind];
+  const h = HANDLING[kind];
+  const stiffness = h.suspensionStiffness ?? 28;
+  const rest = Math.min(0.36, spec.wheelRadius * 1.15);
+  // Static compression at rest: spring force must balance a quarter of the
+  // weight, so this is exactly where the wheel sits when parked.
+  const restCompression = 9.81 / stiffness;
+  const wheelCentreY = -spec.rideHeight + spec.wheelRadius;
+  const attachY = wheelCentreY + rest * (1 - restCompression);
+
+  const wheels: WheelSpec[] = [];
+  if (spec.twoWheeled) {
+    wheels.push(
+      { offset: new THREE.Vector3(0, attachY, spec.frontAxleZ), radius: spec.wheelRadius, steered: true, driven: false, handbraked: false },
+      { offset: new THREE.Vector3(0, attachY, spec.rearAxleZ), radius: spec.wheelRadius, steered: false, driven: true, handbraked: true },
+    );
+  } else {
+    for (const sx of [-1, 1]) {
+      wheels.push({ offset: new THREE.Vector3(sx * spec.trackHalf, attachY, spec.frontAxleZ), radius: spec.wheelRadius, steered: true, driven: kind === 'truck' || kind === 'bus' ? false : false, handbraked: false });
+    }
+    for (const sx of [-1, 1]) {
+      wheels.push({ offset: new THREE.Vector3(sx * spec.trackHalf, attachY, spec.rearAxleZ), radius: spec.wheelRadius, steered: false, driven: true, handbraked: true });
+    }
+  }
+
+  // Collider covers the lower body only — a box up to the belt line keeps the
+  // car from catching its own roof on things and keeps the inertia low.
+  const halfY = Math.max(0.3, spec.height * 0.34);
+  const colliderCentreY = -spec.rideHeight + halfY + 0.14;
+
+  return {
+    spec,
+    mass: h.mass,
+    halfExtents: new THREE.Vector3(spec.width * 0.48, halfY, spec.length * 0.48),
+    colliderCentreY,
+    comOffset: new THREE.Vector3(0, -spec.rideHeight + spec.height * 0.20, spec.length * 0.01),
+    suspensionRest: rest,
+    suspensionStiffness: stiffness,
+    suspensionDamping: 3.4,
+    engineForce: h.engineForce,
+    brakeForce: h.brakeForce ?? h.engineForce * 1.15,
+    handbrakeForce: h.handbrakeForce ?? h.engineForce * 1.5,
+    maxSteerRad: h.maxSteerRad ?? 0.56,
+    steerSpeedFalloff: 0.052,
+    steerRate: 7.5,
+    gripFront: h.gripFront ?? 8,
+    gripRear: h.gripRear ?? 7.5,
+    rearGripFade: h.rearGripFade ?? 0.18,
+    handbrakeSlide: kind === 'dacia' ? 0.16 : 0.22,
+    topSpeed: h.topSpeed,
+    reverseSpeed: h.topSpeed * 0.32,
+    downforce: h.downforce ?? 10,
+    rollGain: h.rollGain ?? 0.8,
+    pitchGain: h.pitchGain ?? 0.8,
+    antiRoll: h.antiRoll ?? 1.3,
+    wheels,
+    seats: spec.seats,
+  };
+}
+
+const TUNING = {} as Record<VehicleClass, VehicleTuning>;
+for (const k of Object.keys(SPECS) as VehicleClass[]) TUNING[k] = makeTuning(k);
 
 const UP = new THREE.Vector3(0, 1, 0);
 const DOWN = new THREE.Vector3(0, -1, 0);
 
+/* ------------------------------------------------------------------ */
+/* Vehicle                                                             */
+/* ------------------------------------------------------------------ */
+
 class Vehicle implements VehicleHandle {
   readonly object = new THREE.Group();
+  /** Everything that leans: shell, glass, interior. Wheels stay on the road. */
+  readonly bodyGroup = new THREE.Group();
   readonly position = new THREE.Vector3();
   readonly rotation = new THREE.Quaternion();
   readonly occupants: string[] = [];
@@ -104,28 +193,62 @@ class Vehicle implements VehicleHandle {
   body!: RAPIER.RigidBody;
   collider!: RAPIER.Collider;
   tuning: VehicleTuning;
+  anchors!: BodyAnchors;
+  uniforms: CarUniforms = makeCarUniforms();
+  lamps!: VehicleLamps;
+  damage: DamageModel;
+  shellMesh!: THREE.Mesh;
+  glassMesh: THREE.Mesh | null = null;
+  contactShadow: THREE.Mesh | null = null;
+  lodBand = -1;
 
-  health = 1000;
-  readonly maxHealth = 1000;
-  seats = 4;
-
+  seats: number;
   throttle = 0;
   steerInput = 0;
   handbrakeInput = false;
   steerAngle = 0;
+  siren = 0;
+  headlightLevel = 1;
+  indicator: -1 | 0 | 1 | 2 = 0;
 
   wheelMeshes: THREE.Object3D[] = [];
   wheelContact: boolean[] = [];
   wheelCompression: number[] = [];
   wheelSpin: number[] = [];
-  /** Lateral slip per wheel, used for tyre squeal + skidmarks. */
   wheelSlip: number[] = [];
+  wheelPoint: THREE.Vector3[] = [];
+  private lastSkid: THREE.Vector3[] = [];
+  private skidding: boolean[] = [];
+
+  /** Smoothed accelerations that drive the visual body motion. */
+  private latAccel = 0;
+  private longAccel = 0;
+  private prevFwdSpeed = 0;
+  private upsideTime = 0;
+  /** Seconds with no wheel touching anything. Drives the stuck rescue. */
+  airTime = 0;
+  private exhaustTimer = 0;
+  private smokeTimer = 0;
+  private engineBound = false;
+  audioBoundName = '';
+
+  distanceToCamera = 0;
+  /** Contact force above which a hit counts as a crash, not resting weight. */
+  readonly crashThreshold: number;
+  /** Freshly spawned vehicles ignore contacts while they settle. */
+  private grace = 3.0;
+  /** True while the static-friction clamp is holding the car still. */
+  parked = false;
+  /** Decaying peak speed. Crash damage needs closing speed, not just contact —
+   *  this is what stops a car wedged against a kerb grinding itself to death. */
+  recentSpeed = 0;
 
   private _fwd = new THREE.Vector3();
   private _right = new THREE.Vector3();
   private _up = new THREE.Vector3();
   private _tmp = new THREE.Vector3();
   private _tmp2 = new THREE.Vector3();
+  private _tmp3 = new THREE.Vector3();
 
   constructor(
     readonly id: string,
@@ -134,20 +257,37 @@ class Vehicle implements VehicleHandle {
     private phys: PhysicsWorld,
   ) {
     this.tuning = TUNING[kind];
-    this.wheelContact = this.tuning.wheels.map(() => false);
-    this.wheelCompression = this.tuning.wheels.map(() => 0);
-    this.wheelSpin = this.tuning.wheels.map(() => 0);
-    this.wheelSlip = this.tuning.wheels.map(() => 0);
+    this.seats = this.tuning.seats;
+    const n = this.tuning.wheels.length;
+    this.wheelContact = new Array(n).fill(false);
+    this.wheelCompression = new Array(n).fill(0);
+    this.wheelSpin = new Array(n).fill(0);
+    this.wheelSlip = new Array(n).fill(0);
+    this.wheelPoint = Array.from({ length: n }, () => new THREE.Vector3());
+    this.lastSkid = Array.from({ length: n }, () => new THREE.Vector3());
+    this.skidding = new Array(n).fill(false);
+    this.damage = new DamageModel(kind === 'dacia' ? 1000 : kind === 'truck' || kind === 'bus' || kind === 'tram' ? 4200 : 1200);
+    this.crashThreshold = this.tuning.mass * 9.81 * 2.4;
+    this.object.add(this.bodyGroup);
   }
+
+  get settled(): boolean {
+    return this.grace <= 0;
+  }
+
+  tickGrace(dt: number): void {
+    if (this.grace > 0) this.grace -= dt;
+    this.damage.tick(dt);
+  }
+
+  get health(): number { return this.damage.health; }
+  get maxHealth(): number { return this.damage.maxHealth; }
+  get isWrecked(): boolean { return this.damage.isWrecked; }
 
   get speed(): number {
     const v = this.body.linvel();
-    this.object.getWorldDirection(this._fwd);
+    this._fwd.set(0, 0, 1).applyQuaternion(this.rotation);
     return this._tmp.set(v.x, v.y, v.z).dot(this._fwd);
-  }
-
-  get isWrecked(): boolean {
-    return this.health <= 0;
   }
 
   setControls(throttle: number, steer: number, handbrake: boolean): void {
@@ -156,29 +296,37 @@ class Vehicle implements VehicleHandle {
     this.handbrakeInput = handbrake;
   }
 
+  /** Not part of VehicleService — police/AI cast to this. */
+  setSiren(on: boolean): void { this.siren = on ? 1 : 0; }
+  setIndicator(i: -1 | 0 | 1 | 2): void { this.indicator = i; }
+  setHeadlights(level: number): void { this.headlightLevel = THREE.MathUtils.clamp(level, 0, 1); }
+
   applyDamage(amount: number): void {
-    this.health = Math.max(0, this.health - amount);
+    const before = this.damage.health;
+    this.damage.applyDamage(amount);
+    void before;
   }
 
   teleport(position: THREE.Vector3, headingRad: number): void {
     const q = new THREE.Quaternion().setFromAxisAngle(UP, headingRad);
-    this.body.setTranslation({ x: position.x, y: position.y, z: position.z }, true);
+    this.body.setTranslation({ x: position.x, y: position.y + this.tuning.spec.rideHeight, z: position.z }, true);
     this.body.setRotation({ x: q.x, y: q.y, z: q.z, w: q.w }, true);
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
     this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    this.upsideTime = 0;
   }
 
   recover(): void {
     const t = this.body.translation();
-    const e = new THREE.Euler().setFromQuaternion(
-      new THREE.Quaternion(this.body.rotation().x, this.body.rotation().y, this.body.rotation().z, this.body.rotation().w),
-      'YXZ',
-    );
-    this.teleport(new THREE.Vector3(t.x, t.y + 1.2, t.z), e.y);
+    const r = this.body.rotation();
+    const e = new THREE.Euler().setFromQuaternion(new THREE.Quaternion(r.x, r.y, r.z, r.w), 'YXZ');
+    this.teleport(new THREE.Vector3(t.x, t.y - this.tuning.spec.rideHeight + 0.25, t.z), e.y);
   }
 
-  /** Called from the vehicle system's fixed update. */
+  /* ---------------- simulation ---------------- */
+
   simulate(dt: number): void {
+    this.tickGrace(dt);
     const body = this.body;
     const t = body.translation();
     const r = body.rotation();
@@ -196,25 +344,27 @@ class Vehicle implements VehicleHandle {
     const vel = this._tmp2.set(lin.x, lin.y, lin.z);
     const fwdSpeed = vel.dot(this._fwd);
     const absSpeed = Math.abs(fwdSpeed);
+    const speedRatio = THREE.MathUtils.clamp(absSpeed / tuning.topSpeed, 0, 1.4);
+    this.recentSpeed = Math.max(vel.length(), this.recentSpeed * 0.94);
 
-    // Speed-sensitive steering.
+    // --- steering: generous when parking, tight at speed -----------------
     const steerLimit = tuning.maxSteerRad / (1 + absSpeed * tuning.steerSpeedFalloff);
     const targetSteer = this.steerInput * steerLimit;
-    this.steerAngle += (targetSteer - this.steerAngle) * Math.min(1, dt * 9);
+    this.steerAngle += (targetSteer - this.steerAngle) * Math.min(1, dt * tuning.steerRate);
 
     let groundedWheels = 0;
+    const rearGrip = tuning.gripRear * (1 - tuning.rearGripFade * Math.min(1, speedRatio));
 
     for (let i = 0; i < tuning.wheels.length; i++) {
       const w = tuning.wheels[i];
-
-      // World-space suspension attachment.
       const attach = this._tmp.copy(w.offset).applyQuaternion(this.rotation).add(this.position);
       const rayLen = tuning.suspensionRest + w.radius;
+      // NB: membership must be one of the bits inside physics.ts' ALL_SOLID
+      // mask, otherwise the filter test can never pass and the ray matches
+      // nothing. CG.WHEEL_RAY is outside that mask — see the report.
       const hit = this.phys.raycast(
-        attach,
-        DOWN,
-        rayLen,
-        groups(CG.WHEEL_RAY, CG.STATIC | CG.TERRAIN | CG.PROP),
+        attach, DOWN, rayLen,
+        groups(CG.VEHICLE, CG.STATIC | CG.TERRAIN | CG.PROP),
         this.collider,
       );
 
@@ -222,7 +372,8 @@ class Vehicle implements VehicleHandle {
         this.wheelContact[i] = false;
         this.wheelCompression[i] += (0 - this.wheelCompression[i]) * Math.min(1, dt * 8);
         this.wheelSlip[i] *= 0.9;
-        this.wheelSpin[i] += fwdSpeed / w.radius * dt;
+        this.wheelSpin[i] += (fwdSpeed / w.radius) * dt;
+        this.skidding[i] = false;
         continue;
       }
 
@@ -233,109 +384,321 @@ class Vehicle implements VehicleHandle {
       this.wheelCompression[i] = compression;
       const compressionRate = (compression - prev) / dt;
 
-      // Suspension force along the vehicle's up axis.
       const springForce = compression * tuning.suspensionStiffness * tuning.mass * 0.25;
       const damperForce = compressionRate * tuning.suspensionDamping * tuning.mass * 0.25;
       const suspension = THREE.MathUtils.clamp(springForce + damperForce, 0, tuning.mass * 45);
 
-      const forceVec = new THREE.Vector3().copy(hit.normal).multiplyScalar(suspension * dt);
-      body.applyImpulseAtPoint(
-        { x: forceVec.x, y: forceVec.y, z: forceVec.z },
-        { x: attach.x, y: attach.y, z: attach.z },
-        true,
-      );
+      const fv = this._tmp3.copy(hit.normal).multiplyScalar(suspension * dt);
+      body.applyImpulseAtPoint({ x: fv.x, y: fv.y, z: fv.z }, { x: attach.x, y: attach.y, z: attach.z }, true);
 
-      // Wheel-space axes (steered wheels rotate about the body up axis).
-      const wheelFwd = new THREE.Vector3().copy(this._fwd);
-      const wheelRight = new THREE.Vector3().copy(this._right);
+      const wheelFwd = _wf.copy(this._fwd);
+      const wheelRight = _wr.copy(this._right);
       if (w.steered) {
         wheelFwd.applyAxisAngle(this._up, this.steerAngle);
         wheelRight.applyAxisAngle(this._up, this.steerAngle);
       }
 
-      // Velocity at the contact patch.
-      const contactPoint = new THREE.Vector3().copy(attach).addScaledVector(DOWN, hit.distance);
-      const pv = body.linvel();
+      const contactPoint = _cp.copy(attach).addScaledVector(DOWN, hit.distance);
+      this.wheelPoint[i].copy(hit.point);
       const av = body.angvel();
-      const rel = new THREE.Vector3().subVectors(contactPoint, this.position);
-      const pointVel = new THREE.Vector3(pv.x, pv.y, pv.z).add(
-        new THREE.Vector3(av.x, av.y, av.z).cross(rel),
-      );
+      const rel = _rel.subVectors(contactPoint, this.position);
+      const pointVel = _pv.set(lin.x, lin.y, lin.z).add(_av.set(av.x, av.y, av.z).cross(rel));
 
       const lateralSpeed = pointVel.dot(wheelRight);
       const longitudinalSpeed = pointVel.dot(wheelFwd);
 
-      // Lateral grip — an impulse that cancels sideways slide, capped by grip.
-      const gripCoef = w.steered ? tuning.gripFront : tuning.gripRear;
+      const gripCoef = w.steered ? tuning.gripFront : rearGrip;
       const loadFactor = suspension / (tuning.mass * 9.81 * 0.25);
-      let maxLateral = gripCoef * tuning.mass * 0.25 * Math.min(2, loadFactor) * dt;
-      if (this.handbrakeInput && w.handbraked) maxLateral *= 0.34; // let the back slide
+      let maxLateral = gripCoef * tuning.mass * 0.25 * Math.min(2.2, loadFactor) * dt;
+      if (this.handbrakeInput && w.handbraked) maxLateral *= tuning.handbrakeSlide;
       const lateralImpulse = THREE.MathUtils.clamp(-lateralSpeed * tuning.mass * 0.25, -maxLateral, maxLateral);
-      this.wheelSlip[i] = Math.abs(lateralSpeed) - Math.abs(lateralImpulse) / (tuning.mass * 0.25);
+      const slip = Math.abs(lateralSpeed) - Math.abs(lateralImpulse) / (tuning.mass * 0.25);
+      this.wheelSlip[i] = Math.max(0, slip);
 
-      const latVec = new THREE.Vector3().copy(wheelRight).multiplyScalar(lateralImpulse);
-      body.applyImpulseAtPoint(
-        { x: latVec.x, y: latVec.y, z: latVec.z },
-        { x: contactPoint.x, y: contactPoint.y, z: contactPoint.z },
-        true,
-      );
+      const lv = _lv.copy(wheelRight).multiplyScalar(lateralImpulse);
+      body.applyImpulseAtPoint({ x: lv.x, y: lv.y, z: lv.z }, { x: contactPoint.x, y: contactPoint.y, z: contactPoint.z }, true);
 
-      // Drive / brake along the wheel forward axis.
+      // --- drive / brake ------------------------------------------------
       let longImpulse = 0;
       const wantsReverse = this.throttle < -0.02;
       const movingForward = fwdSpeed > 0.6;
 
       if (w.driven && this.throttle > 0.02) {
-        const speedRatio = THREE.MathUtils.clamp(absSpeed / tuning.topSpeed, 0, 1);
-        const powerCurve = 1 - speedRatio * speedRatio;
-        longImpulse = this.throttle * tuning.engineForce * powerCurve * dt * 0.5;
+        // Torque curve: soft off idle, peaky in the middle, dying at the top.
+        const rr = THREE.MathUtils.clamp(absSpeed / tuning.topSpeed, 0, 1);
+        const curve = (0.55 + 0.75 * rr - 0.55 * rr * rr) * (1 - rr * rr * rr);
+        longImpulse = this.throttle * tuning.engineForce * curve * dt * 0.5;
       } else if (wantsReverse) {
         if (movingForward) {
-          longImpulse = -tuning.brakeForce * dt * 0.5; // brake first
-        } else if (w.driven) {
-          longImpulse = this.throttle * tuning.engineForce * 0.45 * dt * 0.5;
+          longImpulse = -tuning.brakeForce * dt * 0.5;
+        } else if (w.driven && absSpeed < tuning.reverseSpeed) {
+          longImpulse = this.throttle * tuning.engineForce * 0.42 * dt * 0.5;
         }
+      } else if (Math.abs(this.throttle) <= 0.02) {
+        // Engine braking — makes it feel weighty the moment you lift.
+        longImpulse = -longitudinalSpeed * tuning.mass * 0.25 * 0.12 * dt;
       }
 
       if (this.handbrakeInput && w.handbraked) {
         longImpulse = -THREE.MathUtils.clamp(longitudinalSpeed, -1, 1) * tuning.handbrakeForce * dt * 0.5;
       }
 
-      // Rolling resistance.
-      longImpulse -= longitudinalSpeed * tuning.mass * 0.25 * 0.018;
+      // Rolling resistance + aero. These are FORCES, so they must be scaled by
+      // dt to become impulses; without that a car tops out at walking pace.
+      const rollRes = longitudinalSpeed * tuning.mass * 0.25 * 0.025;
+      const aero = Math.sign(longitudinalSpeed) * longitudinalSpeed * longitudinalSpeed * tuning.mass * 0.25 * 0.0016;
+      longImpulse -= (rollRes + aero) * dt;
 
-      const longVec = new THREE.Vector3().copy(wheelFwd).multiplyScalar(longImpulse);
-      body.applyImpulseAtPoint(
-        { x: longVec.x, y: longVec.y, z: longVec.z },
-        { x: contactPoint.x, y: contactPoint.y, z: contactPoint.z },
-        true,
-      );
+      const lgv = _lg.copy(wheelFwd).multiplyScalar(longImpulse);
+      body.applyImpulseAtPoint({ x: lgv.x, y: lgv.y, z: lgv.z }, { x: contactPoint.x, y: contactPoint.y, z: contactPoint.z }, true);
 
       this.wheelSpin[i] += (longitudinalSpeed / w.radius) * dt;
+      if (this.handbrakeInput && w.handbraked) this.wheelSpin[i] += 0; // locked
+      this.skidding[i] = this.wheelSlip[i] > 1.6 || (this.handbrakeInput && w.handbraked && absSpeed > 3);
     }
 
-    // Anti-roll: resist body roll so the Dacia leans without flipping.
-    if (groundedWheels >= 2) {
-      const roll = this._up.dot(UP);
-      if (roll < 0.999) {
-        const corrective = new THREE.Vector3().crossVectors(this._up, UP).multiplyScalar(tuning.mass * 0.9 * dt);
-        body.applyTorqueImpulse({ x: corrective.x, y: corrective.y, z: corrective.z }, true);
+    this.airTime = groundedWheels === 0 ? this.airTime + dt : 0;
+
+    // --- static friction -------------------------------------------------
+    //
+    // Rolling resistance is a viscous term: it scales with speed, so it can
+    // never actually bring a body to rest — it only ever halves the remaining
+    // creep. Combined with the suspension's sideways impulses on a road that is
+    // never perfectly level, a parked car walked several metres down the street
+    // on its own. Real tyres have stiction; below a threshold, with no throttle
+    // and every wheel on the ground, this pins the car.
+    this.parked = false;
+    if (
+      Math.abs(this.throttle) <= 0.02 && !this.handbrakeInput &&
+      groundedWheels >= tuning.wheels.length - (tuning.wheels.length > 2 ? 1 : 0)
+    ) {
+      // Re-read the velocity: `lin` was sampled before this step's suspension
+      // impulses, and writing that stale vertical component back would erase
+      // every spring force the wheels just applied — the car then settles onto
+      // its collider box with the wheels buried in the road.
+      const cur = body.linvel();
+      const planar = Math.hypot(cur.x, cur.z);
+      if (planar < 0.55) {
+        const av3 = body.angvel();
+        const yaw = Math.abs(av3.y);
+        // Only the PLANAR components may ever be touched here.
+        if (planar < 0.05 && yaw < 0.06) {
+          body.setLinvel({ x: 0, y: cur.y, z: 0 }, true);
+          body.setAngvel({ x: av3.x, y: 0, z: av3.z }, true);
+          this.parked = true;
+        } else {
+          const k = Math.min(1, dt * 16);
+          body.setLinvel({ x: cur.x * (1 - k), y: cur.y, z: cur.z * (1 - k) }, true);
+          body.setAngvel({ x: av3.x, y: av3.y * (1 - k), z: av3.z }, true);
+        }
       }
-      // Mild downforce keeps it planted at speed.
+    }
+
+    // --- stability -------------------------------------------------------
+    const uprightness = this._up.dot(UP);
+    if (uprightness < 0.999) {
+      // Restoring torque: gentle while planted, brutal once genuinely tipping.
+      const strength = uprightness > 0.55 ? tuning.antiRoll : tuning.antiRoll * 3.4;
+      const corrective = _corr.crossVectors(this._up, UP).multiplyScalar(tuning.mass * strength * dt);
+      body.applyTorqueImpulse({ x: corrective.x, y: corrective.y, z: corrective.z }, true);
+    }
+    if (groundedWheels >= 2) {
       const df = -tuning.downforce * absSpeed * dt;
       body.applyImpulse({ x: 0, y: df, z: 0 }, true);
     }
+    // Hard cap on roll rate so nothing can spin the car about its long axis.
+    {
+      const av = body.angvel();
+      const rollRate = _av.set(av.x, av.y, av.z).dot(this._fwd);
+      if (Math.abs(rollRate) > 2.2) {
+        const excess = rollRate - Math.sign(rollRate) * 2.2;
+        const damp = _corr.copy(this._fwd).multiplyScalar(-excess * tuning.mass * 0.06);
+        body.applyTorqueImpulse({ x: damp.x, y: damp.y, z: damp.z }, true);
+      }
+    }
 
-    // Visual wheels.
+    // Self-recovery: about a second on the roof and it flips itself back.
+    if (uprightness < 0.1) {
+      this.upsideTime += dt;
+      if (this.upsideTime > 1.0) this.recover();
+    } else {
+      this.upsideTime = 0;
+    }
+
+    // --- accelerations used by the visual body -------------------------
+    const av2 = body.angvel();
+    const yawRate = _av.set(av2.x, av2.y, av2.z).dot(this._up);
+    const targetLat = fwdSpeed * yawRate;
+    this.latAccel += (targetLat - this.latAccel) * Math.min(1, dt * 8);
+    const targetLong = (fwdSpeed - this.prevFwdSpeed) / dt;
+    this.prevFwdSpeed = fwdSpeed;
+    this.longAccel += (THREE.MathUtils.clamp(targetLong, -30, 30) - this.longAccel) * Math.min(1, dt * 7);
+  }
+
+  /* ---------------- presentation ---------------- */
+
+  updateVisual(dt: number, near: boolean, skid: SkidmarkPool | null, parts: ParticlePool | null): void {
+    const tuning = this.tuning;
+
+    // Wheels ride the suspension; the body leans on top of them.
     for (let i = 0; i < this.wheelMeshes.length; i++) {
       const mesh = this.wheelMeshes[i];
       const w = tuning.wheels[i];
       const drop = tuning.suspensionRest * (1 - this.wheelCompression[i]);
-      mesh.position.set(w.offset.x, w.offset.y - drop + 0.06, w.offset.z);
+      mesh.position.set(w.offset.x, w.offset.y - drop, w.offset.z);
       mesh.rotation.set(this.wheelSpin[i], w.steered ? this.steerAngle : 0, 0, 'YXZ');
     }
+
+    // Exaggerated but purely cosmetic roll / squat / dive.
+    const roll = THREE.MathUtils.clamp(this.latAccel * 0.0165 * tuning.rollGain, -0.15, 0.15);
+    const pitch = THREE.MathUtils.clamp(-this.longAccel * 0.012 * tuning.pitchGain, -0.10, 0.10);
+    const bg = this.bodyGroup;
+    bg.rotation.z += (roll - bg.rotation.z) * Math.min(1, dt * 9);
+    bg.rotation.x += (pitch - bg.rotation.x) * Math.min(1, dt * 9);
+    let comp = 0;
+    for (let i = 0; i < this.wheelCompression.length; i++) comp += this.wheelCompression[i];
+    comp /= Math.max(1, this.wheelCompression.length);
+    const targetY = (comp - 9.81 / tuning.suspensionStiffness) * tuning.suspensionRest * -0.55;
+    bg.position.y += (targetY - bg.position.y) * Math.min(1, dt * 10);
+
+    // Keep the contact shadow lying flat on the road no matter how the body is
+    // pitched or rolled, and lift it away when the car leaves the ground.
+    if (this.contactShadow) {
+      _shadowE.setFromQuaternion(this.rotation, 'YXZ');
+      _shadowQ.setFromAxisAngle(UP, _shadowE.y);
+      _shadowInv.copy(this.rotation).invert();
+      this.contactShadow.quaternion.copy(_shadowInv).multiply(_shadowQ).multiply(FLAT_Q);
+      let grounded = 0;
+      for (let i = 0; i < this.wheelContact.length; i++) if (this.wheelContact[i]) grounded++;
+      const want = grounded / Math.max(1, this.wheelContact.length);
+      this.contactShadow.visible = want > 0.1 && this.lodBand <= 1;
+    }
+
+    // Lamps.
+    const braking = (this.throttle < -0.05 && this.speed > 0.4) || this.handbrakeInput;
+    const s = this.lamps.state;
+    s.head = this.headlightLevel;
+    s.brake = braking ? 1 : 0;
+    s.reverse = this.speed < -0.4 ? 1 : 0;
+    s.interior = this.occupants.length > 0 ? 0.75 : 0.35;
+    s.indicator = this.indicator;
+    s.siren = this.siren;
+    this.lamps.update(dt);
+
+    if (!near || !skid || !parts) return;
+
+    // Rubber and smoke.
+    const speed = Math.abs(this.speed);
+    for (let i = 0; i < this.wheelMeshes.length; i++) {
+      if (!this.wheelContact[i]) { this.lastSkid[i].set(0, 0, 0); continue; }
+      const p = this.wheelPoint[i];
+      const strength = THREE.MathUtils.clamp((this.wheelSlip[i] - 1.2) / 3.2, 0, 1);
+      const locked = this.handbrakeInput && tuning.wheels[i].handbraked && speed > 2.5 ? 0.75 : 0;
+      const total = Math.max(strength, locked);
+      if (total <= 0.05) { this.lastSkid[i].set(0, 0, 0); continue; }
+      const last = this.lastSkid[i];
+      if (last.lengthSq() > 0 && last.distanceToSquared(p) > 0.012) {
+        _sr.copy(this._right).setY(0).normalize();
+        skid.segment(last, p, _sr, tuning.spec.tyreWidth * 1.25, total);
+        last.copy(p);
+      } else if (last.lengthSq() === 0) {
+        last.copy(p);
+      }
+      if (total > 0.35 && Math.random() < 0.5) {
+        parts.emit(
+          _sp.set(p.x, p.y + 0.06, p.z),
+          _sv.set((Math.random() - 0.5) * 1.4, 0.5 + Math.random() * 0.7, (Math.random() - 0.5) * 1.4),
+          'smoke', 0.55 + total * 0.5, 1.5,
+        );
+      }
+    }
+
+    // Exhaust.
+    this.exhaustTimer -= dt;
+    if (this.exhaustTimer <= 0 && this.anchors.exhaust.length) {
+      this.exhaustTimer = 0.055 + Math.random() * 0.06;
+      const a = this.anchors.exhaust[0];
+      _sp.copy(a).applyQuaternion(this.rotation).add(this.position);
+      _sv.copy(this._fwd).multiplyScalar(-1.1 - Math.abs(this.throttle) * 2.2);
+      _sv.y += 0.35;
+      const puff = 0.16 + Math.abs(this.throttle) * 0.22;
+      parts.emit(_sp, _sv, 'exhaust', puff, 1.05);
+    }
+
+    // Engine smoke once the car is beaten up.
+    const smoke = this.damage.smoke;
+    if (smoke > 0.02) {
+      this.smokeTimer -= dt;
+      if (this.smokeTimer <= 0) {
+        this.smokeTimer = 0.07;
+        _sp.set(0, tuning.spec.height * 0.35 - tuning.spec.rideHeight, tuning.spec.length * 0.32)
+          .applyQuaternion(this.rotation).add(this.position);
+        _sv.set((Math.random() - 0.5) * 0.6, 1.2 + smoke * 1.6, (Math.random() - 0.5) * 0.6);
+        parts.emit(_sp, _sv, 'enginesmoke', 0.5 + smoke * 0.7, 1.9);
+      }
+    }
+  }
+
+  /**
+   * Distance LOD. Shadow casting is the expensive part — with cascaded shadows
+   * every caster is drawn once per cascade, so a car 200m away that casts a
+   * shadow costs as much as the hero car in front of the camera.
+   */
+  applyLod(distance: number): void {
+    const band = distance < 26 ? 0 : distance < 70 ? 1 : distance < 130 ? 2 : 3;
+    if (band === this.lodBand) return;
+    this.lodBand = band;
+    this.shellMesh.castShadow = band <= 1;
+    this.shellMesh.receiveShadow = band === 0;
+    // Shadow casting is the LOD, NOT visibility — a wheel that vanishes from
+    // the main pass turns the car into a tricycle.
+    for (const w of this.wheelMeshes) {
+      w.castShadow = band === 0;
+      w.visible = true;
+    }
+    // Glass stays on at every distance; a car with holes for windows at 140 m
+    // is far more obvious than the cost of six extra transparent triangles.
+    if (this.glassMesh) this.glassMesh.visible = true;
+  }
+
+  bindAudio(ctx: GameContext): void {
+    if (this.engineBound) return;
+    const audio = ctx.tryGet(Services.Audio);
+    if (!audio) return;
+    audio.bindEngine(this.id, this.object);
+    this.engineBound = true;
+  }
+
+  unbindAudio(ctx: GameContext): void {
+    if (!this.engineBound) return;
+    ctx.tryGet(Services.Audio)?.unbindEngine(this.id);
+    this.engineBound = false;
   }
 }
+
+/* scratch vectors shared by the simulation loop */
+const _wf = new THREE.Vector3();
+const _wr = new THREE.Vector3();
+const _cp = new THREE.Vector3();
+const _rel = new THREE.Vector3();
+const _pv = new THREE.Vector3();
+const _av = new THREE.Vector3();
+const _lv = new THREE.Vector3();
+const _lg = new THREE.Vector3();
+const _corr = new THREE.Vector3();
+const _sr = new THREE.Vector3();
+const _sp = new THREE.Vector3();
+const _sv = new THREE.Vector3();
+const _local = new THREE.Vector3();
+const _invQ = new THREE.Quaternion();
+const _shadowE = new THREE.Euler();
+const _shadowQ = new THREE.Quaternion();
+const _shadowInv = new THREE.Quaternion();
+const FLAT_Q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+
+/* ------------------------------------------------------------------ */
+/* System                                                              */
+/* ------------------------------------------------------------------ */
 
 export class VehicleSystem implements System, VehicleService {
   readonly name = 'vehicles';
@@ -343,9 +706,21 @@ export class VehicleSystem implements System, VehicleService {
 
   private vehicles = new Map<string, Vehicle>();
   private list: Vehicle[] = [];
+  private byCollider = new Map<number, Vehicle>();
   private phys!: PhysicsWorld;
   private ctx!: GameContext;
   private nextId = 1;
+  private atlas!: THREE.Texture;
+  private lightPool!: VehicleLightPool;
+  private skid: SkidmarkPool | null = null;
+  private parts: ParticlePool | null = null;
+  private rng = new Rng('vehicles');
+  private drawDistance = 260;
+  private nightFactor = 1;
+  private wantShowcase = false;
+  private wantHarness = false;
+  /** Walking position for `__VEH__.stage`, so a staged fleet never overlaps. */
+  private stageCursor = 0;
 
   get all(): ReadonlyArray<VehicleHandle> {
     return this.list;
@@ -354,8 +729,75 @@ export class VehicleSystem implements System, VehicleService {
   init(ctx: GameContext): void {
     this.ctx = ctx;
     this.phys = ctx.get(Services.Physics);
+    this.atlas = vehicleAtlas();
+    const quality = ctx.tryGet(Services.Render)?.quality ?? 'high';
+    this.lightPool = new VehicleLightPool(ctx.scene, quality);
+    this.skid = new SkidmarkPool(ctx.scene, quality === 'low' ? 320 : 900);
+    this.parts = new ParticlePool(ctx.scene, quality === 'low' ? 300 : 900);
+    this.drawDistance = quality === 'low' ? 110 : quality === 'medium' ? 170 : quality === 'high' ? 240 : 330;
     ctx.provide(Services.Vehicles, this);
+
+    const params = new URLSearchParams(location.search);
+    this.wantShowcase = params.has('vehshow');
+    this.wantHarness = params.has('vehtest');
+
+    // Small automation surface for bodywork/handling iteration. Additive only —
+    // it never replaces anything on window.__GTA_DEBUG__.
+    (window as unknown as { __VEH__: unknown }).__VEH__ = {
+      list: () => this.list.map((v) => ({
+        id: v.id, kind: v.kind,
+        pos: [v.position.x, v.position.y, v.position.z],
+        speed: +v.speed.toFixed(2),
+        health: v.health,
+        grounded: v.wheelContact.filter(Boolean).length,
+        comp: v.wheelCompression.map((c) => +c.toFixed(2)),
+        throttle: v.throttle,
+        heading: +new THREE.Euler().setFromQuaternion(v.rotation, 'YXZ').y.toFixed(3),
+      })),
+      controls: (id: string, throttle: number, steer: number, handbrake = false) =>
+        this.vehicles.get(id)?.setControls(throttle, steer, handbrake),
+      lights: (id: string, o: { head?: number; indicator?: -1 | 0 | 1 | 2; siren?: boolean }) => {
+        const v = this.vehicles.get(id);
+        if (!v) return;
+        if (o.head !== undefined) v.setHeadlights(o.head);
+        if (o.indicator !== undefined) v.setIndicator(o.indicator);
+        if (o.siren !== undefined) v.setSiren(o.siren);
+      },
+      hit: (id: string, impulse: number) => {
+        const v = this.vehicles.get(id);
+        if (!v) return;
+        v.damage.impact(new THREE.Vector3(v.tuning.halfExtents.x, 0, 0.9), impulse + v.crashThreshold, v.crashThreshold);
+      },
+      spawn: (kind: VehicleClass, x: number, z: number, heading = 0, seed = 1) =>
+        this.spawn(kind, new THREE.Vector3(x, 0.4, z), heading, { colorSeed: seed }).id,
+      showcase: () => this.showcase(),
+      /**
+       * Put one vehicle of `kind` on a clear road node, aligned with the road.
+       *
+       * Successive calls automatically walk down the road by the length of what
+       * has already been staged (plus a 3 m gap). Staging a fleet used to drop
+       * every vehicle on the same node, which produced a pile-up that then
+       * ground itself to scrap.
+       */
+      stage: (kind: VehicleClass, sideOffset?: number) => {
+        const gap = SPECS[kind].length * 0.5 + 3;
+        const along = sideOffset ?? this.stageCursor + gap;
+        this.stageCursor = along + gap;
+        const { pos, heading } = this.roadSlot(along);
+        const v = this.spawn(kind, pos, heading, {
+          faction: kind === 'dacia' ? 'player' : 'civilian',
+          colorSeed: kind === 'dacia' ? 0 : 3,
+        }) as Vehicle;
+        return { id: v.id, heading };
+      },
+      clear: () => {
+        for (const v of [...this.list]) this.despawn(v.id);
+        this.stageCursor = 0;
+      },
+    };
   }
+
+  /* ---------------- spawning ---------------- */
 
   spawn(
     kind: VehicleClass,
@@ -364,38 +806,47 @@ export class VehicleSystem implements System, VehicleService {
     opts?: { colorSeed?: number; faction?: Faction },
   ): VehicleHandle {
     const id = `veh_${this.nextId++}`;
-    const v = new Vehicle(id, kind, opts?.faction ?? 'civilian', this.phys);
+    const faction = opts?.faction ?? (kind === 'police' ? 'police' : 'civilian');
+    const v = new Vehicle(id, kind, faction, this.phys);
     const tuning = v.tuning;
 
     const q = new THREE.Quaternion().setFromAxisAngle(UP, headingRad);
     const bodyDesc = this.phys.rapier.RigidBodyDesc.dynamic()
-      .setTranslation(position.x, position.y + tuning.suspensionRest + 0.3, position.z)
+      .setTranslation(position.x, position.y + tuning.spec.rideHeight + 0.05, position.z)
       .setRotation({ x: q.x, y: q.y, z: q.z, w: q.w })
-      .setLinearDamping(0.06)
-      .setAngularDamping(1.4)
+      .setLinearDamping(0.05)
+      .setAngularDamping(1.9)
       .setCcdEnabled(true);
     v.body = this.phys.world.createRigidBody(bodyDesc);
 
+    // The collider contributes NO mass — everything comes from the explicit
+    // mass properties below, otherwise Rapier adds the two together and the
+    // car ends up at twice its intended weight (and sits on its bump stops).
     const cDesc = this.phys.rapier.ColliderDesc
       .cuboid(tuning.halfExtents.x, tuning.halfExtents.y, tuning.halfExtents.z)
+      .setTranslation(0, tuning.colliderCentreY, 0)
       .setCollisionGroups(GROUP.vehicle)
-      .setMass(tuning.mass)
-      .setFriction(0.35)
-      .setRestitution(0.08)
+      .setMass(0)
+      .setFriction(0.5)
+      .setRestitution(0.06)
       .setActiveEvents(this.phys.rapier.ActiveEvents.CONTACT_FORCE_EVENTS)
-      .setContactForceEventThreshold(9000);
+      .setContactForceEventThreshold(v.crashThreshold);
     v.collider = this.phys.world.createCollider(cDesc, v.body);
+    this.byCollider.set(v.collider.handle, v);
 
-    // Lower the centre of mass so it corners instead of tipping.
     v.body.setAdditionalMassProperties(
       tuning.mass,
       { x: tuning.comOffset.x, y: tuning.comOffset.y, z: tuning.comOffset.z },
-      { x: tuning.mass * 0.42, y: tuning.mass * 0.52, z: tuning.mass * 0.20 },
+      {
+        x: tuning.mass * 0.34,
+        y: tuning.mass * 0.46,
+        z: tuning.mass * 0.16,
+      },
       { x: 0, y: 0, z: 0, w: 1 },
       true,
     );
 
-    this.buildPlaceholderBody(v);
+    this.buildMesh(v, opts?.colorSeed ?? this.rng.int(0, 4096));
     this.ctx.scene.add(v.object);
 
     this.vehicles.set(id, v);
@@ -403,59 +854,80 @@ export class VehicleSystem implements System, VehicleService {
     return v;
   }
 
-  /** PLACEHOLDER MESH — the vehicle agent replaces this with real bodywork. */
-  private buildPlaceholderBody(v: Vehicle): void {
-    const t = v.tuning;
-    const isDacia = v.kind === 'dacia';
-    const bodyMat = new THREE.MeshStandardMaterial({
-      color: isDacia ? Palette.daciaYellow : v.faction === 'police' ? Palette.policeBlue : Palette.concreteGrey,
-      roughness: 0.42,
-      metalness: 0.55,
-      envMapIntensity: 1.6,
-    });
-    const shell = new THREE.Mesh(
-      new THREE.BoxGeometry(t.halfExtents.x * 2, t.halfExtents.y * 1.15, t.halfExtents.z * 2),
-      bodyMat,
-    );
-    shell.castShadow = true;
-    shell.receiveShadow = true;
-    v.object.add(shell);
+  private buildMesh(v: Vehicle, colorSeed: number): void {
+    const hero = v.kind === 'dacia' && (v.faction === 'player' || colorSeed === 0);
+    const variant = hero ? 0 : colorSeed % VARIANTS[v.kind];
+    const build = buildBody(v.kind, variant, hero);
+    v.anchors = build.anchors;
 
-    if (isDacia) {
-      const patch = new THREE.Mesh(
-        new THREE.BoxGeometry(t.halfExtents.x * 2.02, t.halfExtents.y * 0.7, t.halfExtents.z * 0.7),
-        new THREE.MeshStandardMaterial({ color: Palette.daciaPurple, roughness: 0.5, metalness: 0.4 }),
-      );
-      patch.position.set(0, 0, -t.halfExtents.z * 0.5);
-      patch.castShadow = true;
-      v.object.add(patch);
+    const opaque = createCarMaterial(this.atlas, v.uniforms, { alphaTest: 0.4 });
+    const glassMat = createCarMaterial(this.atlas, v.uniforms, {
+      transparent: true, opacity: 0.72, side: THREE.DoubleSide, glass: true,
+    });
+    glassMat.envMapIntensity = 3.0;
+
+    let shellGeo = build.shell;
+    if (hero) {
+      // The hero car is already battered before you ever touch it.
+      shellGeo = build.shell.clone();
+      deform(shellGeo, heroDents(new Rng('hero-dents')));
     }
 
-    const cabin = new THREE.Mesh(
-      new THREE.BoxGeometry(t.halfExtents.x * 1.7, t.halfExtents.y * 0.9, t.halfExtents.z * 1.0),
-      new THREE.MeshStandardMaterial({ color: Palette.glassTint, roughness: 0.08, metalness: 0.2, envMapIntensity: 2.4 }),
-    );
-    cabin.position.set(0, t.halfExtents.y * 1.0, -0.1);
-    cabin.castShadow = true;
-    v.object.add(cabin);
+    const shell = new THREE.Mesh(shellGeo, opaque);
+    shell.castShadow = true;
+    shell.receiveShadow = true;
+    v.shellMesh = shell;
+    v.bodyGroup.add(shell);
 
-    const wheelGeo = new THREE.CylinderGeometry(t.wheels[0].radius, t.wheels[0].radius, 0.24, 18);
-    wheelGeo.rotateZ(Math.PI / 2);
-    const wheelMat = new THREE.MeshStandardMaterial({ color: 0x0d0d10, roughness: 0.85, metalness: 0.05 });
-    for (const w of t.wheels) {
-      const mesh = new THREE.Mesh(wheelGeo, wheelMat);
+    if ((build.glass.attributes.position as THREE.BufferAttribute).count > 0) {
+      const glass = new THREE.Mesh(build.glass, glassMat);
+      glass.castShadow = false;
+      glass.receiveShadow = false;
+      glass.renderOrder = 3;
+      v.glassMesh = glass;
+      v.bodyGroup.add(glass);
+    }
+
+    const spec = v.tuning.spec;
+    // Two geometries per class: the rim detail has to face outboard on both
+    // sides or every wheel on the left presents a blank black disc.
+    const wheelGeoR = wheelGeometry(spec.wheelStyle, spec.wheelRadius, spec.tyreWidth, 1);
+    const wheelGeoL = wheelGeometry(spec.wheelStyle, spec.wheelRadius, spec.tyreWidth, -1);
+    const wheelMat = createCarMaterial(this.atlas, v.uniforms, { alphaTest: 0 });
+    for (const w of v.tuning.wheels) {
+      const mesh = new THREE.Mesh(w.offset.x < 0 ? wheelGeoL : wheelGeoR, wheelMat);
       mesh.position.copy(w.offset);
       mesh.castShadow = true;
       v.object.add(mesh);
       v.wheelMeshes.push(mesh);
     }
+
+    // Contact shadow: one ground decal per vehicle, shared geometry+material.
+    // Without it every car in a mirror-bright wet lane visibly floats.
+    {
+      const cs = contactShadowAssets();
+      const decal = new THREE.Mesh(cs.geo, cs.mat);
+      decal.rotation.x = -Math.PI / 2;
+      decal.scale.set(spec.width * 1.85, spec.length * 1.24, 1);
+      decal.position.y = -spec.rideHeight + 0.015;
+      decal.renderOrder = 1;
+      decal.castShadow = false;
+      decal.receiveShadow = false;
+      v.object.add(decal);
+      v.contactShadow = decal;
+    }
+
+    v.lamps = new VehicleLamps(v.uniforms, v.kind === 'police');
   }
 
   despawn(id: string): void {
     const v = this.vehicles.get(id);
     if (!v) return;
+    v.unbindAudio(this.ctx);
     this.ctx.scene.remove(v.object);
+    this.byCollider.delete(v.collider.handle);
     this.phys.world.removeRigidBody(v.body);
+    v.damage.dispose();
     this.vehicles.delete(id);
     const i = this.list.indexOf(v);
     if (i >= 0) this.list.splice(i, 1);
@@ -471,15 +943,332 @@ export class VehicleSystem implements System, VehicleService {
     for (const v of this.list) {
       if (v.occupants.length >= v.seats || v.isWrecked) continue;
       const d = v.position.distanceToSquared(p);
-      if (d < bestD) {
-        bestD = d;
-        best = v;
-      }
+      if (d < bestD) { bestD = d; best = v; }
     }
     return best;
   }
 
+  /* ---------------- frame ---------------- */
+
   fixedUpdate(dt: number): void {
-    for (const v of this.list) v.simulate(dt);
+    if (this.harness) this.runHarness(dt);
+    for (const v of this.list) {
+      v.simulate(dt);
+      // Stuck rescue: a vehicle that has had no wheel on anything for four
+      // seconds has fallen off geometry somewhere. Left alone it grinds down a
+      // wall taking contact damage until it is scrap. Put it back on a road.
+      if (v.airTime > 4 && v.occupants.length === 0) {
+        const { pos, heading } = this.roadSlot(this.rng.range(-30, 30));
+        v.teleport(pos, heading);
+        v.airTime = 0;
+      }
+    }
+    this.drainCollisions();
+  }
+
+  /**
+   * In-simulation handling harness (`?vehtest=1`). Runs on the fixed step, so
+   * the numbers are frame-rate independent and reproducible: 0-100 time, top
+   * speed, steady-state cornering, handbrake yaw rate, braking distance and
+   * roll-over recovery all land in `window.__VEHTEST__`.
+   */
+  private harness: { t: number; car: Vehicle; log: number[][]; done: boolean } | null = null;
+
+  private runHarness(dt: number): void {
+    const h = this.harness!;
+    h.t += dt;
+    const t = h.t;
+    const v = h.car;
+
+    if (t < 18) v.setControls(1, 0, false);
+    else if (t < 22) v.setControls(1, 0.8, false);
+    else if (t < 26) v.setControls(0.35, 1, true);
+    else if (t < 29) v.setControls(-1, 0, false);
+    else if (t < 29.05) {
+      // Kick it onto its roof to time the self-recovery.
+      v.body.applyTorqueImpulse({ x: 0, y: 0, z: v.tuning.mass * 2.6 }, true);
+      v.body.applyImpulse({ x: 0, y: v.tuning.mass * 1.6, z: 0 }, true);
+      v.setControls(0, 0, false);
+    } else v.setControls(0, 0, false);
+
+    if (h.log.length < t * 4) {
+      const up = new THREE.Vector3(0, 1, 0).applyQuaternion(v.rotation);
+      const av = v.body.angvel();
+      h.log.push([
+        +t.toFixed(2), +v.speed.toFixed(2), +av.y.toFixed(2),
+        +up.y.toFixed(2), +v.position.y.toFixed(2), v.wheelContact.filter(Boolean).length,
+      ]);
+    }
+    if (t > 34 && !h.done) {
+      h.done = true;
+      (window as unknown as { __VEHTEST__: unknown }).__VEHTEST__ = {
+        done: true,
+        log: h.log,
+        topSpeed: Math.max(...h.log.map((r) => r[1])),
+        zeroTo50kmh: (h.log.find((r) => r[1] > 13.9) ?? [-1])[0],
+        zeroTo100kmh: (h.log.find((r) => r[1] > 27.8) ?? [-1])[0],
+      };
+    }
+  }
+
+  private drainCollisions(): void {
+    this.phys.drainContactForceEvents((event) => {
+      const magnitude = event.totalForceMagnitude();
+      const a = this.byCollider.get(event.collider1());
+      const b = this.byCollider.get(event.collider2());
+      const dir = event.maxForceDirection();
+      for (const v of [a, b]) {
+        if (!v || !v.settled) continue;
+        if (magnitude < v.crashThreshold) continue;
+        const other = v === a ? b : a;
+        // Damage needs a genuine impact, which means RELATIVE motion. Grading
+        // on absolute speed meant a stationary vehicle wedged against a kerb
+        // kept registering its own resting weight as a crash and ground itself
+        // to scrap. A parked car is never in a collision.
+        if (v.parked) continue;
+        const lv = v.body.linvel();
+        // Against a static collider (kerb, wall, prop) the only thing that can
+        // constitute an impact is this vehicle's own CURRENT speed. Using the
+        // decaying peak let a vehicle that had merely arrived somewhere keep
+        // taking hits from the surface it was resting on.
+        if (Math.hypot(lv.x, lv.y, lv.z) < (other ? 2.0 : 4.0)) continue;
+        const closing = other
+          ? _relVel.set(
+              lv.x - other.body.linvel().x,
+              lv.y - other.body.linvel().y,
+              lv.z - other.body.linvel().z,
+            ).length()
+          : v.recentSpeed;
+        if (closing < 2.4) continue;
+        // Approximate the impact point: walk out along the contact normal to
+        // the surface of the body box.
+        _invQ.copy(v.rotation).invert();
+        _local.set(dir.x, dir.y, dir.z).applyQuaternion(_invQ).normalize();
+        const he = v.tuning.halfExtents;
+        const sc = Math.min(
+          he.x / Math.max(0.05, Math.abs(_local.x)),
+          Math.min(he.y / Math.max(0.05, Math.abs(_local.y)), he.z / Math.max(0.05, Math.abs(_local.z))),
+        );
+        _local.multiplyScalar(-sc);
+        _local.y += v.tuning.colliderCentreY;
+
+        const before = v.health;
+        const dealt = v.damage.impact(_local, magnitude, v.crashThreshold, v.occupants.length ? 1 : 0.8);
+        if (dealt > 0) {
+          this.ctx.events.emit('vehicle:collision', {
+            vehicleId: v.id,
+            impulse: magnitude,
+            position: v.position.clone(),
+          });
+          if (this.parts && dealt > 30) {
+            _sp.copy(_local).applyQuaternion(v.rotation).add(v.position);
+            for (let s = 0; s < 6; s++) {
+              _sv.set((Math.random() - 0.5) * 6, Math.random() * 4 + 1, (Math.random() - 0.5) * 6);
+              this.parts.emit(_sp, _sv, 'spark', 0.10, 0.45);
+            }
+          }
+          if (before > 0 && v.health <= 0) {
+            this.ctx.events.emit('vehicle:destroyed', { vehicleId: v.id });
+          }
+        }
+      }
+    });
+  }
+
+  update(dt: number, ctx: GameContext): void {
+    if (this.wantShowcase) {
+      this.wantShowcase = false;
+      this.showcase();
+    }
+    if (this.wantHarness) {
+      this.wantHarness = false;
+      // Line the test car up along an actual road link so it has a clear run.
+      const city = ctx.tryGet(Services.City);
+      const p = ctx.tryGet(Services.Player)?.position ?? new THREE.Vector3();
+      let base = p.clone();
+      let heading = 0;
+      if (city) {
+        const id = city.nearestNode(p);
+        const node = city.roadNodes[id];
+        if (node) {
+          const link = node.links.map((l) => city.roadNodes[l]).find((n) => !!n);
+          base = node.position.clone();
+          if (link) {
+            const dx = link.position.x - node.position.x;
+            const dz = link.position.z - node.position.z;
+            heading = Math.atan2(dx, dz);
+            base.addScaledVector(new THREE.Vector3(dx, 0, dz).normalize(), -6);
+          }
+        }
+      }
+      const car = this.spawn('dacia', new THREE.Vector3(base.x, 0.4, base.z), heading, {
+        faction: 'player', colorSeed: 0,
+      }) as Vehicle;
+      this.harness = { t: 0, car, log: [], done: false };
+      (window as unknown as { __VEHTEST__: unknown }).__VEHTEST__ = { done: false, log: [] };
+    }
+    const camPos = ctx.camera.position;
+    const weather = ctx.tryGet(Services.Weather);
+    // Headlights come on at dusk — which, in this city, is always.
+    const hour = weather?.timeOfDay ?? 19.4;
+    const night = hour > 17.2 || hour < 7.6 ? 1 : 0.12;
+    this.nightFactor = night;
+    const wanted = ctx.tryGet(Services.Wanted);
+    const chasing = (wanted?.stars ?? 0) > 0;
+
+    for (const v of this.list) {
+      v.distanceToCamera = v.position.distanceTo(camPos);
+      const visible = v.distanceToCamera < this.drawDistance;
+      if (v.object.visible !== visible) v.object.visible = visible;
+      if (!visible) continue;
+
+      if (v.kind === 'scooter' || v.kind === 'tram') v.setHeadlights(night > 0.5 ? 1 : 0.2);
+      else v.setHeadlights(night);
+      if (v.kind === 'police') v.setSiren(chasing);
+
+      v.applyLod(v.distanceToCamera);
+      const near = v.distanceToCamera < 90;
+      v.updateVisual(dt, near, near ? this.skid : null, near ? this.parts : null);
+      v.damage.flush(v.shellMesh, dt);
+      if (v.occupants.length) v.bindAudio(ctx);
+    }
+
+    this.skid?.update(dt);
+    this.parts?.update(dt, ctx.renderer.domElement.clientHeight || 1080);
+  }
+
+  lateUpdate(_dt: number, ctx: GameContext): void {
+    // Hand the small pool of real lights to whatever is closest to the camera.
+    this.lightPool.begin();
+    for (const v of this.list) {
+      if (!v.object.visible || v.distanceToCamera > 120) continue;
+      const headOn = v.lamps.state.head;
+      const brake = v.lamps.state.brake;
+      const siren = v.lamps.state.siren;
+      if (headOn < 0.05 && brake < 0.5 && siren < 0.5) continue;
+      this.lightPool.request({
+        position: v.position,
+        quaternion: v.rotation,
+        anchors: v.anchors.headlights,
+        intensity: headOn,
+        groundY: v.position.y - v.tuning.spec.rideHeight,
+        distance: v.distanceToCamera,
+        point: brake > 0.5 || siren > 0.5
+          ? {
+              colour: siren > 0.5 ? _sirenCol : _brakeCol,
+              intensity: siren > 0.5 ? 6 : 2.4,
+              position: _pointPos.copy(v.anchors.taillights[0] ?? _zero)
+                .setX(0)
+                .applyQuaternion(v.rotation)
+                .add(v.position)
+                .clone(),
+              range: siren > 0.5 ? 14 : 8,
+            }
+          : undefined,
+      });
+    }
+    this.lightPool.end();
+    void ctx;
+  }
+
+  /* ---------------- debug showroom ---------------- */
+
+  /**
+   * A point on the nearest road, aligned with the road direction.
+   *
+   * The slot is validated before it is handed back: walking blindly down the
+   * road tangent for tens of metres runs off the end of the link and drops
+   * vehicles onto pavements, into buildings or into thin air, where they take
+   * damage until they die. The point is snapped back onto the road graph,
+   * rejected if it lands inside a blocker, and lifted to the real ground
+   * height rather than a hardcoded 0.5.
+   */
+  private roadSlot(along = 0): { pos: THREE.Vector3; heading: number } {
+    const city = this.ctx.tryGet(Services.City);
+    const p = this.ctx.tryGet(Services.Player)?.position ?? new THREE.Vector3();
+    const pos = p.clone();
+    let heading = 0;
+    if (city) {
+      let node = city.roadNodes[city.nearestNode(p)];
+      if (node) {
+        pos.copy(node.position);
+        // Walk the road GRAPH, not a single tangent. Extrapolating one link's
+        // direction for 80 m runs straight off the end of that link and puts
+        // long vehicles on the pavement or in a building.
+        let remaining = 14 + along;
+        let prev = -1;
+        const dir = new THREE.Vector3();
+        for (let hop = 0; hop < 24 && remaining > 0; hop++) {
+          const next = node.links
+            .map((l) => ({ id: l, n: city.roadNodes[l] }))
+            .find((c) => !!c.n && c.id !== prev);
+          if (!next || !next.n) break;
+          dir.subVectors(next.n.position, node.position).setY(0);
+          const seg = dir.length();
+          if (seg < 1e-3) break;
+          dir.divideScalar(seg);
+          heading = Math.atan2(dir.x, dir.z);
+          const step = Math.min(remaining, seg - 4);
+          if (step > 0) pos.addScaledVector(dir, step);
+          remaining -= step;
+          if (remaining <= 0) break;
+          prev = city.roadNodes.indexOf(node);
+          pos.copy(next.n.position);
+          node = next.n;
+        }
+      }
+      // Reject a blocked slot by walking back toward the node until it clears.
+      // (Do NOT snapToRoad here: it collapses onto the nearest centreline point
+      // and stacks every staged vehicle on top of the previous one.)
+      if (node) {
+        const dir = new THREE.Vector3().subVectors(pos, node.position).setY(0);
+        const dist = dir.length();
+        if (dist > 1e-3) {
+          dir.divideScalar(dist);
+          for (let step = 0; step < 8 && city.spatial.isBlocked(pos.x, pos.z); step++) {
+            pos.addScaledVector(dir, -Math.max(2, dist / 8));
+          }
+        }
+      }
+      // Drop from just above the real ground rather than a hardcoded 0.5, which
+      // is under the road in the raised districts and 0.5 m in the air elsewhere.
+      const gh = city.spatial.groundHeight(pos.x, pos.z);
+      pos.y = (Number.isFinite(gh) ? gh : 0) + 0.35;
+    } else {
+      pos.y = 0.5;
+    }
+    return { pos, heading };
+  }
+
+  private showcase(): void {
+    const kinds: VehicleClass[] = ['dacia', 'sedan', 'hatch', 'police', 'van', 'truck', 'bus', 'tram', 'scooter'];
+    const player = this.ctx.tryGet(Services.Player);
+    const origin = player ? player.position.clone() : new THREE.Vector3();
+    // Lay the line-up down the middle of the nearest road so nothing spawns
+    // inside a building.
+    const road = new THREE.Vector3();
+    this.ctx.tryGet(Services.City)?.spatial.snapToRoad(origin, road);
+    const base = road.lengthSq() > 0 ? road : origin;
+    let z = 0;
+    for (const k of kinds) {
+      z += SPECS[k].length * 0.5 + 2.0;
+      this.spawn(k, new THREE.Vector3(base.x, 0.4, base.z + z), 0, {
+        faction: k === 'dacia' ? 'player' : 'civilian',
+        colorSeed: 3,
+      });
+      z += SPECS[k].length * 0.5;
+    }
+  }
+
+  dispose(): void {
+    this.skid?.dispose();
+    this.parts?.dispose();
+    this.lightPool?.dispose();
   }
 }
+
+const _brakeCol = new THREE.Color(0xff2a20);
+const _sirenCol = new THREE.Color(0x3a6cff);
+const _pointPos = new THREE.Vector3();
+const _zero = new THREE.Vector3();
+const _relVel = new THREE.Vector3();

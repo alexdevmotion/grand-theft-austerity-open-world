@@ -31,6 +31,19 @@ export interface DebugApi {
   /** Jump to a named landmark. */
   goTo(landmarkId: string): void;
   landmarks(): string[];
+  /**
+   * Frame a landmark from a position that is guaranteed to be OUTSIDE
+   * geometry, by probing rings of candidate camera spots and keeping the one
+   * with a clear line of sight. Returns the chosen camera position, or null if
+   * the landmark is unknown. This is what the screenshot harness uses — never
+   * hardcode camera coordinates, they go stale the moment the city changes.
+   */
+  frameLandmark(
+    landmarkId: string,
+    opts?: { distance?: number; height?: number; fov?: number; lookHeight?: number; azimuthDeg?: number },
+  ): { pos: [number, number, number]; target: [number, number, number] } | null;
+  /** Frame whatever the player is currently at, from a clear nearby spot. */
+  frameHere(opts?: { distance?: number; height?: number; fov?: number }): { pos: [number, number, number]; target: [number, number, number] } | null;
   setWeather(preset: string): void;
   setTimeOfDay(hours: number): void;
   setQuality(q: 'low' | 'medium' | 'high' | 'ultra'): void;
@@ -130,6 +143,18 @@ export class DebugSystem implements System {
         api.teleport(lm.position.x, lm.position.y + 2, lm.position.z);
       },
       landmarks: () => Array.from(ctx.tryGet(Services.City)?.landmarks.keys() ?? []),
+      frameLandmark: (id, opts) => {
+        const lm = ctx.tryGet(Services.City)?.landmarks.get(id);
+        if (!lm) return null;
+        const look = new THREE.Vector3(lm.position.x, lm.position.y + (opts?.lookHeight ?? 14), lm.position.z);
+        return this.frameTarget(ctx, look, opts);
+      },
+      frameHere: (opts) => {
+        const p = ctx.tryGet(Services.Player);
+        if (!p) return null;
+        const look = p.position.clone().setY(p.position.y + 1.5);
+        return this.frameTarget(ctx, look, { ...opts, lookHeight: 0 });
+      },
       setWeather: (preset) => ctx.tryGet(Services.Weather)?.set(preset as never, 0.1),
       setTimeOfDay: (h) => {
         const w = ctx.tryGet(Services.Weather);
@@ -166,6 +191,71 @@ export class DebugSystem implements System {
       `stars      ${st.stars}\n` +
       `pos        ${st.playerPos.map((v) => v.toFixed(1)).join(', ')}\n` +
       `quality    ${st.quality}${st.inVehicle ? '  [driving]' : ''}`;
+  }
+
+  /**
+   * Probe candidate camera spots around `look` and keep the best one.
+   *
+   * "Best" = a spot that is not inside geometry AND has an unobstructed ray to
+   * the target. We sweep azimuth (and fall back to shorter distances) because
+   * a fixed offset lands inside a building the moment the city regenerates.
+   */
+  private frameTarget(
+    ctx: GameContext,
+    look: THREE.Vector3,
+    opts?: { distance?: number; height?: number; fov?: number; azimuthDeg?: number; lookHeight?: number },
+  ): { pos: [number, number, number]; target: [number, number, number] } | null {
+    const phys = ctx.tryGet(Services.Physics);
+    const distance = opts?.distance ?? 46;
+    const height = opts?.height ?? 3.2;
+    const fov = opts?.fov ?? 48;
+
+    const candidate = new THREE.Vector3();
+    const toTarget = new THREE.Vector3();
+    let best: THREE.Vector3 | null = null;
+    let bestClearance = -1;
+
+    const startAz = opts?.azimuthDeg !== undefined ? THREE.MathUtils.degToRad(opts.azimuthDeg) : 0;
+    const azSteps = opts?.azimuthDeg !== undefined ? 1 : 24;
+
+    for (const distScale of [1, 0.72, 0.5, 1.4]) {
+      for (let i = 0; i < azSteps; i++) {
+        const az = startAz + (i / azSteps) * Math.PI * 2;
+        const d = distance * distScale;
+        candidate.set(look.x + Math.sin(az) * d, look.y * 0 + height, look.z + Math.cos(az) * d);
+
+        // Reject spots buried in geometry: fire a short ray straight up.
+        if (phys) {
+          const up = phys.raycast(candidate, new THREE.Vector3(0, 1, 0), 60, undefined);
+          // A hit immediately overhead is fine (a bridge); a hit at ~0 is not.
+          if (up && up.distance < 0.6) continue;
+        }
+
+        toTarget.subVectors(look, candidate);
+        const dist = toTarget.length();
+        toTarget.divideScalar(dist);
+
+        let clearance = dist;
+        if (phys) {
+          const hit = phys.raycast(candidate, toTarget, dist, undefined);
+          // Allow hitting the landmark itself near the end of the ray.
+          clearance = hit ? hit.distance : dist;
+          if (clearance < dist * 0.82) continue;
+        }
+        if (clearance > bestClearance) {
+          bestClearance = clearance;
+          best = candidate.clone();
+        }
+      }
+      if (best) break;
+    }
+
+    const pos = best ?? candidate.set(look.x + distance, height, look.z + distance).clone();
+    this.scriptedCamera = { pos, target: look.clone(), fov };
+    return {
+      pos: [pos.x, pos.y, pos.z],
+      target: [look.x, look.y, look.z],
+    };
   }
 
   lateUpdate(_dt: number, ctx: GameContext): void {

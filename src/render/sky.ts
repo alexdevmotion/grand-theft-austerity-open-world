@@ -1,94 +1,62 @@
-/** Sky dome: analytic sunset gradient + horizon glow + procedural cloud deck.
- *  OWNER: sky/atmosphere agent. Must match the reference frame's magenta-orange
- *  cloud bands, violet zenith, and low warm sun. */
+/** SKY AND ATMOSPHERE — the key light and the emotional centre of the frame.
+ *
+ *  OWNER: sky/atmosphere agent.
+ *
+ *  What lives here:
+ *    - a far-plane sky dome running the multi-deck scattering/cloud shader
+ *      (src/render/sky/skyShader.ts, cloudShader.ts, noise.ts)
+ *    - the solar model and the time-of-day / weather keyframe blend
+ *      (src/render/sky/skyState.ts)
+ *    - directional aerial perspective replacing three's flat fog
+ *      (src/render/sky/aerialPerspective.ts)
+ *    - screen-space veiling glare / light shafts
+ *      (src/render/sky/godRays.ts)
+ *
+ *  PUBLIC CONTRACT for the lighting rig — read these, don't recompute them:
+ *    sky.sunDirection            unit vector toward the sun
+ *    sky.skyAmbientColor(out?)   sky ambient / IBL tint for this instant
+ *    sky.sunLightColor(out?)     directional light colour
+ *    sky.sunIntensityScale()     multiplier on HeroSun.intensity
+ *    sky.horizonColor(out?)      horizon band colour toward the sun
+ *    sky.nightFactor             0 day .. 1 night
+ *
+ *  Because src/core/services.ts is frozen there is no ServiceKey for the sky.
+ *  Instead a marker Object3D named `__sunDir__` is parked in the scene with
+ *  `userData.sky` pointing at this system (the lighting rig already looks that
+ *  name up), and the same object is mirrored on `window.__GTA_SKY__`.
+ */
 
 import * as THREE from 'three';
 import type { GameContext, System } from '../core/engine';
-import { Atmosphere, HeroSun, Palette } from '../artDirection';
+import { Atmosphere, HeroSun } from '../artDirection';
+import { Services } from '../core/services';
+import { SKY_FRAG, SKY_VERT } from './sky/skyShader';
+import {
+  HERO_HOUR,
+  cloneWeather,
+  desaturateKey,
+  keyForElevation,
+  lerpWeather,
+  newKey,
+  sunAnglesForTime,
+  weatherLook,
+  type SkyKey,
+  type SunAngles,
+  type WeatherLook,
+} from './sky/skyState';
+import {
+  AerialUniforms,
+  adoptCustomFogMaterials,
+  aerialForElevation,
+  installAerialPerspective,
+  updateAerialCamera,
+} from './sky/aerialPerspective';
+import { GodRays } from './sky/godRays';
 
-const vert = /* glsl */ `
-varying vec3 vWorldDir;
-void main() {
-  vec4 wp = modelMatrix * vec4(position, 1.0);
-  vWorldDir = normalize(wp.xyz - cameraPosition);
-  gl_Position = projectionMatrix * viewMatrix * wp;
-}
-`;
-
-const frag = /* glsl */ `
-precision highp float;
-varying vec3 vWorldDir;
-
-uniform vec3 uSunDir;
-uniform vec3 cHorizon, cLow, cMid, cHigh, cZenith;
-uniform vec3 cCloudLit, cCloudMid, cCloudShadow, cSunCore;
-uniform float uTime;
-uniform float uCloudCover;
-uniform float uExposure;
-
-float hash(vec2 p){ p = fract(p*vec2(123.34, 456.21)); p += dot(p, p+45.32); return fract(p.x*p.y); }
-float noise(vec2 p){
-  vec2 i = floor(p), f = fract(p);
-  vec2 u = f*f*(3.0-2.0*f);
-  return mix(mix(hash(i), hash(i+vec2(1,0)), u.x),
-             mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), u.x), u.y);
-}
-float fbm(vec2 p){
-  float v = 0.0, a = 0.5;
-  for(int i=0;i<6;i++){ v += a*noise(p); p *= 2.03; a *= 0.5; }
-  return v;
-}
-
-void main() {
-  vec3 d = normalize(vWorldDir);
-  float h = clamp(d.y * 0.5 + 0.5, 0.0, 1.0);
-  float up = clamp(d.y, 0.0, 1.0);
-
-  // Vertical gradient through five authored bands.
-  vec3 sky = cHorizon;
-  sky = mix(sky, cLow,    smoothstep(0.48, 0.545, h));
-  sky = mix(sky, cMid,    smoothstep(0.53, 0.63,  h));
-  sky = mix(sky, cHigh,   smoothstep(0.60, 0.78,  h));
-  sky = mix(sky, cZenith, smoothstep(0.72, 1.00,  h));
-
-  // Below horizon fades to a dark violet ground haze.
-  sky = mix(cCloudShadow * 0.32, sky, smoothstep(0.40, 0.502, h));
-
-  // Sun glow — broad warm scatter plus a soft disc.
-  float sd = max(dot(d, uSunDir), 0.0);
-  float glow = pow(sd, 5.0) * 0.55 + pow(sd, 40.0) * 0.9;
-  float disc = smoothstep(0.9985, 0.9995, sd);
-  sky += cSunCore * glow * 1.25;
-  sky += cSunCore * disc * 14.0;
-
-  // Horizon band brightening toward the sun azimuth (the orange rip).
-  float horizonBand = exp(-abs(d.y) * 14.0);
-  float towardSun = pow(max(dot(normalize(vec3(d.x, 0.0, d.z)), normalize(vec3(uSunDir.x, 0.0, uSunDir.z))), 0.0), 2.0);
-  sky += mix(cLow, cHorizon, towardSun) * horizonBand * (0.35 + 0.85 * towardSun);
-
-  // Cloud deck — flattened dome projection so clouds converge at the horizon.
-  if (d.y > -0.02) {
-    vec2 cuv = d.xz / max(d.y + 0.14, 0.055);
-    cuv *= 0.30;
-    cuv += vec2(uTime * 0.0035, uTime * 0.0018);
-    float c1 = fbm(cuv);
-    float c2 = fbm(cuv * 2.1 + vec2(3.7, 1.2) + c1 * 0.55);
-    float dens = smoothstep(0.42 - uCloudCover * 0.22, 0.86, c1 * 0.65 + c2 * 0.45);
-
-    // Light the clouds from the sun side: lit rims, violet cores.
-    float lit = pow(clamp(towardSun * 0.8 + 0.35 - c2 * 0.35, 0.0, 1.0), 1.5);
-    vec3 cloud = mix(cCloudShadow, cCloudMid, smoothstep(0.15, 0.7, lit));
-    cloud = mix(cloud, cCloudLit, pow(lit, 2.2));
-    // Rim ignition near the sun.
-    cloud += cSunCore * pow(sd, 8.0) * dens * 0.85;
-
-    float fade = smoothstep(-0.02, 0.10, d.y);
-    sky = mix(sky, cloud, dens * fade * 0.94);
-  }
-
-  gl_FragColor = vec4(sky * uExposure, 1.0);
-}
-`;
+/** Hours the sky takes to cross-fade when the weather preset changes. */
+const WEATHER_BLEND = 3.5;
+/** Hour the "night" preset pins the sun to when the clock says daytime. */
+const FORCED_NIGHT_HOUR = 23.2;
 
 export class SkySystem implements System {
   readonly name = 'sky';
@@ -96,66 +64,384 @@ export class SkySystem implements System {
 
   mesh!: THREE.Mesh;
   material!: THREE.ShaderMaterial;
+
   /** Unit vector pointing at the sun; other systems read this. */
   readonly sunDirection = new THREE.Vector3();
+  /** Unit vector pointing at the moon. */
+  readonly moonDirection = new THREE.Vector3();
+  /** Solar elevation in degrees, negative below the horizon. */
+  sunElevationDeg: number = HeroSun.elevationDeg;
+  /** Solar azimuth in degrees, 0 = +Z. */
+  sunAzimuthDeg: number = HeroSun.azimuthDeg;
+  /** 0 = full day, 1 = full night. Drives street lamps, headlights, HUD. */
+  nightFactor = 0;
+
+  private ctx!: GameContext;
+  private marker!: THREE.Object3D;
+  private godRays = new GodRays();
+
+  private key: SkyKey = newKey();
+  private angles: SunAngles = { elevationDeg: HeroSun.elevationDeg, azimuthDeg: HeroSun.azimuthDeg };
+  private nightAngles: SunAngles = { elevationDeg: 0, azimuthDeg: 0 };
+
+  private look: WeatherLook = cloneWeather(weatherLook('clearSunset'));
+  private lookFrom: WeatherLook = cloneWeather(weatherLook('clearSunset'));
+  private lookTo: WeatherLook = cloneWeather(weatherLook('clearSunset'));
+  private lastPreset = 'clearSunset';
+  private blend = 1;
+  private nightPull = 0;
+
+  private time = 0;
+  private flash = 0;
+  private nextStrike = 4;
+  private strikeSeed = 0;
+  private adoptTimer = 0;
+
+  private _c = new THREE.Color();
+  private _fogNear = new THREE.Color();
 
   init(ctx: GameContext): void {
-    this.updateSunDirection(HeroSun.elevationDeg, HeroSun.azimuthDeg);
+    this.ctx = ctx;
+
+    // Must happen before any material compiles a program. SkySystem is the
+    // first world system, so this is the earliest safe point.
+    installAerialPerspective();
+
+    this.applySolar(HeroSun.elevationDeg, HeroSun.azimuthDeg);
+    keyForElevation(this.key, HeroSun.elevationDeg);
 
     this.material = new THREE.ShaderMaterial({
-      vertexShader: vert,
-      fragmentShader: frag,
+      vertexShader: SKY_VERT,
+      fragmentShader: SKY_FRAG,
       side: THREE.BackSide,
       depthWrite: false,
-      depthTest: false,
+      depthTest: true,
       toneMapped: false,
+      fog: false,
+      defines: { SK_QUALITY: 2, SK_LIGHT_TAPS: 3 },
       uniforms: {
         uSunDir: { value: this.sunDirection },
-        cHorizon: { value: Palette.skyHorizon },
-        cLow: { value: Palette.skyLowBand },
-        cMid: { value: Palette.skyMidBand },
-        cHigh: { value: Palette.skyHighBand },
-        cZenith: { value: Palette.skyZenith },
-        cCloudLit: { value: Palette.cloudLit },
-        cCloudMid: { value: Palette.cloudMid },
-        cCloudShadow: { value: Palette.cloudShadow },
-        cSunCore: { value: Palette.sunCore },
+        uMoonDir: { value: this.moonDirection },
+        uSunAz: { value: new THREE.Vector2(0, 1) },
+
+        cHorizon: { value: this.key.horizon },
+        cLow: { value: this.key.low },
+        cMid: { value: this.key.mid },
+        cHigh: { value: this.key.high },
+        cZenith: { value: this.key.zenith },
+        cAway: { value: this.key.away },
+        cToward: { value: this.key.toward },
+        cSunCore: { value: this.key.sunCore },
+        cSunHalo: { value: this.key.sunHalo },
+        cCloudLit: { value: this.key.cloudLit },
+        cCloudMid: { value: this.key.cloudMid },
+        cCloudCore: { value: this.key.cloudCore },
+        cGroundHaze: { value: this.key.groundHaze },
+        cMoon: { value: this.key.moon },
+
         uTime: { value: 0 },
-        uCloudCover: { value: 0.58 },
-        uExposure: { value: 1.0 },
+        uCover: { value: new THREE.Vector3(0.56, 0.44, 0.34) },
+        uP: { value: new THREE.Vector4(1, 1, 0, 1) },
+        uP2: { value: new THREE.Vector4(1, 0.62, 0, 0) },
+        uLightStep: { value: new THREE.Vector2(0.9, 0.7) },
+        uSunRadius: { value: 0.0082 },
+        uFlash: { value: 0 },
+        uWind: { value: 0.06 },
       },
     });
 
-    this.mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 48, 32), this.material);
+    // Radius is irrelevant (the shader pins depth to the far plane); it only
+    // has to comfortably enclose the near plane.
+    // Low tessellation on purpose: everything is computed per-fragment, the
+    // geometry only has to enclose the near plane. 32x20 = 1,280 triangles.
+    this.mesh = new THREE.Mesh(new THREE.SphereGeometry(120, 32, 20), this.material);
     this.mesh.frustumCulled = false;
-    this.mesh.renderOrder = -1000;
-    this.mesh.scale.setScalar(2400);
+    // Drawn last in the opaque pass so early-Z throws away every sky pixel the
+    // city already covers. On a street framing that is ~70% of the screen.
+    this.mesh.renderOrder = 2000;
+    this.mesh.name = '__skyDome__';
+    this.mesh.matrixAutoUpdate = true;
     ctx.scene.add(this.mesh);
 
-    ctx.scene.fog = new THREE.FogExp2(
-      Palette.skyMidBand.clone().lerp(Palette.skyLowBand, 0.4).getHex(),
-      Atmosphere.fogDensity,
-    );
+    ctx.scene.add(this.godRays.mesh);
+
+    // Fog object exists purely so three defines USE_FOG / FOG_EXP2; the actual
+    // model is the aerial-perspective chunk override.
+    const fog = new THREE.FogExp2(0x2a1c3a, Atmosphere.fogDensity);
+    ctx.scene.fog = fog;
+
+    this.marker = new THREE.Object3D();
+    this.marker.name = '__sunDir__';
+    this.marker.userData.sky = this;
+    this.marker.visible = false;
+    ctx.scene.add(this.marker);
+
+    (window as unknown as { __GTA_SKY__: SkySystem }).__GTA_SKY__ = this;
+
+    this.refreshUniforms(0);
   }
 
-  updateSunDirection(elevationDeg: number, azimuthDeg: number): void {
-    const el = THREE.MathUtils.degToRad(elevationDeg);
-    const az = THREE.MathUtils.degToRad(azimuthDeg);
-    this.sunDirection.set(
-      Math.cos(el) * Math.sin(az),
-      Math.sin(el),
-      Math.cos(el) * Math.cos(az),
-    ).normalize();
+  /* ---------------------------------------------------------------- */
+  /* Public contract                                                   */
+  /* ---------------------------------------------------------------- */
+
+  /** Sky ambient / IBL tint for this instant. This is the fill light that
+   *  makes shadows read violet instead of black. */
+  skyAmbientColor(target?: THREE.Color): THREE.Color {
+    const out = target ?? new THREE.Color();
+    return out.copy(this.key.ambient).multiplyScalar(this.look.skyMul);
   }
+
+  /** Directional (sun/moon) light colour for this instant. */
+  sunLightColor(target?: THREE.Color): THREE.Color {
+    const out = target ?? new THREE.Color();
+    return out.copy(this.key.sunLight);
+  }
+
+  /** Multiplier the lighting rig should apply to HeroSun.intensity. */
+  sunIntensityScale(): number {
+    return this.key.sunPower * THREE.MathUtils.lerp(1, 0.35, 1 - this.look.skyMul);
+  }
+
+  /** Horizon band colour toward the sun — good for rim/backlight tinting. */
+  horizonColor(target?: THREE.Color): THREE.Color {
+    const out = target ?? new THREE.Color();
+    return out.copy(this.key.horizon).multiplyScalar(this.look.skyMul);
+  }
+
+  /** Kept from the original contract: force an explicit sun angle. */
+  updateSunDirection(elevationDeg: number, azimuthDeg: number): void {
+    this.applySolar(elevationDeg, azimuthDeg);
+  }
+
+  /** Fire a lightning pop (weather system may drive this too). */
+  triggerLightning(strength = 1): void {
+    this.flash = Math.max(this.flash, strength);
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Frame                                                             */
+  /* ---------------------------------------------------------------- */
 
   update(dt: number, ctx: GameContext): void {
-    this.material.uniforms.uTime.value += dt;
-    // Keep the dome centred on the camera so it never clips.
+    this.time += dt;
+
+    const weather = ctx.tryGet(Services.Weather);
+    const preset = weather?.preset ?? 'clearSunset';
+
+    if (preset !== this.lastPreset) {
+      // Start a new cross-fade from wherever the blend currently sits.
+      this.lookFrom = cloneWeather(this.look);
+      this.lookTo = cloneWeather(weatherLook(preset));
+      this.blend = 0;
+      this.lastPreset = preset;
+    }
+    if (this.blend < 1) {
+      this.blend = Math.min(1, this.blend + dt / WEATHER_BLEND);
+      lerpWeather(this.look, this.lookFrom, this.lookTo, THREE.MathUtils.smoothstep(this.blend, 0, 1));
+    }
+
+    // "night" preset overrides the clock without mutating the weather service.
+    const wantNight = this.lookTo.forceNight ? 1 : 0;
+    this.nightPull += (wantNight - this.nightPull) * Math.min(1, dt / WEATHER_BLEND);
+
+    const hours = weather?.timeOfDay ?? HERO_HOUR;
+    sunAnglesForTime(hours, this.angles);
+    if (this.nightPull > 0.001) {
+      sunAnglesForTime(FORCED_NIGHT_HOUR, this.nightAngles);
+      // Only pull if the clock isn't already dark; a 2am clock needs no help.
+      const need = THREE.MathUtils.smoothstep(this.angles.elevationDeg, -14, -4);
+      const t = this.nightPull * need;
+      this.angles.elevationDeg = THREE.MathUtils.lerp(this.angles.elevationDeg, this.nightAngles.elevationDeg, t);
+      this.angles.azimuthDeg = THREE.MathUtils.lerp(this.angles.azimuthDeg, this.nightAngles.azimuthDeg, t);
+    }
+
+    this.applySolar(this.angles.elevationDeg, this.angles.azimuthDeg);
+    keyForElevation(this.key, this.angles.elevationDeg);
+    desaturateKey(this.key, this.look.desaturate);
+
+    this.nightFactor = 1 - THREE.MathUtils.smoothstep(this.angles.elevationDeg, -12, -1.5);
+
+    // Lightning: deterministic, seeded off elapsed time so screenshots repeat.
+    if (this.look.lightning > 0.001) {
+      this.nextStrike -= dt * this.look.lightning * 3;
+      if (this.nextStrike <= 0) {
+        this.strikeSeed = (this.strikeSeed * 1103515245 + 12345) & 0x7fffffff;
+        this.nextStrike = 1.2 + (this.strikeSeed % 1000) / 1000 * 5.5;
+        this.flash = 0.55 + ((this.strikeSeed >> 10) % 1000) / 1000 * 0.9;
+      }
+    }
+    this.flash = Math.max(0, this.flash - dt * 4.2);
+
+    this.refreshUniforms(dt);
+
+    // Keep the dome centred on the camera so directions stay exact.
     this.mesh.position.copy(ctx.camera.position);
+
+    this.adoptTimer -= dt;
+    if (this.adoptTimer <= 0) {
+      this.adoptTimer = 2;
+      adoptCustomFogMaterials(ctx.scene);
+    }
+  }
+
+  lateUpdate(dt: number, ctx: GameContext): void {
+    this.mesh.position.copy(ctx.camera.position);
+    updateAerialCamera(ctx.camera);
+
+    const q = ctx.tryGet(Services.Render)?.quality ?? 'high';
+    this.applyQuality(q);
+    const shaftQuality = q === 'low' ? 0 : q === 'medium' ? 0.6 : 1;
+
+    // Veiling glare scales with how low and how strong the sun is.
+    const lowSun = 1 - THREE.MathUtils.smoothstep(this.angles.elevationDeg, 2, 26);
+    const above = THREE.MathUtils.smoothstep(this.angles.elevationDeg, -4.5, 1.5);
+    // Deliberately small: this is veiling glare in the air, not a lens flare.
+    // GodRays additionally clamps it, and its quad is depth-tested at the far
+    // plane so it can only brighten open sky.
+    const strength = 0.11 * this.look.shafts * shaftQuality * (0.35 + 0.65 * lowSun) * above;
+    this.godRays.setColor(this._c.copy(this.key.sunHalo).multiplyScalar(0.5));
+    this.godRays.update(dt, ctx.camera, this.sunDirection, strength);
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Internals                                                         */
+  /* ---------------------------------------------------------------- */
+
+  private lastQuality = '';
+
+  /** Drop the cirrus deck and a shadow tap on the cheaper tiers. The sky is
+   *  fill-rate bound, not vertex bound, so this is the only lever that matters. */
+  private applyQuality(q: string): void {
+    if (q === this.lastQuality) return;
+    this.lastQuality = q;
+    const level = q === 'low' ? 0 : q === 'medium' ? 1 : 2;
+    const taps = q === 'low' ? 2 : q === 'medium' ? 2 : 3;
+    const d = this.material.defines as Record<string, number>;
+    if (d.SK_QUALITY === level && d.SK_LIGHT_TAPS === taps) return;
+    d.SK_QUALITY = level;
+    d.SK_LIGHT_TAPS = taps;
+    this.material.needsUpdate = true;
+  }
+
+  private applySolar(elevationDeg: number, azimuthDeg: number): void {
+    this.sunElevationDeg = elevationDeg;
+    this.sunAzimuthDeg = azimuthDeg;
+    const el = THREE.MathUtils.degToRad(elevationDeg);
+    const az = THREE.MathUtils.degToRad(azimuthDeg);
+    this.sunDirection
+      .set(Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az))
+      .normalize();
+
+    // The moon rides the opposite arc, so it is up exactly when the sun is not.
+    const mel = THREE.MathUtils.degToRad(-elevationDeg * 0.86 + 9);
+    const maz = THREE.MathUtils.degToRad(azimuthDeg + 168);
+    this.moonDirection
+      .set(Math.cos(mel) * Math.sin(maz), Math.sin(mel), Math.cos(mel) * Math.cos(maz))
+      .normalize();
+  }
+
+  private refreshUniforms(dt: number): void {
+    void dt;
+    const u = this.material.uniforms;
+    const k = this.key;
+
+    u.cHorizon.value = k.horizon;
+    u.cLow.value = k.low;
+    u.cMid.value = k.mid;
+    u.cHigh.value = k.high;
+    u.cZenith.value = k.zenith;
+    u.cAway.value = k.away;
+    u.cToward.value = k.toward;
+    u.cSunCore.value = k.sunCore;
+    u.cSunHalo.value = k.sunHalo;
+    u.cCloudLit.value = k.cloudLit;
+    u.cCloudMid.value = k.cloudMid;
+    u.cCloudCore.value = k.cloudCore;
+    u.cGroundHaze.value = k.groundHaze;
+    u.cMoon.value = k.moon;
+
+    (u.uSunAz.value as THREE.Vector2).set(this.sunDirection.x, this.sunDirection.z).normalize();
+    (u.uCover.value as THREE.Vector3).set(this.look.cover[0], this.look.cover[1], this.look.cover[2]);
+
+    const haze = k.haze * this.look.hazeMul;
+    (u.uP.value as THREE.Vector4).set(this.look.skyMul, k.sunIntensity, this.nightFactor, haze);
+    (u.uP2.value as THREE.Vector4).set(
+      this.look.cloudDark,
+      this.look.shafts,
+      k.stars * (1 - this.look.desaturate * 0.85),
+      k.moonAmount * (1 - this.look.desaturate * 0.7),
+    );
+
+    // A low sun cuts a long chord through each deck: march further.
+    const lowness = 1 - THREE.MathUtils.smoothstep(this.sunDirection.y, 0.02, 0.55);
+    (u.uLightStep.value as THREE.Vector2).set(
+      THREE.MathUtils.lerp(0.75, 2.55, lowness),
+      THREE.MathUtils.lerp(0.58, 1.90, lowness),
+    );
+
+    u.uTime.value = this.time;
+    u.uWind.value = 0.055 * this.look.wind;
+    u.uFlash.value = this.flash * this.flash * 2.4;
+
+    this.refreshAerial();
+  }
+
+  /** Feed the shared fog uniforms so the city dissolves into this exact sky.
+   *
+   *  The three in-scatter colours come from `aerialForElevation` — literal
+   *  linear triples authored in aerialPerspective.ts — NOT from the sky
+   *  keyframe. Deriving them from the keyframe meant multiplying an already
+   *  magenta band by an already violet tint, which annihilated the green
+   *  channel and turned the whole city into one flat lilac sheet. Airlight is
+   *  Rayleigh-dominated and Rayleigh is greener than it is red; that is not
+   *  something the dome's appearance colours can be talked into. */
+  private refreshAerial(): void {
+    const a = aerialForElevation(this.angles.elevationDeg);
+    const m = this.look.skyMul;
+    // Grey weather washes the tint out but does not change its hue balance.
+    const ds = this.look.desaturate;
+    const put = (t: { x: number; y: number; z: number }, c: [number, number, number]): void => {
+      const y = c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722;
+      t.x = (c[0] + (y * 0.96 - c[0]) * ds) * m;
+      t.y = (c[1] + (y * 0.96 - c[1]) * ds) * m;
+      t.z = (c[2] + (y * 1.14 - c[2]) * ds) * m;
+    };
+    put(AerialUniforms.sunCol, a.sun);
+    put(AerialUniforms.awayCol, a.away);
+    put(AerialUniforms.zenCol, a.zen);
+
+    AerialUniforms.sunDir.x = this.sunDirection.x;
+    AerialUniforms.sunDir.y = this.sunDirection.y;
+    AerialUniforms.sunDir.z = this.sunDirection.z;
+
+    AerialUniforms.params.x = a.density * this.look.fogMul;
+    // Steeper height falloff: the haze is a street-level phenomenon, so
+    // rooftops and towers keep their own albedo instead of dissolving.
+    AerialUniforms.params.y = 0.0115;
+    AerialUniforms.params.z = 0.70;
+    // The Mie lobe peaks near 1.75 at cos = 1, so this weight is effectively
+    // doubling the in-scatter down-sun. Halved.
+    AerialUniforms.params.w = 0.24 * this.look.shafts + 0.06;
+    AerialUniforms.params2.x = 26;
+    AerialUniforms.params2.y = 0.94;
+
+    // Keep the legacy fog colour roughly right for anything that falls back.
+    const fog = this.ctx.scene.fog as THREE.FogExp2 | null;
+    if (fog) {
+      this._fogNear.setRGB(
+        (a.sun[0] + a.away[0]) * 0.5 * m,
+        (a.sun[1] + a.away[1]) * 0.5 * m,
+        (a.sun[2] + a.away[2]) * 0.5 * m,
+      );
+      fog.color.copy(this._fogNear);
+      fog.density = 0.0009 * this.look.fogMul;
+    }
   }
 
   dispose(): void {
     this.mesh?.geometry.dispose();
     this.material?.dispose();
+    this.godRays.dispose();
   }
 }

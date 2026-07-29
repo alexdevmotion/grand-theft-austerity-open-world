@@ -22,6 +22,20 @@ const VOICE_SETS = [
   'ce-ne-enerveaza-61-matze-clips',
   'ce-ne-enerveaza-intro-clips',
 ];
+
+/**
+ * The second batch, which ships with a manifest and real Romanian transcripts
+ * per clip — far more useful than the slug-only sets above, because a line can
+ * be matched to a game context by what it actually says.
+ * Source: <concept repo>/output/reference-assets/audio/ce-ne-enerveaza-new/
+ * Extraction script: <concept repo>/scripts/audio/extract-ce-ne-enerveaza-library.ts
+ */
+const NEW_SET = {
+  dir: 'ce-ne-enerveaza-new',
+  from: 'ce-ne-enerveaza-new/clips',
+  episodes: ['episode-50', 'episode-52', 'episode-54', 'episode-57'],
+  manifest: 'manifest.json',
+};
 const MUSIC = ['fecioreasca-de-pe-mures-dumitru-farcas.mp3'];
 
 if (!existsSync(SRC)) {
@@ -39,6 +53,24 @@ for (const set of VOICE_SETS) {
     n++;
   }
 }
+// Second batch: episode subdirectories plus the source manifest.
+const newFrom = join(SRC, NEW_SET.from);
+if (existsSync(newFrom)) {
+  for (const ep of NEW_SET.episodes) {
+    const from = join(newFrom, ep);
+    if (!existsSync(from)) { console.warn(`· skipped missing ${ep}`); continue; }
+    await mkdir(join(DST, 'vo', NEW_SET.dir, ep), { recursive: true });
+    for (const f of (await readdir(from)).filter((f) => f.endsWith('.mp3'))) {
+      await cp(join(from, f), join(DST, 'vo', NEW_SET.dir, ep, f));
+      n++;
+    }
+  }
+  const man = join(newFrom, NEW_SET.manifest);
+  if (existsSync(man)) await cp(man, join(DST, 'vo', NEW_SET.dir, 'source-manifest.json'));
+} else {
+  console.warn(`· skipped missing set ${NEW_SET.dir}`);
+}
+
 await mkdir(join(DST, 'music'), { recursive: true });
 for (const f of MUSIC) {
   if (!existsSync(join(SRC, f))) { console.warn(`· skipped missing ${f}`); continue; }

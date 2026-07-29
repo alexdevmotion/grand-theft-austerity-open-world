@@ -323,6 +323,557 @@
     "file": "audio/vo/ce-ne-enerveaza-intro-clips/14-aici-nu-se-mai-poate-trai.mp3",
     "phrase": "aici nu se mai poate trai"
    }
+  ],
+  "ce-ne-enerveaza-new": [
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-52/00-intro-complete.mp3",
+    "phrase": "intro complete",
+    "transcript": null,
+    "kind": "intro",
+    "episode": 52,
+    "episodeTitle": "Iar ne salvează PSD",
+    "seconds": 214.5
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-52/90-outro-complete.mp3",
+    "phrase": "outro complete",
+    "transcript": null,
+    "kind": "outro",
+    "episode": 52,
+    "episodeTitle": "Iar ne salvează PSD",
+    "seconds": 168.48
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-50/00-intro-complete.mp3",
+    "phrase": "intro complete",
+    "transcript": null,
+    "kind": "intro",
+    "episode": 50,
+    "episodeTitle": "Vreți ceva de la MAGA?",
+    "seconds": 219
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-50/90-outro-complete.mp3",
+    "phrase": "outro complete",
+    "transcript": null,
+    "kind": "outro",
+    "episode": 50,
+    "episodeTitle": "Vreți ceva de la MAGA?",
+    "seconds": 142.93
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-57/00-intro-complete.mp3",
+    "phrase": "intro complete",
+    "transcript": null,
+    "kind": "intro",
+    "episode": 57,
+    "episodeTitle": "Drona și vagabondul",
+    "seconds": 171
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-57/90-outro-complete.mp3",
+    "phrase": "outro complete",
+    "transcript": null,
+    "kind": "outro",
+    "episode": 57,
+    "episodeTitle": "Drona și vagabondul",
+    "seconds": 209.59
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-54/00-intro-complete.mp3",
+    "phrase": "intro complete",
+    "transcript": null,
+    "kind": "intro",
+    "episode": 54,
+    "episodeTitle": "Nu va fi ușor, va fi greușor",
+    "seconds": 282
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-54/90-outro-complete.mp3",
+    "phrase": "outro complete",
+    "transcript": null,
+    "kind": "outro",
+    "episode": 54,
+    "episodeTitle": "Nu va fi ușor, va fi greușor",
+    "seconds": 201.48
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-52/01-drone-cu-scame-din-buric.mp3",
+    "phrase": "Încercăm să construim drone cu scame din buric.",
+    "transcript": "Încercăm să construim drone cu scame din buric.",
+    "kind": "quote",
+    "episode": 52,
+    "episodeTitle": "Iar ne salvează PSD",
+    "seconds": 8.75
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-52/02-nu-ne-lansam-niciunde.mp3",
+    "phrase": "Nu ne lansăm niciunde. Pare că ne vom târî și atât.",
+    "transcript": "Nu ne lansăm niciunde. Pare că ne vom târî și atât.",
+    "kind": "quote",
+    "episode": 52,
+    "episodeTitle": "Iar ne salvează PSD",
+    "seconds": 3.6
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-52/03-romania-legata-cu-sarme.mp3",
+    "phrase": "Toată România de azi e legată cu sârme, bate, troncăne.",
+    "transcript": "Toată România de azi e legată cu sârme, bate, troncăne.",
+    "kind": "quote",
+    "episode": 52,
+    "episodeTitle": "Iar ne salvează PSD",
+    "seconds": 6.4
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-52/04-cu-caruta-tragem-barca-pe-uscat.mp3",
+    "phrase": "Noi tot cu căruța, cu boi, tragem barca pe uscat.",
+    "transcript": "Noi tot cu căruța, cu boi, tragem barca pe uscat.",
+    "kind": "quote",
+    "episode": 52,
+    "episodeTitle": "Iar ne salvează PSD",
+    "seconds": 8.8
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-52/05-iar-ne-iubeste-psd.mp3",
+    "phrase": "Iar ne iubește PSD. Mare noroc avem cu ei.",
+    "transcript": "Iar ne iubește PSD. Mare noroc avem cu ei.",
+    "kind": "quote",
+    "episode": 52,
+    "episodeTitle": "Iar ne salvează PSD",
+    "seconds": 7.65
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-52/06-relatie-foarte-buna-cu-psd.mp3",
+    "phrase": "Eu am o relație foarte bună cu PSD-ul.",
+    "transcript": "Eu am o relație foarte bună cu PSD-ul.",
+    "kind": "quote",
+    "episode": 52,
+    "episodeTitle": "Iar ne salvează PSD",
+    "seconds": 4.2
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-52/07-prost-mai-eram-cand-eram-ministru.mp3",
+    "phrase": "Bă, dar prost mai eram când eram ministru.",
+    "transcript": "Bă, dar prost mai eram când eram ministru.",
+    "kind": "quote",
+    "episode": 52,
+    "episodeTitle": "Iar ne salvează PSD",
+    "seconds": 4.4
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-52/08-trump-pariuri-si-tigara.mp3",
+    "phrase": "Trump e fix ca ăla care povestește cât a câștigat la pariuri, apoi cere o țigară.",
+    "transcript": "Trump e fix ca ăla care povestește cât a câștigat la pariuri, apoi cere o țigară.",
+    "kind": "quote",
+    "episode": 52,
+    "episodeTitle": "Iar ne salvează PSD",
+    "seconds": 11.35
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-52/09-ecografie-ficat.mp3",
+    "phrase": "E ca și cum aplaudăm când vedem pe ecografie că ne-a ieșit ficatul de trei ori mai mare.",
+    "transcript": "E ca și cum aplaudăm când vedem pe ecografie că ne-a ieșit ficatul de trei ori mai mare.",
+    "kind": "quote",
+    "episode": 52,
+    "episodeTitle": "Iar ne salvează PSD",
+    "seconds": 7.75
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-52/10-douazeci-de-ron-motor.mp3",
+    "phrase": "Mie de benzinar mi s-a rupt sufletul. Douăzeci de RON motor.",
+    "transcript": "Mie de benzinar mi s-a rupt sufletul. Douăzeci de RON motor.",
+    "kind": "quote",
+    "episode": 52,
+    "episodeTitle": "Iar ne salvează PSD",
+    "seconds": 6.85
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-52/11-dopamina-informata.mp3",
+    "phrase": "Vă doresc de o sută de ori mai multă dopamină informată.",
+    "transcript": "Vă doresc de o sută de ori mai multă dopamină informată.",
+    "kind": "quote",
+    "episode": 52,
+    "episodeTitle": "Iar ne salvează PSD",
+    "seconds": 4.75
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-50/01-suntem-nazisti-gay.mp3",
+    "phrase": "Suntem naziști gay? Da, suntem naziști gay.",
+    "transcript": "Suntem naziști gay? Da, suntem naziști gay.",
+    "kind": "quote",
+    "episode": 50,
+    "episodeTitle": "Vreți ceva de la MAGA?",
+    "seconds": 4.0
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-50/02-observator-la-ferrari.mp3",
+    "phrase": "S-a dus la Consiliul Păcii cum intru eu la reprezentanța Ferrari: nu doresc ceva, doar mă uit.",
+    "transcript": "S-a dus la Consiliul Păcii cum intru eu la reprezentanța Ferrari: nu doresc ceva, doar mă uit.",
+    "kind": "quote",
+    "episode": 50,
+    "episodeTitle": "Vreți ceva de la MAGA?",
+    "seconds": 16.8
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-50/03-neinvitat-la-nunta.mp3",
+    "phrase": "Trebuie să fii ca ăla din colțul camerei de care întreabă mirele pe mireasă cine l-a invitat.",
+    "transcript": "Trebuie să fii ca ăla din colțul camerei de care întreabă mirele pe mireasă cine l-a invitat.",
+    "kind": "quote",
+    "episode": 50,
+    "episodeTitle": "Vreți ceva de la MAGA?",
+    "seconds": 13.2
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-50/04-ma-fac-de-ras.mp3",
+    "phrase": "Bă, mă fac de râs, mă vede lumea. Iar fac toți mișto de mine.",
+    "transcript": "Bă, mă fac de râs, mă vede lumea. Iar fac toți mișto de mine.",
+    "kind": "quote",
+    "episode": 50,
+    "episodeTitle": "Vreți ceva de la MAGA?",
+    "seconds": 8.1
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-50/05-bai-tu-esti-prost.mp3",
+    "phrase": "Eu mă gândesc așa ca prostul... Băi, tu ești prost? Cred că da.",
+    "transcript": "Eu mă gândesc așa ca prostul... Băi, tu ești prost? Cred că da.",
+    "kind": "quote",
+    "episode": 50,
+    "episodeTitle": "Vreți ceva de la MAGA?",
+    "seconds": 14.5
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-50/06-calin-georgescu-doua-sute-de-ani.mp3",
+    "phrase": "În călătoriile sale ketaminice se întâlnise cu oamenii lui Călin Georgescu care trăiau două sute de ani.",
+    "transcript": "În călătoriile sale ketaminice se întâlnise cu oamenii lui Călin Georgescu care trăiau două sute de ani.",
+    "kind": "quote",
+    "episode": 50,
+    "episodeTitle": "Vreți ceva de la MAGA?",
+    "seconds": 10.55
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-50/07-hobby-sau-o-iubita.mp3",
+    "phrase": "Să voteze doar cei care i-au dat like. Să-i găsească cineva un hobby sau o iubită.",
+    "transcript": "Să voteze doar cei care i-au dat like. Să-i găsească cineva un hobby sau o iubită.",
+    "kind": "quote",
+    "episode": 50,
+    "episodeTitle": "Vreți ceva de la MAGA?",
+    "seconds": 13.1
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-50/08-pozitiv-la-dopamina.mp3",
+    "phrase": "Vă urez să ieșiți pozitiv la dopamină, la teste rapide și la medicină legală.",
+    "transcript": "Vă urez să ieșiți pozitiv la dopamină, la teste rapide și la medicină legală.",
+    "kind": "quote",
+    "episode": 50,
+    "episodeTitle": "Vreți ceva de la MAGA?",
+    "seconds": 7.45
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-50/09-trag-dopamina-in-mine.mp3",
+    "phrase": "Gata, pa. Vă las cu Matze. Trag dopamina în mine.",
+    "transcript": "Gata, pa. Vă las cu Matze. Trag dopamina în mine.",
+    "kind": "quote",
+    "episode": 50,
+    "episodeTitle": "Vreți ceva de la MAGA?",
+    "seconds": 7.95
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-50/10-taci-din-gura.mp3",
+    "phrase": "O lecție pe care e bine să o primești la timp. Taci din gură.",
+    "transcript": "O lecție pe care e bine să o primești la timp. Taci din gură.",
+    "kind": "quote",
+    "episode": 50,
+    "episodeTitle": "Vreți ceva de la MAGA?",
+    "seconds": 9.95
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-50/11-cea-mai-buna-minciuna.mp3",
+    "phrase": "Cea mai bună minciună e adevărul, domnilor. Nu-i adevărat.",
+    "transcript": "Cea mai bună minciună e adevărul, domnilor. Nu-i adevărat.",
+    "kind": "quote",
+    "episode": 50,
+    "episodeTitle": "Vreți ceva de la MAGA?",
+    "seconds": 9.25
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-57/01-drona-si-doi-raniti-usor.mp3",
+    "phrase": "A căzut o dronă în Galați. Nu sunt victime. Doi răniți ușor.",
+    "transcript": "A căzut o dronă în Galați. Nu sunt victime. Doi răniți ușor.",
+    "kind": "quote",
+    "episode": 57,
+    "episodeTitle": "Drona și vagabondul",
+    "seconds": 11.5
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-57/02-au-scapat-usor-galatenii.mp3",
+    "phrase": "Față de privatizări sau mandate de primar PSD, au scăpat foarte ușor gălățenii.",
+    "transcript": "Față de privatizări sau mandate de primar PSD, au scăpat foarte ușor gălățenii.",
+    "kind": "quote",
+    "episode": 57,
+    "episodeTitle": "Drona și vagabondul",
+    "seconds": 8.55
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-57/03-puscaria-il-mananca-pe-putin.mp3",
+    "phrase": "S-a deschis dosar penal. Din ce înțeleg, pușcăria îl mănâncă pe Putin.",
+    "transcript": "S-a deschis dosar penal. Din ce înțeleg, pușcăria îl mănâncă pe Putin.",
+    "kind": "quote",
+    "episode": 57,
+    "episodeTitle": "Drona și vagabondul",
+    "seconds": 11.7
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-57/04-putin-la-jilava-in-douazeci-si-cinci-de-ani.mp3",
+    "phrase": "O să vadă în douăzeci și cinci de ani: e la Jilava. Nu știe cu cine s-a pus.",
+    "transcript": "O să vadă în douăzeci și cinci de ani: e la Jilava. Nu știe cu cine s-a pus.",
+    "kind": "quote",
+    "episode": 57,
+    "episodeTitle": "Drona și vagabondul",
+    "seconds": 15.55
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-57/05-ambasadorul-sa-stranga-molozul.mp3",
+    "phrase": "Să-l ducem pe ambasadorul Rusiei să strângă molozul și să dea o mână de tencuială.",
+    "transcript": "Să-l ducem pe ambasadorul Rusiei să strângă molozul și să dea o mână de tencuială.",
+    "kind": "quote",
+    "episode": 57,
+    "episodeTitle": "Drona și vagabondul",
+    "seconds": 9.65
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-57/06-arma-noastra-georgian.mp3",
+    "phrase": "Recorder nici nu știe ce-l așteaptă. Vom trimite în luptă arma noastră cea mai bună: Georgian.",
+    "transcript": "Recorder nici nu știe ce-l așteaptă. Vom trimite în luptă arma noastră cea mai bună: Georgian.",
+    "kind": "quote",
+    "episode": 57,
+    "episodeTitle": "Drona și vagabondul",
+    "seconds": 15.95
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-57/07-logica-de-la-aer-conditionat.mp3",
+    "phrase": "Nu un general căruia i s-a micșorat logica de la atâta aer condiționat.",
+    "transcript": "Nu un general căruia i s-a micșorat logica de la atâta aer condiționat.",
+    "kind": "quote",
+    "episode": 57,
+    "episodeTitle": "Drona și vagabondul",
+    "seconds": 16.7
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-57/08-mamaliga-si-ceapa.mp3",
+    "phrase": "Tu-ți dai banii, că ți-am dat o sută cincizeci de RON să-ți iei mămăligă și ceapă.",
+    "transcript": "Tu-ți dai banii, că ți-am dat o sută cincizeci de RON să-ți iei mămăligă și ceapă.",
+    "kind": "quote",
+    "episode": 57,
+    "episodeTitle": "Drona și vagabondul",
+    "seconds": 5.35
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-57/09-proiect-de-sapte-miliarde.mp3",
+    "phrase": "Doar dacă treci cu mașina prin Doicești ca PSD-ist se agață de tine două-trei milioane.",
+    "transcript": "Doar dacă treci cu mașina prin Doicești ca PSD-ist se agață de tine două-trei milioane.",
+    "kind": "quote",
+    "episode": 57,
+    "episodeTitle": "Drona și vagabondul",
+    "seconds": 11.7
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-57/10-blugi-si-banane.mp3",
+    "phrase": "Nouă ne plac blugii și bananele. Blugi și banane și excursii peste hotare.",
+    "transcript": "Nouă ne plac blugii și bananele. Blugi și banane și excursii peste hotare.",
+    "kind": "quote",
+    "episode": 57,
+    "episodeTitle": "Drona și vagabondul",
+    "seconds": 13.0
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-57/11-va-plac-bananele-si-blugii.mp3",
+    "phrase": "Dumneavoastră vă plac bananele? Vă plac blugii?",
+    "transcript": "Dumneavoastră vă plac bananele? Vă plac blugii?",
+    "kind": "quote",
+    "episode": 57,
+    "episodeTitle": "Drona și vagabondul",
+    "seconds": 4.5
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-57/12-relatie-foarte-buna-cu-psd.mp3",
+    "phrase": "Cel mai mare dușman este PSD... Eu am o relație foarte bună cu PSD-ul.",
+    "transcript": "Cel mai mare dușman este PSD... Eu am o relație foarte bună cu PSD-ul.",
+    "kind": "quote",
+    "episode": 57,
+    "episodeTitle": "Drona și vagabondul",
+    "seconds": 20.1
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-57/13-ce-inseamna-banane-si-blugi.mp3",
+    "phrase": "Ce naiba înseamnă banane și blugi? Îmi bat capul de jumătate de oră.",
+    "transcript": "Ce naiba înseamnă banane și blugi? Îmi bat capul de jumătate de oră.",
+    "kind": "quote",
+    "episode": 57,
+    "episodeTitle": "Drona și vagabondul",
+    "seconds": 8.89
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-54/01-anaf-spv-barosane.mp3",
+    "phrase": "Niciuna, Răducule. Mânca-ți-aș SPV-ul tău. Bine, barosane, te salută fratele tău.",
+    "transcript": "Niciuna, Răducule. Mânca-ți-aș SPV-ul tău. Bine, barosane, te salută fratele tău.",
+    "kind": "quote",
+    "episode": 54,
+    "episodeTitle": "Nu va fi ușor, va fi greușor",
+    "seconds": 11.3
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-54/02-anaf-muncea-de-revelion.mp3",
+    "phrase": "Treizeci și unu decembrie muncea ANAF-ul pentru mine. Chiar m-am simțit important.",
+    "transcript": "Treizeci și unu decembrie muncea ANAF-ul pentru mine. Chiar m-am simțit important.",
+    "kind": "quote",
+    "episode": 54,
+    "episodeTitle": "Nu va fi ușor, va fi greușor",
+    "seconds": 8.8
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-54/03-penalitati-ca-la-chiloti.mp3",
+    "phrase": "Penalități, accesorii, de parcă te cheamă să probezi chiloți.",
+    "transcript": "Penalități, accesorii, de parcă te cheamă să probezi chiloți.",
+    "kind": "quote",
+    "episode": 54,
+    "episodeTitle": "Nu va fi ușor, va fi greușor",
+    "seconds": 8.5
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-54/04-o-sa-o-platesc.mp3",
+    "phrase": "Știți ce o să fac? O s-o plătesc. Te rog frumos, dă-mi banii.",
+    "transcript": "Știți ce o să fac? O s-o plătesc. Te rog frumos, dă-mi banii.",
+    "kind": "quote",
+    "episode": 54,
+    "episodeTitle": "Nu va fi ușor, va fi greușor",
+    "seconds": 8.95
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-54/05-unde-pot-contesta.mp3",
+    "phrase": "Trebuie să contestați. Unde pot să fac asta? Nu vă pot da mai multe detalii.",
+    "transcript": "Trebuie să contestați. Unde pot să fac asta? Nu vă pot da mai multe detalii.",
+    "kind": "quote",
+    "episode": 54,
+    "episodeTitle": "Nu va fi ușor, va fi greușor",
+    "seconds": 15.65
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-54/06-dobanda-ca-un-sobolan.mp3",
+    "phrase": "Cum să-mi iei dobândă ca un năpârcă, ca un șobolan, apoi să-mi spui să fac contestație?",
+    "transcript": "Cum să-mi iei dobândă ca un năpârcă, ca un șobolan, apoi să-mi spui să fac contestație?",
+    "kind": "quote",
+    "episode": 54,
+    "episodeTitle": "Nu va fi ușor, va fi greușor",
+    "seconds": 12.7
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-54/07-vesnicia-srl.mp3",
+    "phrase": "Nu mai faci față cu plățile? Apelați cu încredere la SC Veșnicia SRL.",
+    "transcript": "Nu mai faci față cu plățile? Apelați cu încredere la SC Veșnicia SRL.",
+    "kind": "quote",
+    "episode": 54,
+    "episodeTitle": "Nu va fi ușor, va fi greușor",
+    "seconds": 7.9
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-54/08-nicusord-visa-sa-fie-psdist.mp3",
+    "phrase": "Dacă Nicușord a visat toată viața să fie și el PSD-ist?",
+    "transcript": "Dacă Nicușord a visat toată viața să fie și el PSD-ist?",
+    "kind": "quote",
+    "episode": 54,
+    "episodeTitle": "Nu va fi ușor, va fi greușor",
+    "seconds": 7.45
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-54/09-sa-umble-cu-baietii.mp3",
+    "phrase": "Să fie și el șmecher, să umble cu băieții, să fure, să mintă.",
+    "transcript": "Să fie și el șmecher, să umble cu băieții, să fure, să mintă.",
+    "kind": "quote",
+    "episode": 54,
+    "episodeTitle": "Nu va fi ușor, va fi greușor",
+    "seconds": 8.3
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-54/10-eu-sunt-foarte-cald.mp3",
+    "phrase": "Mirabela e mai temperamentală. Eu sunt foarte cald.",
+    "transcript": "Mirabela e mai temperamentală. Eu sunt foarte cald.",
+    "kind": "quote",
+    "episode": 54,
+    "episodeTitle": "Nu va fi ușor, va fi greușor",
+    "seconds": 6.45
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-54/11-labradorul-lui-trump.mp3",
+    "phrase": "S-a gudurat pe lângă Trump ca un labrador, iar Trump i-a făcut o Ancuța Alexandrescu.",
+    "transcript": "S-a gudurat pe lângă Trump ca un labrador, iar Trump i-a făcut o Ancuța Alexandrescu.",
+    "kind": "quote",
+    "episode": 54,
+    "episodeTitle": "Nu va fi ușor, va fi greușor",
+    "seconds": 8.55
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-54/12-nicusordan-face-pe-prostul.mp3",
+    "phrase": "Oare Nicușordan face pe prostul? Pare că se face că nu înțelege.",
+    "transcript": "Oare Nicușordan face pe prostul? Pare că se face că nu înțelege.",
+    "kind": "quote",
+    "episode": 54,
+    "episodeTitle": "Nu va fi ușor, va fi greușor",
+    "seconds": 7.35
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-54/13-ciolacu-fix-asta-faceam.mp3",
+    "phrase": "Se uită Ciolacu și zice: Bă, ești nebun? Fix asta făceam și eu.",
+    "transcript": "Se uită Ciolacu și zice: Bă, ești nebun? Fix asta făceam și eu.",
+    "kind": "quote",
+    "episode": 54,
+    "episodeTitle": "Nu va fi ușor, va fi greușor",
+    "seconds": 7.25
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-54/14-dati-mi-vaticanul.mp3",
+    "phrase": "Dați-mi Vaticanul. N-am câștigat premiul Nobel, dar pot fi măcar papă.",
+    "transcript": "Dați-mi Vaticanul. N-am câștigat premiul Nobel, dar pot fi măcar papă.",
+    "kind": "quote",
+    "episode": 54,
+    "episodeTitle": "Nu va fi ușor, va fi greușor",
+    "seconds": 17.0
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-54/15-direct-iisus-tort-vatican.mp3",
+    "phrase": "N-a trecut prin stadiul Napoleon. Direct Iisus. Un tort în forma Vaticanului.",
+    "transcript": "N-a trecut prin stadiul Napoleon. Direct Iisus. Un tort în forma Vaticanului.",
+    "kind": "quote",
+    "episode": 54,
+    "episodeTitle": "Nu va fi ușor, va fi greușor",
+    "seconds": 12.65
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-54/16-sfarsitul-ciudat.mp3",
+    "phrase": "Totul se întâmplă ca acum să fie exact ca în profeție: sfârșitul ciudat.",
+    "transcript": "Totul se întâmplă ca acum să fie exact ca în profeție: sfârșitul ciudat.",
+    "kind": "quote",
+    "episode": 54,
+    "episodeTitle": "Nu va fi ușor, va fi greușor",
+    "seconds": 10.55
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-54/17-exista-dumnezeu.mp3",
+    "phrase": "Există Dumnezeu. Cu noi este Dumnezeu.",
+    "transcript": "Există Dumnezeu. Cu noi este Dumnezeu.",
+    "kind": "quote",
+    "episode": 54,
+    "episodeTitle": "Nu va fi ușor, va fi greușor",
+    "seconds": 15.45
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-new/episode-54/18-winning-too-much.mp3",
+    "phrase": "We're winning too much. We can't take it anymore.",
+    "transcript": "We're winning too much. We can't take it anymore.",
+    "kind": "quote",
+    "episode": 54,
+    "episodeTitle": "Nu va fi ușor, va fi greușor",
+    "seconds": 29.45
+   }
   ]
  },
  "music": [
@@ -330,5 +881,6 @@
    "file": "audio/music/fecioreasca-de-pe-mures-dumitru-farcas.mp3",
    "phrase": "fecioreasca de pe mures dumitru farcas"
   }
- ]
+ ],
+ "note": "Generated by tools/build-audio-manifest.mjs — do not hand-edit."
 }

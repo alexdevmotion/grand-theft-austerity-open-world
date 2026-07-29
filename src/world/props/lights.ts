@@ -18,13 +18,27 @@
  */
 
 import * as THREE from 'three';
-import { Palette } from '../../artDirection';
+import { PAL } from '../../render/materials';
 
 /* ------------------------------------------------------------------ */
 /* Radial falloff texture                                              */
 /* ------------------------------------------------------------------ */
 
-function radialTexture(size: number, power: number): THREE.DataTexture {
+/**
+ * The pool a real luminaire throws.
+ *
+ * A single `pow(1-d, n)` falloff is a soft blob: it has no edge, so at any
+ * useful strength it reads as a bruise painted on the tarmac rather than as
+ * light landing on it. A real sodium head over a wet road produces THREE
+ * distinct things at once, and the pool only reads as light when all three are
+ * present:
+ *
+ *   a bright, fairly small CORE directly under the fitting;
+ *   a broad SKIRT that falls off slowly and carries most of the area;
+ *   a soft outer edge where the beam runs out, which is what gives the pool a
+ *   shape instead of dissolving into fog.
+ */
+function radialTexture(size: number): THREE.DataTexture {
   const data = new Uint8Array(size * size * 4);
   const c = (size - 1) / 2;
   for (let y = 0; y < size; y++) {
@@ -32,7 +46,11 @@ function radialTexture(size: number, power: number): THREE.DataTexture {
       const dx = (x - c) / c;
       const dy = (y - c) / c;
       const d = Math.min(1, Math.hypot(dx, dy));
-      const v = Math.pow(Math.max(0, 1 - d), power);
+      const core = Math.pow(Math.max(0, 1 - d / 0.30), 2.2);
+      const skirt = Math.pow(Math.max(0, 1 - d), 2.6);
+      // Squared cosine roll-off at the rim: the beam edge, not a hard circle.
+      const rim = Math.max(0, 1 - d) ** 0.9;
+      const v = Math.min(1, core * 0.62 + skirt * 0.55 * rim);
       const o = (y * size + x) * 4;
       const b = Math.round(v * 255);
       data[o] = b;
@@ -70,7 +88,7 @@ export class GroundGlow {
   private readonly _s = new THREE.Vector3();
 
   constructor() {
-    this.texture = radialTexture(128, 3.4);
+    this.texture = radialTexture(128);
     this.material = new THREE.MeshBasicMaterial({
       map: this.texture,
       transparent: true,
@@ -133,6 +151,20 @@ export class GroundGlow {
     return this.mats.length;
   }
 
+  /**
+   * Day/night gain on the whole pool layer.
+   *
+   * The pools are baked into one instanced mesh with per-instance colours, so
+   * the only live lever is the shared material's own tint — which multiplies
+   * every instance. This matters because at the hero hour the sun is still up:
+   * a sodium head throws almost nothing you can see on a sunlit road, and
+   * running the pools at full night strength was what covered the boulevard in
+   * a rash of bright orange ovals in every dusk capture.
+   */
+  setGain(v: number): void {
+    this.material.color.setScalar(Math.max(0, v));
+  }
+
   build(): THREE.InstancedMesh | null {
     const n = this.mats.length;
     if (!n) return null;
@@ -177,7 +209,7 @@ void main() {
   // Shrink with distance a little slower than perspective so distant lamps
   // stay visible as points rather than vanishing into sub-pixel flicker.
   float d = -mv.z;
-  float k = aSize.x * (1.0 + smoothstep(30.0, 260.0, d) * 1.9);
+  float k = aSize.x * (1.0 + smoothstep(30.0, 260.0, d) * 1.1);
   mv.xy += position.xy * k;
   gl_Position = projectionMatrix * mv;
 }
@@ -190,11 +222,14 @@ uniform float uGain;
 void main() {
   vec2 d = vUv - 0.5;
   float r = length(d) * 2.0;
-  float core = pow(max(0.0, 1.0 - r), 2.6);
-  // A soft cross-flare, which is what a sodium lamp actually does through a
-  // dirty lens and through a camera.
-  float streak = pow(max(0.0, 1.0 - abs(d.y) * 9.0), 3.0) * pow(max(0.0, 1.0 - abs(d.x) * 1.6), 2.0);
-  float a = core + streak * 0.35;
+  // A real luminaire is a small bright FITTING with a modest halo, not a ball
+  // of bloom. The tight lobe is the lamp itself and carries almost all of the
+  // energy; the wide one is scatter in the air and in the lens, and it has to
+  // stay dim or every lamp in the city turns into a glowing orb.
+  float lamp = pow(max(0.0, 1.0 - r / 0.34), 2.0);
+  float halo = pow(max(0.0, 1.0 - r), 3.4);
+  float streak = pow(max(0.0, 1.0 - abs(d.y) * 11.0), 3.0) * pow(max(0.0, 1.0 - abs(d.x) * 1.8), 2.0);
+  float a = lamp * 0.85 + halo * 0.20 + streak * 0.16;
   if (a < 0.002) discard;
   gl_FragColor = vec4(vColor * a * uGain, 1.0);
 }
@@ -363,5 +398,5 @@ export class LampLights {
   }
 }
 
-export const SODIUM = Palette.sodiumLamp;
-export const SHOP_GLOW = Palette.builderMagenta;
+export const SODIUM = PAL.sodiumLamp;
+export const SHOP_GLOW = PAL.builderMagenta;

@@ -11,7 +11,7 @@
  */
 
 import * as THREE from 'three';
-import { Palette } from '../../artDirection';
+import { PAL, srgb } from '../../render/materials';
 import type { Rng } from '../../core/rng';
 import {
   DetailBuilder,
@@ -54,7 +54,7 @@ const MR = {
   rough: [0.0, 0.92] as [number, number],
 };
 
-const lin = (hex: number): THREE.Color => new THREE.Color(hex).convertSRGBToLinear();
+const lin = srgb;
 const HAZARD_RED = lin(0xd9333a);
 const HAZARD_WHITE = lin(0xe8e2d6);
 
@@ -190,7 +190,7 @@ export function buildBuildersHouse(sink: LandmarkSink, rng: Rng): LandmarkResult
   /* ---- Romanian tricolour on a raking pole ---- */
   const flagX = cx + towerW / 2 + 1.2;
   d.cyl(flagX, groundH + 4, cz - 8, 0.1, 0.07, 9, 6, { color: DetailColor.metalPale, mr: MR.metal }, false);
-  const bands = [Palette.roBlue, Palette.roYellow, Palette.roRed];
+  const bands = [PAL.roBlue, PAL.roYellow, PAL.roRed];
   for (let i = 0; i < 3; i++) {
     d.box(flagX + 2.4, groundH + 11.2, cz - 8 + (i - 1) * 1.45, 4.6, 3.0, 0.05, 0, {
       color: bands[i], mr: MR.paint,

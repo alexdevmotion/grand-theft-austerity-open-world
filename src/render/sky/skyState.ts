@@ -84,7 +84,7 @@ const DAY = KEY({
   horizon: L(0xcfd8f0, 1.15), low: L(0x9ab0e8, 0.98), mid: L(0x6a86dc, 0.78),
   high: L(0x4a68cc, 0.60), zenith: L(0x2a46a8, 0.45),
   away: LIN(0.92, 0.95, 1.06), toward: LIN(1.04, 1.0, 0.96),
-  sunCore: L(0xfffaf0, 55), sunHalo: L(0xffe8c8, 0.85),
+  sunCore: L(0xfffaf0, 90), sunHalo: L(0xffe8c8, 0.85),
   cloudLit: L(0xffffff, 1.75), cloudMid: L(0xd8dcf0, 0.95), cloudCore: L(0x7a86b0, 0.48),
   groundHaze: L(0x8a94b8, 0.42), moon: L(0xcfd8ff, 1),
   ambient: L(0x9ab4e8, 1),
@@ -93,10 +93,10 @@ const DAY = KEY({
 });
 
 const AFTERNOON = KEY({
-  horizon: L(0xffb887, 1.30), low: L(0xf0a0a8, 0.92), mid: L(0xb078c0, 0.60),
+  horizon: L(0xffbe8c, 1.45), low: L(0xf49aa6, 0.80), mid: L(0xb078c0, 0.58),
   high: L(0x6a62b0, 0.47), zenith: L(0x2c3a7a, 0.35),
-  away: LIN(0.82, 0.86, 1.12), toward: LIN(1.10, 1.02, 0.80),
-  sunCore: L(0xfff0d8, 42), sunHalo: L(0xffc890, 0.85),
+  away: LIN(0.72, 0.88, 1.28), toward: LIN(1.16, 0.98, 0.70),
+  sunCore: L(0xfff4e4, 70), sunHalo: L(0xffc890, 0.85),
   cloudLit: L(0xffd8b8, 1.55), cloudMid: L(0xc89ab8, 0.76), cloudCore: L(0x5a4c80, 0.35),
   groundHaze: L(0x6a5a80, 0.40), moon: L(0xcfd8ff, 1),
   ambient: L(0x8a7ab8, 1),
@@ -122,29 +122,48 @@ const AFTERNOON = KEY({
  *  a hue, it just makes pale pink paler.
  */
 const GOLDEN = KEY({
-  horizon: L(0xff6a24, 0.34),   // hot orange rip
-  low: L(0xff5570, 0.135),      // coral / rose
-  mid: L(0xcf3f96, 0.175),       // magenta
-  high: L(0x6f42c8, 0.100),     // violet
-  zenith: L(0x2f2c90, 0.200),   // indigo
-  // Softer than before: the ladder above already carries the split, so these
-  // only have to bias it. A hard `toward` tint was bleaching the violet out of
-  // the top of the dome wherever the sun was in frame.
-  away: LIN(0.74, 0.80, 1.24), toward: LIN(1.06, 0.92, 0.70),
-  // The disc at 3 degrees of elevation has crossed ~30 air masses: deep orange,
-  // NOT the near-white 0xffd9a8 it used to be. Still HDR (12x) so it blooms.
-  // 4x white, not 12x: AgX walks anything much above ~5x to pure white, which
-  // is how a deep-orange disc kept rendering as a colourless blob. 4x still
-  // clears the 0.72 bloom threshold by a wide margin.
-  sunCore: L(0xff5a20, 2.0),
-  sunHalo: L(0xff7a3a, 0.85),
-  // Lit / shadowed clouds are two different HUES, ~70 degrees apart, not two
-  // brightnesses of one: amber rim, rose body, indigo-violet core.
-  // Cloud BODIES must sit below the sky they are seen against, or the deck
-  // reads as fog rather than as cloud. Only the sun-side rim goes above it.
-  cloudLit: L(0xffb060, 0.34),
-  cloudMid: L(0xa8506e, 0.105),
-  cloudCore: L(0x2e2560, 0.135),
+  /* THE HOT ORANGE RIP. Authored bright — brighter than every other band by a
+   * factor of four — because in the reference the horizon IS the brightest
+   * part of the sky, and because the aerial-perspective fog now converges onto
+   * this same function, so this value is also what makes the far end of a
+   * boulevard glow. At 0.34 it was darker than the magenta above it and the
+   * frame had no warm anchor anywhere.
+   *
+   * Note the hue: 0xff8a3c, not 0xff6a24. A deeper orange has a G/R ratio near
+   * 0.14, which after AgX's chroma inset lands as a muddy brick red, not as
+   * fire. The rip needs enough green to survive to something that reads as hot. */
+  horizon: L(0xff7a30, 0.95),
+  low: L(0xff6a72, 0.215),      // coral / salmon
+  mid: L(0xd6508e, 0.138),      // magenta
+  high: L(0x6a44b4, 0.086),     // violet
+  zenith: L(0x241f66, 0.150),   // deep indigo
+  /* The away tint is AZURE, not violet. Measured against the reference frame,
+   * its sky's chromatic pixels sit 30% in azure (hue 210) and 21% in blue
+   * (240) — the cold half of that sky is a steel blue, and the violet is only
+   * a minority band. Tinting the anti-solar half violet put every cool pixel
+   * in the game into the same 270-300 wedge as the magenta band, which is the
+   * mechanism that collapsed the whole frame onto one hue. */
+  away: LIN(0.48, 0.86, 1.62), toward: LIN(1.28, 0.90, 0.50),
+  /* THE SUN. 42x white, and it is meant to be. The disc is the brightest thing
+   * in the game by two orders of magnitude over a lit facade; that is what a
+   * golden-hour sun is. Authored near-white and left to the airmass extinction
+   * in skyBands.ts to redden it — at 3 degrees of elevation that extinction
+   * takes this to roughly (21, 3.9, 0.35) linear, i.e. a white-hot core inside
+   * a deep orange body, and it walks to 0xff3a10 as the sun touches the
+   * horizon. Authoring the disc pre-reddened instead made it a fixed beige dot
+   * at every hour of the day. */
+  sunCore: L(0xffe6c4, 46.0),
+  sunHalo: L(0xff9450, 0.62),
+  /* CLOUD RAMP — three hues roughly 110 degrees apart, chained.
+   *   core  deep blue-indigo   the shadowed base, colder than the sky
+   *   mid   dusty rose         the body
+   *   lit   amber              the rim, which must sit ABOVE the sky band it
+   *                            is seen against or it cannot read as ignited
+   * cloudLit used to be 0.34 against a mid band of 0.175 — less than 2x, and
+   * after the rim gate and transmittance that arrived as a smudge. */
+  cloudLit: L(0xffab5c, 0.60),
+  cloudMid: L(0xbe6f80, 0.150),
+  cloudCore: L(0x24487e, 0.132),
   groundHaze: L(0x241838, 0.26),
   moon: L(0xcfd8ff, 1),
   ambient: L(0x7a52b0, 1),
@@ -153,14 +172,17 @@ const GOLDEN = KEY({
 });
 
 const DUSK = KEY({
-  horizon: L(0xff4a18, 0.44),   // hue  20
-  low: L(0xe63a66, 0.22),       // hue 346
-  mid: L(0x9c3a92, 0.17),       // hue 306
-  high: L(0x53308e, 0.13),      // hue 264
-  zenith: L(0x231d60, 0.20),    // hue 246
-  away: LIN(0.72, 0.78, 1.22), toward: LIN(1.22, 1.00, 0.66),
-  sunCore: L(0xff3c08, 2.6), sunHalo: L(0xff5c28, 0.62),
-  cloudLit: L(0xff8a48, 0.32), cloudMid: L(0x8c3f6e, 0.16), cloudCore: L(0x241d50, 0.15),
+  horizon: L(0xff6a26, 0.74),   // hue  18
+  low: L(0xf04a6e, 0.165),      // hue 344
+  mid: L(0xa03a96, 0.130),      // hue 307
+  high: L(0x4e2f92, 0.125),     // hue 262
+  zenith: L(0x1c1750, 0.150),   // hue 246
+  away: LIN(0.46, 0.84, 1.58), toward: LIN(1.32, 0.92, 0.48),
+  // Still authored near-white: the extinction is doing more work at this
+  // elevation than at golden hour, and doubling up on the reddening is what
+  // used to drive the disc to a hue with no green left in it at all.
+  sunCore: L(0xffe0b8, 38.0), sunHalo: L(0xff7a34, 0.52),
+  cloudLit: L(0xff9a4c, 0.52), cloudMid: L(0x9c5070, 0.130), cloudCore: L(0x1e3d68, 0.116),
   groundHaze: L(0x1e1630, 0.26), moon: L(0xcfd8ff, 1),
   ambient: L(0x6a4a8e, 1),
   skyIntensity: 1, sunIntensity: 1, haze: 1.05, stars: 0.16, moonAmount: 0.45,
@@ -168,13 +190,13 @@ const DUSK = KEY({
 });
 
 const TWILIGHT = KEY({
-  horizon: L(0xc4406a, 0.30),   // hue 342 — the last of the rip
-  low: L(0x86356e, 0.24),       // hue 316
-  mid: L(0x4a2c68, 0.19),       // hue 275
-  high: L(0x271f52, 0.155), zenith: L(0x11122e, 0.12),
-  away: LIN(0.82, 0.86, 1.18), toward: LIN(1.14, 0.98, 0.78),
-  sunCore: L(0xff8040, 1.4), sunHalo: L(0xc4527a, 0.32),
-  cloudLit: L(0xb06484, 0.34), cloudMid: L(0x483468, 0.19), cloudCore: L(0x161230, 0.13),
+  horizon: L(0xd4485e, 0.40),   // hue 350 — the last of the rip
+  low: L(0x8c3570, 0.26),       // hue 313
+  mid: L(0x452c6c, 0.19),       // hue 268
+  high: L(0x1f1f52, 0.150), zenith: L(0x0e1130, 0.115),
+  away: LIN(0.70, 0.84, 1.30), toward: LIN(1.18, 0.96, 0.72),
+  sunCore: L(0xffa070, 6.0), sunHalo: L(0xc4527a, 0.32),
+  cloudLit: L(0xc07890, 0.40), cloudMid: L(0x42346a, 0.17), cloudCore: L(0x101430, 0.10),
   groundHaze: L(0x1a1226, 0.26), moon: L(0xcfd8ff, 1),
   ambient: L(0x46386e, 1),
   skyIntensity: 1, sunIntensity: 1, haze: 0.9, stars: 0.62, moonAmount: 0.85,
@@ -197,14 +219,16 @@ const TWILIGHT = KEY({
  *  actually irradiates an upward-facing road surface.
  */
 const NIGHT = KEY({
-  horizon: L(0xb07a4a, 0.32),   // sodium skyglow, hue 30
+  horizon: L(0xc07f42, 0.46),   // sodium skyglow, hue 30 — the warm anchor
   low: L(0x6a5a82, 0.30),       // glow fading into mauve
-  mid: L(0x2f3568, 0.25),       // indigo
-  high: L(0x1a2052, 0.20), zenith: L(0x101430, 0.17),
-  away: LIN(0.88, 0.92, 1.10), toward: LIN(1.02, 1.0, 0.98),
+  mid: L(0x2a3670, 0.25),       // indigo
+  high: L(0x16204e, 0.20), zenith: L(0x0d1230, 0.17),
+  // Even at night the two halves must not be the same hue: the skyglow side is
+  // sodium-warm, the away side is a cold blue.
+  away: LIN(0.78, 0.90, 1.24), toward: LIN(1.14, 1.00, 0.82),
   sunCore: L(0xffd0a0, 0.0), sunHalo: L(0x3a3070, 0.20),
   // Cloud bases over a lit city catch the skyglow and go warm underneath.
-  cloudLit: L(0x8a6a58, 0.30), cloudMid: L(0x36365e, 0.20), cloudCore: L(0x11142c, 0.13),
+  cloudLit: L(0xa07850, 0.44), cloudMid: L(0x2e3660, 0.19), cloudCore: L(0x0d1128, 0.11),
   groundHaze: L(0x2a2024, 0.44), moon: L(0xd6e0ff, 1),
   ambient: L(0x50466e, 1),
   skyIntensity: 1, sunIntensity: 0, haze: 0.80, stars: 1, moonAmount: 1,
@@ -332,7 +356,7 @@ export interface WeatherLook {
 
 const WEATHER: Record<WeatherPreset, WeatherLook> = {
   clearSunset: {
-    cover: [0.24, 0.30, 0.27], cloudDark: 1.0, shafts: 0.62, skyMul: 1.0,
+    cover: [0.44, 0.58, 0.46], cloudDark: 1.0, shafts: 0.62, skyMul: 1.0,
     hazeMul: 1.0, desaturate: 0, fogMul: 1.0, wind: 1.0, lightning: 0, forceNight: false,
   },
   overcast: {
@@ -348,11 +372,11 @@ const WEATHER: Record<WeatherPreset, WeatherLook> = {
     hazeMul: 1.9, desaturate: 0.62, fogMul: 3.1, wind: 2.4, lightning: 0.34, forceNight: false,
   },
   fogDusk: {
-    cover: [0.40, 0.54, 0.44], cloudDark: 0.82, shafts: 0.30, skyMul: 0.92,
+    cover: [0.48, 0.62, 0.50], cloudDark: 0.82, shafts: 0.30, skyMul: 0.92,
     hazeMul: 2.4, desaturate: 0.30, fogMul: 4.2, wind: 0.6, lightning: 0, forceNight: false,
   },
   night: {
-    cover: [0.42, 0.40, 0.30], cloudDark: 0.85, shafts: 0.05, skyMul: 1.0,
+    cover: [0.50, 0.52, 0.40], cloudDark: 0.85, shafts: 0.05, skyMul: 1.0,
     hazeMul: 1.0, desaturate: 0.12, fogMul: 1.2, wind: 0.8, lightning: 0, forceNight: true,
   },
 };

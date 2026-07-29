@@ -24,12 +24,31 @@ import { Grade } from '../artDirection';
 const exposureFragment = /* glsl */ `
 uniform float uExposure;
 uniform float uHighlightRolloff;
+uniform float uShoulderKnee;
 
 void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor) {
   vec3 c = max(inputColor.rgb, 0.0) * uExposure;
-  // Gentle pre-shoulder so the sun disc and window emissives keep their hue
-  // going into AgX instead of clipping straight to white.
-  c = c / (1.0 + c * uHighlightRolloff);
+
+  /* SOFT-KNEE SHOULDER, NOT A GLOBAL DIVIDE.
+   *
+   * This used to be c / (1 + c * 1.1), which is a hyperbola with a hard
+   * asymptote at 1/1.1 = 0.909. That single line meant NOTHING IN THE GAME
+   * COULD EVER EXCEED 0.909 LINEAR coming out of this pass — the sun disc, the
+   * horizon rip, a window emissive and a moderately lit wall all arrived at
+   * AgX inside the same half stop. That is the mechanism behind two of the
+   * three headline failures: the sun measured 1.25x brighter than sky 120px
+   * away (it cannot measure more), and bloom's luminance threshold sat at 0.92,
+   * ABOVE the ceiling, so the bloom pass was effectively dead.
+   *
+   * The shoulder below leaves everything under the knee completely untouched —
+   * a lit facade at 0.4 stays 0.4 — and compresses only above it, toward a
+   * ceiling near 21. So the sun still lands two orders of magnitude above the
+   * city, clips its core to white through AgX, and drives bloom, while a
+   * window emissive at 4 linear lands near 3.5 and keeps its hue instead of
+   * becoming flat pastel paper. */
+  vec3 over = max(c - uShoulderKnee, 0.0);
+  c = min(c, vec3(uShoulderKnee)) + over / (1.0 + over * uHighlightRolloff);
+
   outputColor = vec4(c, inputColor.a);
 }
 `;
@@ -40,20 +59,15 @@ export class ExposureEffect extends Effect {
       blendFunction: BlendFunction.SRC,
       uniforms: new Map<string, Uniform<unknown>>([
         ['uExposure', new Uniform(exposure)],
-        // A city full of emissive windows arrives at the tone mapper with
-        // values far above 1, and AgX alone clips them into flat white paper
-        // that has lost all of its purple and sodium. This shoulder compresses
-        // them back into range BEFORE tone mapping, which is what lets a lit
-        // interior stay a colour instead of becoming a hole in the facade.
-        // Too high and the sun disc loses its punch, so this is a compromise.
-        // Measured: a curtain-wall pane arrives here at 3-6 linear, a lit
-        // facade at 0.15-0.4. At 0.22 the panes still cleared 2.0 going into
-        // AgX and clipped to flat pastel rectangles that out-shone the sky —
-        // which inverts the whole image, because in the reference the glass
-        // tower is the DARKEST large mass in frame. At 1.1 a pane lands near
-        // 0.85 and keeps its hue, while a facade loses only ~15%, which the
-        // exposure above pays back.
-        ['uHighlightRolloff', new Uniform(1.1)],
+        // Where the shoulder starts. Below this, values pass through exactly.
+        // A lit facade measures 0.15-0.4 here, so the whole of the city's
+        // ordinary tonal range is untouched and only genuinely emissive things
+        // are compressed.
+        ['uShoulderKnee', new Uniform(0.72)],
+        // Compression above the knee. Ceiling = knee + 1/rolloff ~= 21 linear,
+        // which is roughly AgX's own white point, so the sun clips there and
+        // nothing else does. Sample points: 1 -> 0.996, 4 -> 3.56, 40 -> 14.3.
+        ['uHighlightRolloff', new Uniform(0.048)],
       ]),
     });
   }
@@ -68,6 +82,11 @@ export class ExposureEffect extends Effect {
 
   set rolloff(v: number) {
     (this.uniforms.get('uHighlightRolloff') as Uniform<number>).value = v;
+  }
+
+  /** Where the highlight shoulder starts, in linear post-exposure units. */
+  set knee(v: number) {
+    (this.uniforms.get('uShoulderKnee') as Uniform<number>).value = v;
   }
 }
 
@@ -106,17 +125,25 @@ float grain(vec2 uv, float t) {
 void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor) {
   vec3 c = max(inputColor.rgb, 0.0);
 
-  // Split tone: shadows go COOL BLUE, highlights go WARM AMBER. This is the
-  // single mechanism that keeps light and shadow on opposite sides of the
-  // colour wheel after tone mapping, and it only works if the two tints are
-  // genuinely far apart. The previous shadow tint (0.80, 0.78, 1.14) had r and
-  // g within 3% of each other — a violet that sat in the same hue wedge as the
-  // magenta sky, so split-toning deepened the wedge instead of breaking it.
+  /* SPLIT TONE: shadows go COOL AZURE, highlights go WARM AMBER.
+   *
+   * This is the one mechanism that keeps light and shadow on opposite sides of
+   * the colour wheel after tone mapping, and it only works if the two weights
+   * do not OVERLAP. The previous balance of 1.35 meant the shadow weight was
+   * still 0.35 at mid-grey while the highlight weight was already 0.26 there,
+   * so every mid-tone in the frame — which at dusk is most of the frame,
+   * including the entire sky gradient — got tinted toward BOTH and came out
+   * the average of the two: a desaturated mauve. That is a large part of why
+   * the whole image measured as one hue.
+   *
+   * At 2.4 the shadow tint is gone by luma 0.42 and the highlight tint has not
+   * started until 0.24, so the two act on genuinely different parts of the
+   * tonal range and the split reads as a split. */
   float l = luma(c);
   float shadowW = pow(1.0 - clamp(l * uSplitBalance, 0.0, 1.0), 2.0);
-  float highW  = pow(clamp((l - 0.28) * 1.55, 0.0, 1.0), 1.3);
+  float highW  = pow(clamp((l - 0.24) * 1.75, 0.0, 1.0), 1.15);
   c = mix(c, c * uShadowTint, shadowW * uSplitStrength);
-  c = mix(c, c * uHighlightTint, highW * uSplitStrength * 0.9);
+  c = mix(c, c * uHighlightTint, highW * uSplitStrength);
 
   // ASC CDL: (in * gain + lift) ^ gamma
   c = c * uGain + uLift;
@@ -158,27 +185,35 @@ export class GradeEffect extends Effect {
         ['uLift', new Uniform(new Vector3(...Grade.liftRGB))],
         ['uGain', new Uniform(new Vector3(...Grade.gainRGB))],
         ['uGamma', new Uniform(new Vector3(...Grade.gammaRGB))],
-        // Grade.saturation is the authored intent for a NEUTRALLY lit scene.
-        // This one is lit by a magenta sky dome, which supplies most of the
-        // chroma already, so the grade's job here is to restrain rather than
-        // add. Measured (ImageMagick HSL mean, 320x180): reference 0.285,
-        // this frame 0.43-0.65 at the old 0.72 multiplier.
-        ['uSaturation', new Uniform(Grade.saturation * 0.52)],
-        ['uChromaRolloff', new Uniform(0.55)],
-        // Where the chroma rolloff starts biting. Too low and it eats the
-        // warmth out of every lit facade — the thing the key light exists to
-        // create — so it sits just above where a sunlit surface lands and only
-        // catches the genuinely clipping highlights above it.
-        ['uChromaKnee', new Uniform(0.34)],
+        /* Saturation was 0.52x the authored intent — a 40% desaturation of the
+         * whole frame on top of AgX, which already desaturates hard. Between
+         * the two, a hot orange horizon and a violet zenith were being dragged
+         * to within a few degrees of each other and the image measured as one
+         * low-chroma mauve wash. Measured hue histogram of the reference: 43%
+         * of its chromatic pixels are warm (red/orange), 36% cool. The frame
+         * this replaced measured 4-6% warm and 91% cool. */
+        ['uSaturation', new Uniform(Grade.saturation * 1.06)],
+        /* Chroma rolloff still exists — it is what lets the sun's core go
+         * genuinely white instead of clipping as a saturated primary — but it
+         * now starts far higher up. At knee 0.34 it was desaturating every
+         * sunlit facade and the entire horizon rip, i.e. removing exactly the
+         * warmth the key light exists to create. */
+        ['uChromaRolloff', new Uniform(0.40)],
+        // High on purpose. The horizon rip lands around 0.8 luma after tone
+        // mapping; a knee below that desaturates the single most important
+        // warm feature in the frame and turns fire into pale peach.
+        ['uChromaKnee', new Uniform(0.78)],
         ['uContrast', new Uniform(Grade.contrast * 1.06)],
-        // Deep blue-cyan, ~90 degrees of hue away from the amber highlight
-        // tint below. The gap between these two IS the split.
-        ['uShadowTint', new Uniform(new Vector3(0.66, 0.86, 1.30))],
-        ['uHighlightTint', new Uniform(new Vector3(1.32, 0.97, 0.58))],
-        ['uSplitStrength', new Uniform(0.66)],
-        ['uToeColor', new Uniform(new Vector3(0.055, 0.062, 0.175))],
+        // Deep azure, ~180 degrees of hue from the amber highlight tint below.
+        // Azure and not violet on purpose: measured against the reference, its
+        // cool pixels are 30% azure / 21% blue and only 10% violet, so tinting
+        // shadows violet put them in the SAME wedge as the magenta sky bands.
+        ['uShadowTint', new Uniform(new Vector3(0.62, 0.88, 1.38))],
+        ['uHighlightTint', new Uniform(new Vector3(1.42, 1.00, 0.48))],
+        ['uSplitStrength', new Uniform(0.88)],
+        ['uToeColor', new Uniform(new Vector3(0.048, 0.058, 0.170))],
         ['uToeLift', new Uniform(0.06)],
-        ['uSplitBalance', new Uniform(1.35)],
+        ['uSplitBalance', new Uniform(2.20)],
         // Grain reads far stronger over a dark, low-contrast frame than the
         // authored value assumes; it was the dominant texture in the shadows.
         ['uGrain', new Uniform(Grade.filmGrain * 0.5)],

@@ -16,7 +16,7 @@
  */
 
 import * as THREE from 'three';
-import { Palette } from '../../artDirection';
+import { PAL, srgb } from '../../render/materials';
 import type { Rng } from '../../core/rng';
 import {
   DetailBuilder,
@@ -33,7 +33,8 @@ import { FacadeStyle } from './materials';
 /* Palette for the detail pass                                         */
 /* ------------------------------------------------------------------ */
 
-const lin = (hex: number): THREE.Color => new THREE.Color(hex).convertSRGBToLinear();
+/** Decoded exactly once — see the colour-space note in `render/materials.ts`. */
+const lin = srgb;
 
 export const DetailColor = {
   stone: lin(0xd2c5b0),
@@ -47,14 +48,14 @@ export const DetailColor = {
   rust: lin(0x6d4326),
   glassDark: lin(0x141a2c),
   awning: lin(0x7a2338),
-  sodium: Palette.sodiumLamp,
-  purple: Palette.builderPurple,
-  magenta: Palette.builderMagenta,
-  screen: Palette.screenBlue,
-  neon: Palette.neonPink,
-  leaf: Palette.leafAmber,
-  leafOlive: Palette.leafOlive,
-  bark: Palette.trunkBark,
+  sodium: PAL.sodiumLamp,
+  purple: PAL.builderPurple,
+  magenta: PAL.builderMagenta,
+  screen: PAL.screenBlue,
+  neon: PAL.neonPink,
+  leaf: PAL.leafAmber,
+  leafOlive: PAL.leafOlive,
+  bark: PAL.trunkBark,
 } as const;
 
 const MR = {
@@ -618,11 +619,11 @@ export function parkedCar(
   rng: Rng,
 ): void {
   const body = rng.weighted(
-    [Palette.daciaYellow, lin(0x9aa3ad), lin(0x6d2f33), lin(0x2f4a6d), lin(0x8d8b7a), Palette.daciaPurple],
+    [PAL.daciaYellow, lin(0x9aa3ad), lin(0x6d2f33), lin(0x2f4a6d), lin(0x8d8b7a), PAL.daciaPurple],
     [3, 2, 1.4, 1.6, 1.2, 0.8],
   );
   const beat = rng.bool(0.3);
-  const panel = beat ? Palette.daciaPurple : body;
+  const panel = beat ? PAL.daciaPurple : body;
   const bodyMR: [number, number] = [0.35, rng.range(0.28, 0.55)];
   const L = 4.35;
   const W = 1.62;
@@ -663,29 +664,67 @@ export function parkedCar(
 }
 
 /**
- * Autumn plane tree. Budgeted at ~34 triangles — there are thousands of these,
- * so the crown is two crossed slabs rather than a sphere; against a magenta
- * sky what matters is the broken silhouette, not the topology.
+ * Autumn plane tree — the CITY's mass street tree. There are thousands of
+ * these, so it is budgeted at ~90 triangles and every one of them has to earn
+ * its place in the silhouette.
+ *
+ * WHAT WAS WRONG. The previous crown was three stacked six-sided frusta. A
+ * six-sided frustum seen from the side is a hexagon with a hard straight edge,
+ * and three of them stacked is one big hexagon: against a bright magenta sky
+ * every street tree in Bucharest rendered as an enormous flat dark plate on a
+ * stick. That is the single worst object in the game, and no amount of colour
+ * or translucency work can fix it, because the failure is the SILHOUETTE.
+ *
+ * WHAT FIXES IT. A crown has to be made of several small overlapping masses,
+ * not one large one, so its outline is ragged at every scale and the sky shows
+ * through it. Five 10-sided cluster hulls at 0.7-1.2 m, hung off a short
+ * branch armature at different heights and offsets, cost about the same as the
+ * three frusta did and read as a thinning autumn canopy instead of a kite.
  */
 export function planeTree(d: DetailBuilder, x: number, z: number, rng: Rng, scale = 1): void {
-  const h = rng.range(5.4, 8.2) * scale;
-  const trunkR = 0.17 * scale;
-  const trunkH = h * 0.44;
-  d.cyl(x, 0.17, z, trunkR * 1.35, trunkR * 0.8, trunkH, 5,
-    { color: DetailColor.bark, mr: MR.rough }, false);
+  // A mature Bucharest plane tree: 7-10 m tall over a 2.4-3.2 m clear trunk,
+  // crown 4-6 m across. Checked against a 1.8 m person and a 7-9 m lamp head.
+  const h = rng.range(7.0, 10.0) * scale;
+  const trunkH = rng.range(2.4, 3.2) * scale;
+  const trunkR = 0.16 * scale;
+  const bark = { color: DetailColor.bark, mr: MR.rough };
+  d.cyl(x, 0.17, z, trunkR * 1.5, trunkR * 0.85, trunkH, 5, bark, false);
 
-  // Crown: two stacked frusta. A cone silhouette reads as foliage against a
-  // bright sky where a box reads as a crate on a stick.
-  const leaf = rng.bool(0.3) ? DetailColor.leafOlive : DetailColor.leaf;
-  const r = rng.range(1.9, 2.8) * scale;
-  const y0 = 0.17 + trunkH * 0.78;
-  const crown = h - trunkH * 0.78;
-  const o = { color: leaf, mr: MR.rough };
-  // Three short frusta approximate a rounded, slightly ragged crown. A single
-  // cone reads as a dark kite on a stick against a bright sky.
-  d.cyl(x, y0, z, r * 0.5, r * 0.95, crown * 0.30, 6, o, false);
-  d.cyl(x, y0 + crown * 0.30, z, r * 0.95, r, crown * 0.32, 6, o, false);
-  d.cyl(x, y0 + crown * 0.62, z, r, r * 0.22, crown * 0.42, 6, o, false);
+  const crownY = 0.17 + trunkH;
+  const crownH = h - trunkH;
+  const r = rng.range(1.9, 2.7) * scale;
+
+  // Three stub limbs. Cheap, but they are what stops the crown floating.
+  const lean = rng.range(0, Math.PI * 2);
+  const arms: Array<[number, number, number]> = [];
+  for (let i = 0; i < 3; i++) {
+    const a = lean + (i / 3) * Math.PI * 2;
+    const ax = x + Math.cos(a) * r * 0.45;
+    const az = z + Math.sin(a) * r * 0.45;
+    const ay = crownY + crownH * rng.range(0.25, 0.45);
+    d.cyl(ax, crownY - 0.3, az, trunkR * 0.5, trunkR * 0.3, ay - crownY + 0.3, 4, bark, false);
+    arms.push([ax, ay, az]);
+  }
+
+  // Late autumn: some clusters have already gone, so the crown is see-through.
+  const thin = rng.range(0.0, 0.45);
+  const warm = rng.bool(0.72);
+  for (let i = 0; i < 5; i++) {
+    if (rng.next() < thin) continue;
+    const [ax, ay, az] = arms[i % 3];
+    const cr = rng.range(0.62, 1.05) * scale;
+    const cx = ax + rng.range(-r * 0.45, r * 0.45);
+    const cz = az + rng.range(-r * 0.45, r * 0.45);
+    const cy = ay + rng.range(-0.3, crownH * 0.42);
+    const leaf = warm
+      ? (rng.bool(0.5) ? DetailColor.leaf : lin(0xc0913f))
+      : DetailColor.leafOlive;
+    // A 10-sided double frustum: round enough that its outline never reads as
+    // a polygon, and it still only costs 20 triangles.
+    const o = { color: leaf, mr: MR.rough };
+    d.cyl(cx, cy - cr * 0.55, cz, cr * 0.22, cr, cr * 0.55, 10, o, false);
+    d.cyl(cx, cy, cz, cr, cr * 0.24, cr * 0.62, 10, o, false);
+  }
 }
 
 /** Concrete anti-ram bollard, as in the reference foreground. ~18 triangles. */

@@ -1,17 +1,25 @@
-/** The sky dome shader: analytic scattering gradient, flattened sun disc,
- *  three-deck backlit cloud system, crepuscular rays, star field and a moon
- *  with a real terminator.
+/** The sky dome shader: the shared band ladder, an HDR sun with separated
+ *  lobes and airmass reddening, a three-deck genuinely backlit cloud system,
+ *  crepuscular rays, star field and a moon with a real terminator.
  *
  *  Composited far-to-near so the decks occlude each other correctly:
- *      gradient -> cirrus -> alto -> cumulus -> shafts -> sun/stars -> haze
+ *      gradient -> cirrus -> alto -> cumulus -> shafts -> sun/stars
  *
- *  Everything is HDR: the horizon runs 3-5x white, the sun core ~60x, so the
- *  bloom and AgX tone map in the post chain have something real to work with.
- *  The sky is the key light of this game — it has to out-punch every surface.
+ *  THE GRADIENT IS NOT COMPUTED HERE. It comes from `skBandRadiance` in
+ *  sky/skyBands.ts, which the aerial-perspective fog also calls, so that fogged
+ *  geometry and open sky are the same function of the same view direction and
+ *  the horizon seam cannot exist. Do not re-implement it locally.
+ *
+ *  Everything is HDR: the horizon rip runs 2-3x white and the sun core ~45x, so
+ *  the bloom and AgX tone map in the post chain have something real to work
+ *  with. The sky is the key light of this game — it has to out-punch every
+ *  surface in the frame by orders of magnitude, and until the sun did, the
+ *  brightest thing on screen was a lit building wall.
  */
 
 import { NOISE_GLSL } from './noise';
 import { CLOUD_GLSL } from './cloudShader';
+import { SKY_AIRMASS_GLSL, SKY_BANDS_GLSL } from './skyBands';
 
 export const SKY_VERT = /* glsl */ `
 varying vec3 vDir;
@@ -54,6 +62,8 @@ uniform float uWind;
 
 ${NOISE_GLSL}
 ${CLOUD_GLSL}
+${SKY_BANDS_GLSL}
+${SKY_AIRMASS_GLSL}
 
 // Deck geometry: shell height (planet radii) and plane scale.
 const float SK_H_CIRRUS = 0.100;
@@ -66,78 +76,87 @@ const float SK_S_CUMULUS= 172.0;
 void main() {
   vec3 d = normalize(vDir);
   float up = d.y;
-  float f = clamp(up, 0.0, 1.0);
+  float f = max(asin(clamp(up, -1.0, 1.0)) * 0.63661977, 0.0);
 
   float cosSun = dot(d, uSunDir);
   vec2 hdir = normalize(vec2(d.x, d.z) + vec2(1e-6));
   float az = dot(hdir, uSunAz);
-  float azW = smoothstep(-0.35, 0.98, az);
-  // The orange rip is a THIN band. At exp(-f*7) it was still at 30% strength
-  // 15 degrees up, which smeared hot orange over the coral and magenta bands
-  // and is most of why the low sky measured as one cream wash.
-  float lowMask = exp(-f * 14.0);
+  float azW = smoothstep(-0.40, 0.98, az);
+
+  /* ---------------- airmass ---------------- */
+
+  // One extinction, used by the disc, both glow lobes, the cloud rim colour and
+  // the veil, so every warm thing in the frame reddens together as the sun sets.
+  vec3 ext = skAirmassExtinction(uSunDir);
+  vec3 haloCol = cSunHalo * ext;
+  vec3 coreCol = cSunCore * ext;
 
   /* ---------------- base scattering gradient ---------------- */
 
-  /* Band placement, in degrees of elevation:
-   *     0 - 6    hot orange rip        cHorizon
-   *     6 - 15   coral / rose          cLow
-   *    15 - 35   magenta               cMid
-   *    35 - 60   violet                cHigh
-   *    60 - 90   indigo                cZenith
-   * The previous stops held the horizon and coral bands up past 25 degrees,
-   * so magenta and violet were squeezed into the top sliver of the dome and
-   * simply never appeared in a normal street or skyline framing. */
-  float k = pow(f, 0.45);
-  vec3 sky = cHorizon;
-  sky = mix(sky, cLow,    smoothstep(0.00, 0.34, k));
-  sky = mix(sky, cMid,    smoothstep(0.32, 0.56, k));
-  sky = mix(sky, cHigh,   smoothstep(0.54, 0.80, k));
-  sky = mix(sky, cZenith, smoothstep(0.76, 0.98, k));
+  SkBandSet B;
+  B.horizon = cHorizon;
+  B.low = cLow;
+  B.mid = cMid;
+  B.high = cHigh;
+  B.zenith = cZenith;
+  B.away = cAway;
+  B.toward = cToward;
+  B.halo = haloCol;
+  B.ground = cGroundHaze;
 
-  // Anti-solar half keeps its short-wavelength violet; the solar half loses
-  // blue and becomes coral. Without this split the whole dome is one hue.
-  //
-  // ...but the split has to DIE OFF WITH ALTITUDE. 'azW' is a purely horizontal
-  // azimuth test, so applied flat it bleached the warm tint all the way to the
-  // zenith and the sun-facing hemisphere measured as one 22-degree hue arc of
-  // salmon with no blue anywhere. A low sun only warms the air near the
-  // horizon; 40 degrees up, both halves of the dome are violet.
-  float azWt = azW * (0.22 + 0.78 * exp(-f * 2.6));
-  sky *= mix(cAway, cToward, azWt);
-
-  // Rayleigh lobe: brightest at 90 degrees from the sun, softly lifts the dome.
-  sky += cHigh * skRayleigh(cosSun) * 0.06 * (1.0 - uP.z);
-
-  // The orange rip along the horizon toward the sun.
-  sky += cHorizon * pow(azW, 2.9) * lowMask * uP.w * 0.42;
-  sky += cLow * pow(azW, 1.4) * lowMask * uP.w * 0.16;
+  vec3 sky = skBandRadiance(d, uSunDir, uSunAz, B, uP.w, uP.x);
 
   /* ---------------- cloud decks (far to near) ---------------- */
 
   vec2 lightDir = normalize(uSunDir.xz + vec2(1e-5));
-  float mie = skHG(cosSun, 0.78);
   float sunUpFade = smoothstep(-0.14, 0.05, uSunDir.y);
+
+  /* THE RIM LOBE.
+   *
+   * Henyey-Greenstein at g = 0.75 is a genuine forward-scattering lobe: it is
+   * ~1 at 90 degrees off-sun and climbs steeply inside about 25 degrees. This
+   * is what makes a cloud EDGE ignite while its body stays dark, and it is the
+   * whole difference between "backlit deck" and "grey smudge". The decks used
+   * to sample the same hue and saturation at every angle to the sun, which is
+   * exactly why they read as dirt. */
+  float mie = skHG(cosSun, 0.75);
+  float mieRim = skHG(cosSun, 0.86);
+
   // Scattering tint for the decks. Deliberately NOT cSunCore, which is scaled
   // for a 0.4-degree disc and would nuke every cloud edge in the frame.
-  vec3 sunLit = cSunHalo * (0.30 + 0.70 * sunUpFade);
+  vec3 sunLit = haloCol * (0.30 + 0.70 * sunUpFade);
+
   // Accumulated deck opacity, so stars can be occluded by cloud.
   float cloudMask = 0.0;
-  // Azimuthal proximity to the sun. At sunset the decks on the solar half of
-  // the dome ignite and everything behind you stays violet — without this the
-  // whole sky turns into one flat sheet of pink.
-  float towardSun = pow(azW, 1.45);
-  // ...and a low sun only rakes the decks near the horizon. Clouds overhead
-  // are lit from below and edge-on, so they stay violet — reference, top left.
-  // Steep in BOTH terms. A 3-degree sun cannot reach a cloud 30 degrees up
-  // except edge-on, so the deck overhead has to fall back to its violet core
-  // fast. At exp(-f*2.9) it was still 36% lit at 30 degrees, which painted the
-  // whole upper dome in warm cloud and buried the magenta/violet ladder under it.
-  float deckLight = (0.08 + 0.92 * towardSun) * (0.08 + 0.92 * exp(-f * 4.5));
-  // Rim ignition gate. Only the decks ON the solar side get an amber edge; a
-  // cloud 90 degrees round the dome must stay a cold violet silhouette, which
-  // is what gives a single frame both a hot rim and a dark deck.
-  float rimGate = pow(azW, 3.2) * sunUpFade;
+
+  // Azimuthal proximity to the sun. The decks on the solar half ignite and
+  // everything behind you stays violet — without this the whole sky turns into
+  // one flat sheet of pink.
+  float towardSun = pow(azW, 1.25);
+
+  // ...and a low sun only rakes the decks near the horizon. Clouds overhead are
+  // lit from below and edge-on, so they fall back toward their cold cores.
+  float deckLight = (0.10 + 0.90 * towardSun) * (0.12 + 0.88 * exp(-f * 2.6));
+
+  /* RIM IGNITION GATE.
+   *
+   * Softer than it was, on purpose. At pow(azW, 3.2) the amber was confined to
+   * a narrow wedge pointing dead at the sun, so in any framing that was not
+   * looking straight down-sun every cloud in the frame was a grey silhouette
+   * with no warm edge anywhere. A real backlit deck at golden hour carries some
+   * rim across most of the solar hemisphere, and the FALLOFF that separates
+   * "hot rim" from "cold deck" should come from the HG lobe and the deck's own
+   * transmittance, not from a hard azimuth cut. */
+  float rimGate = (0.10 + 0.90 * pow(azW, 1.7)) * sunUpFade;
+
+  /* VERTICAL DENSITY GRADIENT.
+   *
+   * Real decks are lit on top and dark underneath. Seen from below at sunset
+   * the base of a deck is the darkest thing in the sky and its upper shoulder
+   * is the brightest. Decks near the horizon are seen edge-on (mostly shoulder,
+   * so bright); decks overhead are seen from directly below (all base, so
+   * dark). This one term is most of what makes the sky read as having weight. */
+  float baseShade = mix(0.34, 1.0, exp(-f * 2.2));
 
   if (up > -0.02) {
     /* --- cirrus: thin, high, fibrous, lit almost entirely by transmission --- */
@@ -151,12 +170,14 @@ void main() {
       if (dens > 0.001) {
         float T = exp(-dens * 1.5);
         float lit = clamp(T * deckLight, 0.0, 1.0);
-        // Two HUES, not two brightnesses: indigo core -> rose body -> amber rim.
-        vec3 col = mix(cCloudCore, cCloudMid, smoothstep(0.06, 0.60, lit));
-        col = mix(col, cCloudLit, pow(lit, 1.75) * (0.14 + 0.86 * rimGate));
-        col += sunLit * mie * 0.06 * T * rimGate;
-        col += cCloudLit * pow(max(cosSun, 0.0), 4.0) * 0.18 * rimGate;
-        col *= uP2.x;
+        // THREE HUES chained, not two brightnesses: indigo-blue core -> rose
+        // body -> amber rim.
+        vec3 col = mix(cCloudCore, cCloudMid, smoothstep(0.05, 0.58, lit));
+        col = mix(col, cCloudLit, pow(lit, 1.45) * rimGate);
+        // Cirrus is optically thin, so it is mostly transmitted light: the HG
+        // lobe dominates its appearance.
+        col += sunLit * mieRim * 0.30 * T * rimGate;
+        col *= uP2.x * uP.x * mix(baseShade, 1.0, 0.65);
         float a = dens * 0.55;
         sky = mix(sky, col, a);
         cloudMask = mix(cloudMask, 1.0, a);
@@ -174,21 +195,23 @@ void main() {
         float sh = skSunTransmittance(uv, lightDir, uLightStep.y, drift, uCover.y, 1);
         float T = exp(-sh * 2.30);
         float lit = clamp(T * deckLight, 0.0, 1.0);
+        // Thin edges: dens*(1-dens) peaks where the deck is half-transparent,
+        // which is geometrically where a real cloud's rim is.
         float edge = dens * (1.0 - dens) * 4.0;
-        vec3 col = mix(cCloudCore, cCloudMid, smoothstep(0.05, 0.55, lit));
-        col = mix(col, cCloudLit, pow(lit, 2.3) * (0.08 + 0.92 * rimGate));
-        // Silver lining: forward-scattered light punching through thin edges.
-        // Gated on the solar azimuth, so it ignites one side of the sky only.
-        col += sunLit * mie * (0.05 + edge * 0.66) * T * rimGate;
-        col += cCloudLit * pow(max(cosSun, 0.0), 5.0) * T * 0.34 * rimGate;
-        col *= uP2.x;
+        vec3 col = mix(cCloudCore, cCloudMid, smoothstep(0.04, 0.52, lit));
+        col = mix(col, cCloudLit, pow(lit, 1.9) * rimGate);
+        // AMBER RIM IGNITION. Forward-scattered light punching through the thin
+        // edge of the deck. This term is the one that has to be unmistakable.
+        col += sunLit * mieRim * (0.10 + edge * 1.35) * T * rimGate;
+        col += cCloudLit * mie * edge * 0.55 * T * rimGate;
+        col *= uP2.x * uP.x * baseShade;
         float a = dens * 0.94;
         sky = mix(sky, col, a);
         cloudMask = mix(cloudMask, 1.0, a);
       }
     }
 
-    /* --- cumulus: chunky, backlit, violet-cored --- */
+    /* --- cumulus: chunky, backlit, indigo-cored --- */
     {
       vec2 uv = skCloudUV(d, SK_H_CUMULUS, SK_S_CUMULUS);
       float drift = uTime * uWind * 0.36;
@@ -199,13 +222,13 @@ void main() {
         float T = exp(-sh * 2.90);
         float lit = clamp(T * deckLight, 0.0, 1.0);
         float edge = dens * (1.0 - dens) * 4.0;
-        vec3 col = mix(cCloudCore, cCloudMid, smoothstep(0.04, 0.52, lit));
-        col = mix(col, cCloudLit, pow(lit, 2.8) * (0.06 + 0.94 * rimGate));
+        vec3 col = mix(cCloudCore, cCloudMid, smoothstep(0.03, 0.50, lit));
+        col = mix(col, cCloudLit, pow(lit, 2.2) * rimGate);
         // Powder: dense cores facing the sun stay dark, which reads as volume.
-        col *= mix(1.0, 0.55, dens * (1.0 - T));
-        col += sunLit * mie * (0.04 + edge * 0.84) * T * rimGate;
-        col += cCloudLit * pow(max(cosSun, 0.0), 6.0) * T * 0.38 * rimGate;
-        col *= uP2.x;
+        col *= mix(1.0, 0.52, dens * (1.0 - T));
+        col += sunLit * mieRim * (0.08 + edge * 1.55) * T * rimGate;
+        col += cCloudLit * mie * edge * 0.62 * T * rimGate;
+        col *= uP2.x * uP.x * baseShade;
         float a = dens * 0.985;
         sky = mix(sky, col, a);
         cloudMask = mix(cloudMask, 1.0, a);
@@ -224,12 +247,10 @@ void main() {
       acc += skAltoLo(uvs, uTime * uWind * 0.62, uCover.y) * smoothstep(-0.01, 0.05, sd.y);
     }
     float open = 1.0 - clamp(acc * 0.32, 0.0, 1.0);
-    // pow(.,3) is a 55-degree lobe. At a 0.55 weight this single line laid
-    // 0.24 linear of orange over a 40-degree cone centred on the sun and was
-    // the largest contributor to the sun-facing sky measuring as one flat
-    // pale-salmon wash. Crepuscular rays are a NARROW, subtle effect.
+    // Crepuscular rays are a NARROW effect. A wide lobe here lays flat orange
+    // over a 40-degree cone and is indistinguishable from a bad lens flare.
     float shaft = open * smoothstep(0.30, 0.80, cosSun) * pow(max(cosSun, 0.0), 9.0);
-    sky += cSunHalo * shaft * uP2.y * 0.16 * sunUpFade;
+    sky += haloCol * shaft * uP2.y * 0.22 * sunUpFade * uP.x;
   }
 #endif
 
@@ -242,37 +263,55 @@ void main() {
   // Atmospheric refraction squashes the disc vertically as it nears the horizon.
   float flatten = mix(0.55, 1.0, smoothstep(-0.02, 0.24, uSunDir.y));
   float rr = sqrt(ax * ax + (ay / flatten) * (ay / flatten));
-  float disc = (1.0 - smoothstep(uSunRadius * 0.70, uSunRadius, rr)) * step(0.0, cosSun);
-  disc *= mix(1.0, 0.66, smoothstep(0.0, uSunRadius, rr));   // limb darkening
+  float disc = (1.0 - smoothstep(uSunRadius * 0.72, uSunRadius, rr)) * step(0.0, cosSun);
+  disc *= mix(1.0, 0.70, smoothstep(0.0, uSunRadius, rr));   // limb darkening
   disc *= smoothstep(-0.055, -0.005, up);                    // sinks below the horizon
 
-  /* Glow lobes.
+  /* THE LOBES.
    *
-   * These, not the disc, are what used to make the sun a 10-degree ball of
-   * clipped pure white. 'pow(cosSun, 780)' is a 2.9-degree half-width lobe fed
-   * a 26x near-white core colour at a 0.5 scalar — 13x white over 6 degrees of
-   * sky, which no tone map can hold on to a hue. A real sun is a SMALL
-   * saturated core inside a LARGE soft coloured halo, so:
+   * A real low sun is a SMALL core that clips to white inside a LARGE warm
+   * halo inside a very broad veil, and the three are orders of magnitude apart
+   * in radiance. Getting that wrong in either direction is what makes a sun
+   * look fake: one flat lobe at a moderate value is a beige dot (what this
+   * was), and one flat lobe at a high value is a ten-degree ball of clipped
+   * white with no hue anywhere.
    *
-   *   core  pow(.,5200) ~ 1.0 deg half-width, fed the deep-orange disc colour
-   *   halo  pow(.,150)  ~ 5.5 deg,           fed the halo colour only
-   *   veil  pow(.,9)    ~ 22  deg,           very weak, tints not bleaches
+   *   core  pow(.,4200) ~ 1.2 deg half-width, fed the disc colour, HDR
+   *   halo  pow(.,110)  ~ 6.5 deg,           fed the reddened halo colour
+   *   veil  pow(.,9)    ~ 22  deg,           weak; tints, does not bleach
    *
-   * The middle lobe used to be fed core-magnitude values; it is halo-only now.
+   * All three are reddened by the same airmass extinction, so the whole
+   * apparatus goes from white at noon to blood orange at sunset together.
    */
   float cs = max(cosSun, 0.0);
-  float glowCore = pow(cs, 5200.0);
-  float glowHalo = pow(cs, 150.0);
-  float glowVeil = pow(cs, 9.0);
+  float glowCore = pow(cs, 9000.0);   // ~0.85 deg
+  float glowInner = pow(cs, 900.0);   // ~2.7 deg
+  float glowHalo = pow(cs, 110.0);    // ~7.7 deg
+  float glowVeil = pow(cs, 9.0);      // ~27 deg
 
-  sky += cSunHalo * glowVeil * 0.014 * uP.w * sunUpFade;
-  sky += cSunHalo * glowHalo * 0.100 * sunUpFade;
-  sky += cSunCore * glowCore * 0.220 * sunUpFade;
-  sky += cSunCore * disc * uP.y;
-  // Broad Mie veil. At 0.13 (and even at 0.10) this single term put 0.14 linear
-  // of orange over a ~20-degree cone around the sun and was on its own most of
-  // the pale-salmon wash the whole sun-facing sky was measuring as.
-  sky += cSunHalo * mie * 0.022 * uP.w * sunUpFade;
+  /* THE HALO CARRIES THE COLOUR, THE CORE CARRIES THE BRIGHTNESS.
+   *
+   * This split matters more than any single magnitude. Everything above about
+   * 15 linear survives the exposure shoulder and AgX as pure white no matter
+   * what hue it started as — highlight compression converges the channels by
+   * construction, so a "deep orange sun" authored at 40x white renders as a
+   * white blob every time. The only way to get a sun that is BOTH the
+   * brightest thing in the frame AND visibly orange is to let a ~1-degree core
+   * clip to white (which is what a real sun does through a real lens) and hang
+   * a much larger halo off it at a value low enough to keep its hue — around
+   * 1.5-2 linear, well under the shoulder's knee-to-white range. */
+  float glowWide = pow(cs, 28.0);     // ~15 deg
+  sky += haloCol * glowVeil * 0.060 * uP.w * sunUpFade * uP.x;
+  sky += haloCol * glowWide * 1.15 * sunUpFade * uP.x;
+  sky += haloCol * glowHalo * 5.60 * sunUpFade * uP.x;
+  sky += haloCol * glowInner * 3.00 * sunUpFade * uP.x;
+  sky += coreCol * glowCore * 0.60 * sunUpFade * uP.x;
+  // THE DISC. This is the brightest thing in the game by design — it has to
+  // clear the bloom threshold by a wide margin and clip its core to white.
+  sky += coreCol * disc * uP.y * uP.x;
+  // Broad Mie veil in the air. Weak: at any real strength this single term
+  // paints a 20-degree cone of flat salmon over everything.
+  sky += haloCol * mie * 0.030 * uP.w * sunUpFade * uP.x;
 
   /* ---------------- night: stars + moon ---------------- */
 
@@ -313,15 +352,6 @@ void main() {
     sky += cMoon * halo * uP2.w * (1.0 - cloudMask * 0.7);
   }
 
-  /* ---------------- horizon haze + below-horizon ---------------- */
-
-  float hz = exp(-max(up, 0.0) * 64.0) * smoothstep(-0.06, 0.005, up);
-  vec3 hazeCol = mix(cGroundHaze * 2.0, cHorizon * 0.80, pow(azW, 1.5));
-  sky = mix(sky, hazeCol, hz * uP.w * 0.34);
-
-  sky = mix(sky, cGroundHaze, smoothstep(0.002, -0.085, up));
-
-  sky *= uP.x;
   sky += vec3(0.86, 0.80, 1.0) * uFlash;
 
   gl_FragColor = vec4(max(sky, vec3(0.0)), 1.0);

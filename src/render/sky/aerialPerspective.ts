@@ -2,15 +2,33 @@
  *
  *  A single `FogExp2` colour cannot produce the reference frame, where the far
  *  boulevard dissolves into a hot orange rip while the buildings behind the
- *  camera sink into violet. So we override the four `fog_*` shader chunks
- *  globally with a height-attenuated, view-dependent scattering model:
+ *  camera sink into azure. So we override the four `fog_*` shader chunks
+ *  globally with a height-attenuated scattering model whose in-scatter radiance
+ *  is THE SKY DOME ITSELF, evaluated along the pixel's own view direction.
  *
- *    optical depth  exponential density falloff with altitude, integrated
- *                   analytically along the view ray
- *    in-scatter     lerp(violet away-colour, orange sun-colour) by cos(theta),
- *                   pulled toward the zenith colour when looking up
- *    Mie lobe       Henyey-Greenstein forward peak, so looking into the sun
- *                   through 600 m of air genuinely glows
+ *  WHY THE IN-SCATTER COLOUR TABLE IS GONE
+ *
+ *  There used to be an `AERIAL_STOPS` table of hand-authored linear triples
+ *  (a warm "toward sun" colour, a violet "away" colour, a "zenith" colour)
+ *  lerped by cos(theta). That table can be tuned until it is individually
+ *  plausible and it will still produce a razor-straight, full-width hue
+ *  discontinuity along the horizon line — because at the horizon, fogged ground
+ *  geometry is showing table colour and the pixel one row above it is showing
+ *  dome colour, and the two are different functions.
+ *
+ *  For a homogeneous scattering medium,
+ *
+ *      L = L_surface * e^-tau  +  L_inscatter * (1 - e^-tau)
+ *
+ *  so as tau grows the composite must approach the sky radiance ALONG THE SAME
+ *  RAY. Making `L_inscatter` literally be `skBandRadiance(viewDir, ...)` — the
+ *  identical function the dome runs, fed the identical uniforms — makes that
+ *  convergence true by construction. There is no seam to tune away because
+ *  both sides of the horizon line are now the same expression.
+ *
+ *  What survives from the old model is the geometry: the height-attenuated
+ *  optical depth (street haze piles up, rooftops stay crisp) and a Mie forward
+ *  lobe so that looking into the sun through 600 m of air genuinely glows.
  *
  *  HOW THE UNIFORMS REACH EVERY MATERIAL
  *  `UniformsUtils.clone` deep-copies anything with a `.clone()` method but
@@ -26,71 +44,30 @@
  */
 
 import * as THREE from 'three';
+import { SKY_BANDS_GLSL } from './skyBands';
 
 /* ------------------------------------------------------------------ */
-/* In-scatter colour — AUTHORED HERE, in literal linear RGB             */
-/*                                                                     */
-/* These used to be derived from the sky keyframe by multiplying the    */
-/* `low`/`mid` bands by the anti-solar tint. Compounding three already- */
-/* magenta terms drove the green channel to ~0.007 against a 0.058 blue */
-/* — a G/B ratio of 0.12, which no atmosphere has. The result was that  */
-/* every distant building sampled rgb(80, 0, 82): the green channel     */
-/* literally zero, the city one flat magenta silhouette with no depth   */
-/* cue and no material reading left in it.                              */
-/*                                                                     */
-/* Airlight is Rayleigh-dominated and Rayleigh always carries green:    */
-/* a dusk in-scatter normalises to about (0.10, 0.13, 0.28), i.e. MORE  */
-/* green than red. So the three colours are written out by hand as      */
-/* linear triples, and the only thing time of day does is choose        */
-/* between the stops and scale them.                                    */
+/* Density only — the COLOUR now comes from the sky dome function.     */
 /* ------------------------------------------------------------------ */
-
-type RGB = readonly [number, number, number];
 
 export interface AerialStop {
   /** Elevation of the sun, degrees, that this stop is authored for. */
   elev: number;
-  /** In-scatter looking INTO the sun — the warm rip down the boulevard. */
-  sun: RGB;
-  /** In-scatter looking away from the sun — Rayleigh violet-blue, WITH green. */
-  away: RGB;
-  /** In-scatter looking up — the zenith the far skyline dissolves into. */
-  zen: RGB;
   /** Extinction coefficient, 1/m at sea level. */
   density: number;
 }
 
 /** Ordered high sun -> deep night. */
 export const AERIAL_STOPS: readonly AerialStop[] = [
-  { elev: 46,
-    sun:  [0.560, 0.600, 0.720], away: [0.300, 0.400, 0.680], zen: [0.180, 0.270, 0.580],
-    density: 0.00070 },
-  { elev: 18,
-    sun:  [0.680, 0.480, 0.400], away: [0.230, 0.280, 0.520], zen: [0.140, 0.180, 0.420],
-    density: 0.00080 },
-  { elev: 3.2,
-    sun:  [0.250, 0.112, 0.055], away: [0.058, 0.072, 0.166], zen: [0.034, 0.044, 0.126],
-    density: 0.00090 },
-  { elev: -3.5,
-    sun:  [0.180, 0.070, 0.042], away: [0.040, 0.047, 0.122], zen: [0.024, 0.030, 0.096],
-    density: 0.00095 },
-  { elev: -9.5,
-    sun:  [0.110, 0.052, 0.062], away: [0.030, 0.034, 0.092], zen: [0.018, 0.021, 0.070],
-    density: 0.00090 },
-  { elev: -20,
-    sun:  [0.040, 0.030, 0.040], away: [0.016, 0.019, 0.046], zen: [0.010, 0.012, 0.034],
-    density: 0.00080 },
+  { elev: 46, density: 0.00070 },
+  { elev: 18, density: 0.00080 },
+  { elev: 3.2, density: 0.00082 },
+  { elev: -3.5, density: 0.00086 },
+  { elev: -9.5, density: 0.00084 },
+  { elev: -20, density: 0.00090 },
 ];
 
-const _stop: { sun: [number, number, number]; away: [number, number, number]; zen: [number, number, number]; density: number } = {
-  sun: [0, 0, 0], away: [0, 0, 0], zen: [0, 0, 0], density: 0.0009,
-};
-
-const mix3 = (out: [number, number, number], a: RGB, b: RGB, t: number): void => {
-  out[0] = a[0] + (b[0] - a[0]) * t;
-  out[1] = a[1] + (b[1] - a[1]) * t;
-  out[2] = a[2] + (b[2] - a[2]) * t;
-};
+const _stop = { density: 0.0009 };
 
 /** Blend the authored aerial stops for a solar elevation, in degrees. */
 export function aerialForElevation(elevationDeg: number): typeof _stop {
@@ -113,24 +90,51 @@ export function aerialForElevation(elevationDeg: number): typeof _stop {
       }
     }
   }
-  mix3(_stop.sun, a.sun, b.sun, t);
-  mix3(_stop.away, a.away, b.away, t);
-  mix3(_stop.zen, a.zen, b.zen, t);
   _stop.density = a.density + (b.density - a.density) * t;
   return _stop;
 }
+
+type V3 = { x: number; y: number; z: number };
+const v3 = (x: number, y: number, z: number): V3 => ({ x, y, z });
 
 /** Shared, mutable uniform payloads. Plain objects on purpose — see above. */
 export const AerialUniforms = {
   camWorld: { elements: new Float32Array(16) },
   sunDir: { x: 0, y: 0, z: 0 },
-  sunCol: { x: 1, y: 0.5, z: 0.25 },
-  awayCol: { x: 0.35, y: 0.28, z: 0.6 },
-  zenCol: { x: 0.18, y: 0.14, z: 0.36 },
+  sunAz: { x: 0, y: 1 },
+
+  /** The sky band ladder, mirrored from the live SkyKey. Identical values to
+   *  the dome's own uniforms — that identity is the whole point. */
+  bHorizon: v3(1, 0.4, 0.15),
+  bLow: v3(0.5, 0.2, 0.2),
+  bMid: v3(0.2, 0.05, 0.2),
+  bHigh: v3(0.06, 0.03, 0.2),
+  bZenith: v3(0.02, 0.02, 0.1),
+  bAway: v3(0.62, 0.86, 1.42),
+  bToward: v3(1.24, 0.9, 0.56),
+  bHalo: v3(0.6, 0.25, 0.08),
+  bGround: v3(0.03, 0.02, 0.05),
+
   /** x density, y height falloff (1/m), z Mie g, w Mie strength */
   params: { x: 0.0016, y: 0.006, z: 0.72, w: 0.5 },
-  /** x start distance (m), y max opacity, z unused, w unused */
-  params2: { x: 22, y: 0.985, z: 0, w: 0 },
+  /** x start distance (m), y max opacity, z haze, w sky multiplier */
+  params2: { x: 22, y: 0.998, z: 1, w: 1 },
+  /**
+   * x: how much of the dome's radiance the airlight carries.
+   *
+   * Slightly under 1 on purpose. The dome is unoccluded sky; a ground-level
+   * air column is partly shadowed by the city itself and by the planet, so
+   * airlight measures a little below the sky it converges on. Pushing this to
+   * a true 1.0 makes distant streets read brighter than the sky above them,
+   * which inverts the depth cue. Anything much below ~0.85 and the seam
+   * reappears as a value step instead of a hue step.
+   *
+   * y, z: the horizon-closure ramp, in metres. Between these two distances the
+   * fog is forced to full opacity regardless of what the physical optical
+   * depth says, so the edge of the finite world dissolves completely into the
+   * sky instead of ending in a hard line. See FOG_FRAGMENT.
+   */
+  params3: { x: 0.86, y: 1250, z: 2900, w: 0 },
 };
 
 const FOG_PARS_VERTEX = /* glsl */ `
@@ -158,11 +162,12 @@ const FOG_PARS_FRAGMENT = /* glsl */ `
 	varying vec3 vFogWorldPos;
 
 	uniform vec3 uAerialSunDir;
-	uniform vec3 uAerialSunCol;
-	uniform vec3 uAerialAwayCol;
-	uniform vec3 uAerialZenCol;
+	uniform vec2 uAerialSunAz;
+	uniform vec3 uAerBHorizon, uAerBLow, uAerBMid, uAerBHigh, uAerBZenith;
+	uniform vec3 uAerBAway, uAerBToward, uAerBHalo, uAerBGround;
 	uniform vec4 uAerialParams;
 	uniform vec4 uAerialParams2;
+	uniform vec4 uAerialParams3;
 
 	#ifdef FOG_EXP2
 		uniform float fogDensity;
@@ -176,6 +181,8 @@ const FOG_PARS_FRAGMENT = /* glsl */ `
 		float den = 1.0 + g2 - 2.0 * g * cosT;
 		return ( 1.0 - g2 ) / ( 12.566370614 * pow( max( den, 1e-4 ), 1.5 ) );
 	}
+
+${SKY_BANDS_GLSL}
 
 #endif
 `;
@@ -203,12 +210,47 @@ const FOG_FRAGMENT = /* glsl */ `
 		}
 
 		float od = uAerialParams.x * meanDensity * max( aerialDist - uAerialParams2.x, 0.0 );
-		float fogFactor = min( 1.0 - exp( - od ), uAerialParams2.y );
+		float fogFactor = 1.0 - exp( - od );
 
+		/* HORIZON CLOSURE.
+		 *
+		 * Converging the in-scatter onto the sky function makes the two sides of
+		 * the horizon the same COLOUR, but that only shows up once the optical
+		 * depth actually saturates — and in a world 2.4 km across it does not.
+		 * Measured from a 130 m rooftop, the far edge of the ground plane reaches
+		 * only tau = 1.0, i.e. 64% fogged, so 36% of a near-black ground albedo
+		 * survived and painted a razor-straight dark band under a bright sky.
+		 * That band is the seam, and no colour change can remove it.
+		 *
+		 * A real horizon is thousands of kilometres of air. This ramp says so:
+		 * past the world edge every surface is pure atmosphere, which is exactly
+		 * the limit the physical term is heading toward anyway — it just cannot
+		 * get there inside a finite city. */
+		fogFactor = max( fogFactor, smoothstep( uAerialParams3.y, uAerialParams3.z, aerialDist ) );
+		fogFactor = min( fogFactor, uAerialParams2.y );
+
+		// IN-SCATTER == SKY RADIANCE ALONG THIS RAY. Same function, same
+		// uniforms as the dome, so the composite converges onto the dome by
+		// construction and the horizon seam cannot exist. Do not replace this
+		// with a colour table; see the header of this file.
+		SkBandSet B;
+		B.horizon = uAerBHorizon;
+		B.low = uAerBLow;
+		B.mid = uAerBMid;
+		B.high = uAerBHigh;
+		B.zenith = uAerBZenith;
+		B.away = uAerBAway;
+		B.toward = uAerBToward;
+		B.halo = uAerBHalo;
+		B.ground = uAerBGround;
+
+		vec3 scatter = skBandRadiance( aerialDir, uAerialSunDir, uAerialSunAz, B,
+			uAerialParams2.z, uAerialParams2.w ) * uAerialParams3.x;
+
+		// Mie forward lobe on top: 600 m of air looked through toward a low sun
+		// glows well above the sky behind it.
 		float cosT = dot( aerialDir, uAerialSunDir );
-		vec3 scatter = mix( uAerialAwayCol, uAerialSunCol, smoothstep( -0.30, 0.94, cosT ) );
-		scatter = mix( scatter, uAerialZenCol, smoothstep( 0.04, 0.60, aerialDir.y ) );
-		scatter += uAerialSunCol * aerialHG( cosT, uAerialParams.z ) * uAerialParams.w;
+		scatter += uAerBHalo * aerialHG( cosT, uAerialParams.z ) * uAerialParams.w;
 
 		gl_FragColor.rgb = mix( gl_FragColor.rgb, scatter, fogFactor );
 
@@ -233,11 +275,19 @@ function uniformSlots(): Record<string, { value: unknown }> {
   return {
     uAerialCamWorld: { value: AerialUniforms.camWorld },
     uAerialSunDir: { value: AerialUniforms.sunDir },
-    uAerialSunCol: { value: AerialUniforms.sunCol },
-    uAerialAwayCol: { value: AerialUniforms.awayCol },
-    uAerialZenCol: { value: AerialUniforms.zenCol },
+    uAerialSunAz: { value: AerialUniforms.sunAz },
+    uAerBHorizon: { value: AerialUniforms.bHorizon },
+    uAerBLow: { value: AerialUniforms.bLow },
+    uAerBMid: { value: AerialUniforms.bMid },
+    uAerBHigh: { value: AerialUniforms.bHigh },
+    uAerBZenith: { value: AerialUniforms.bZenith },
+    uAerBAway: { value: AerialUniforms.bAway },
+    uAerBToward: { value: AerialUniforms.bToward },
+    uAerBHalo: { value: AerialUniforms.bHalo },
+    uAerBGround: { value: AerialUniforms.bGround },
     uAerialParams: { value: AerialUniforms.params },
     uAerialParams2: { value: AerialUniforms.params2 },
+    uAerialParams3: { value: AerialUniforms.params3 },
   };
 }
 

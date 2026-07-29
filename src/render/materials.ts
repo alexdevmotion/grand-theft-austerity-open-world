@@ -24,6 +24,91 @@ import { Atmosphere, Palette } from '../artDirection';
 import { Rng } from '../core/rng';
 
 /* ------------------------------------------------------------------ */
+/* Colour space — READ THIS BEFORE AUTHORING ANY COLOUR                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * three's `ColorManagement` is enabled by default since r155, so
+ * `new THREE.Color(0xc9a882)` ALREADY decodes sRGB into the linear working
+ * space. `src/artDirection.ts` then calls `.convertSRGBToLinear()` on top of
+ * that, so every `Palette` entry in this project is decoded TWICE.
+ *
+ * The consequences were visible in every capture and are the single biggest
+ * reason the game rendered as one flat dark mauve wash:
+ *
+ *   travertine  0xc9a882  intended (0.591, 0.393, 0.223) warm cream
+ *                         actual   (0.310, 0.129, 0.043) dark burnt red
+ *   asphaltWet  0x0d0a14  intended (0.004, 0.003, 0.007)
+ *                         actual   (0.0003,0.0002,0.0005) i.e. pure black
+ *   leafOlive   0x5d6a3a  intended (0.106, 0.144, 0.041)
+ *                         actual   (0.008, 0.011, 0.003) i.e. pure black
+ *
+ * Every warm or mid-tone albedo in the city was crushed toward black AND
+ * over-saturated toward red, which left the emissive and sky-reflection terms
+ * — all of them magenta — as the only things with any value in the frame.
+ * Nothing could read as warm because nothing warm had any luminance left.
+ *
+ * `artDirection.ts` is not this agent's file, so the fix lives here: `srgb()`
+ * decodes exactly ONCE whatever `ColorManagement` is doing, and every material
+ * module in the world/render tree authors through it.
+ */
+export const srgb = (hex: number): THREE.Color => {
+  const c = new THREE.Color(hex);
+  if (!THREE.ColorManagement.enabled) c.convertSRGBToLinear();
+  return c;
+};
+
+/**
+ * The art-direction palette, decoded correctly. Same hexes as
+ * `src/artDirection.ts` — that file remains the authored source of truth for
+ * the LOOK, this is the source of truth for the NUMBERS.
+ */
+export const PAL = {
+  skyHorizon: srgb(0xff7a3c),
+  skyLowBand: srgb(0xff5f86),
+  skyMidBand: srgb(0xd0569f),
+  skyHighBand: srgb(0x6b4192),
+  skyZenith: srgb(0x231a45),
+  sunCore: srgb(0xffd9a8),
+  sunLight: srgb(0xff9c5a),
+  skyAmbient: srgb(0x6d4f9e),
+  groundBounce: srgb(0x2a1c33),
+  cloudLit: srgb(0xffa477),
+  cloudMid: srgb(0xd2679c),
+  cloudShadow: srgb(0x4a3670),
+  /**
+   * ASPHALT. The brief calls for a genuinely dark base at roughly 0.04 linear.
+   * The authored 0x0d0a14 lands at 0.004 even when decoded once — a hundred
+   * times darker than real tarmac, which is why the road only ever showed its
+   * reflection and never its own surface. 0x3a3540 is 0.042 linear with a
+   * violet bias, which is what dry asphalt at dusk actually measures.
+   */
+  asphaltDry: srgb(0x413b47),
+  asphaltWet: srgb(0x3a3540),
+  sidewalkStone: srgb(0x6b6270),
+  travertine: srgb(0xd8b892),
+  concreteGrey: srgb(0x8a8390),
+  glassTint: srgb(0x1b2340),
+  glassSpecular: srgb(0xbfd4ff),
+  builderPurple: srgb(0x7b3fd4),
+  builderMagenta: srgb(0xc04ad0),
+  screenBlue: srgb(0x3a5cc8),
+  sodiumLamp: srgb(0xffb14a),
+  neonPink: srgb(0xff2f8e),
+  scooterGreen: srgb(0x4ade50),
+  daciaYellow: srgb(0xd8c33a),
+  daciaPurple: srgb(0x6b3fa0),
+  daciaRust: srgb(0x9a5f36),
+  policeBlue: srgb(0x2b6cff),
+  roBlue: srgb(0x002b7f),
+  roYellow: srgb(0xfcd116),
+  roRed: srgb(0xce1126),
+  leafAmber: srgb(0xc99a4a),
+  leafOlive: srgb(0x6f7a44),
+  trunkBark: srgb(0x4a3b31),
+} as const;
+
+/* ------------------------------------------------------------------ */
 /* Deterministic tileable noise                                        */
 /* ------------------------------------------------------------------ */
 
@@ -247,12 +332,12 @@ const SHARED = {
   // pin these uniforms to their literal types and make them read-only.
   wetness: { value: Atmosphere.wetness as number },
   sunDir: { value: new THREE.Vector3(-0.95, 0.06, -0.31) },
-  skyHorizon: { value: Palette.skyHorizon.clone() },
-  skyLow: { value: Palette.skyLowBand.clone() },
-  skyMid: { value: Palette.skyMidBand.clone() },
-  skyHigh: { value: Palette.skyHighBand.clone() },
-  skyZenith: { value: Palette.skyZenith.clone() },
-  sunCore: { value: Palette.sunCore.clone() },
+  skyHorizon: { value: PAL.skyHorizon.clone() },
+  skyLow: { value: PAL.skyLowBand.clone() },
+  skyMid: { value: PAL.skyMidBand.clone() },
+  skyHigh: { value: PAL.skyHighBand.clone() },
+  skyZenith: { value: PAL.skyZenith.clone() },
+  sunCore: { value: PAL.sunCore.clone() },
   /** Global scale on the analytic sky reflection — dropped at night. */
   skyEnergy: { value: 1.0 as number },
 };
@@ -541,7 +626,8 @@ function applyWetGround(mat: THREE.MeshStandardMaterial, opts: WetOptions = {}):
 /* Surface generators                                                  */
 /* ------------------------------------------------------------------ */
 
-const P = Palette;
+const P = PAL;
+void Palette;
 
 /*
  * FREQUENCY BUDGET. Every generator keeps its finest lattice cell at 5 texels

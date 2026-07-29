@@ -203,10 +203,18 @@ export class SkySystem implements System {
     return this.key.sunPower * THREE.MathUtils.lerp(1, 0.35, 1 - this.look.skyMul);
   }
 
-  /** Horizon band colour toward the sun — good for rim/backlight tinting. */
+  /** Horizon band colour toward the sun — good for rim/backlight tinting.
+   *
+   *  NORMALISED, not radiometric. The horizon band is now authored well above
+   *  1.0 in linear because it is the hottest thing in the dome and the fog
+   *  converges onto it; handing that raw magnitude to a rim-light multiplier
+   *  would multiply someone else's term by ~2 without warning. Consumers of
+   *  this contract want a HUE. */
   horizonColor(target?: THREE.Color): THREE.Color {
-    const out = target ?? new THREE.Color();
-    return out.copy(this.key.horizon).multiplyScalar(this.look.skyMul);
+    const out = target ?? new THREE.Color().copy(this.key.horizon);
+    out.copy(this.key.horizon);
+    const peak = Math.max(out.r, out.g, out.b, 1e-4);
+    return out.multiplyScalar((0.55 / peak) * this.look.skyMul);
   }
 
   /** Kept from the original contract: force an explicit sun angle. */
@@ -300,7 +308,11 @@ export class SkySystem implements System {
     // GodRays additionally clamps it, and its quad is depth-tested at the far
     // plane so it can only brighten open sky.
     const strength = 0.11 * this.look.shafts * shaftQuality * (0.35 + 0.65 * lowSun) * above;
-    this.godRays.setColor(this._c.copy(this.key.sunHalo).multiplyScalar(0.5));
+    // Reddened by the same airmass as the disc, so the veiling glare in the air
+    // is the same colour as the sun that is causing it.
+    this.godRays.setColor(
+      this._c.copy(this.key.sunHalo).multiply(this.airmassExtinction(this._ext)).multiplyScalar(0.6),
+    );
     this.godRays.update(dt, ctx.camera, this.sunDirection, strength);
   }
 
@@ -389,31 +401,48 @@ export class SkySystem implements System {
 
   /** Feed the shared fog uniforms so the city dissolves into this exact sky.
    *
-   *  The three in-scatter colours come from `aerialForElevation` — literal
-   *  linear triples authored in aerialPerspective.ts — NOT from the sky
-   *  keyframe. Deriving them from the keyframe meant multiplying an already
-   *  magenta band by an already violet tint, which annihilated the green
-   *  channel and turned the whole city into one flat lilac sheet. Airlight is
-   *  Rayleigh-dominated and Rayleigh is greener than it is red; that is not
-   *  something the dome's appearance colours can be talked into. */
+   *  MIRROR, DO NOT RE-AUTHOR. Every band below is the SAME Color object the
+   *  dome's own uniform is pointing at, copied component-wise into the shared
+   *  plain-object payload. The fog shader then runs the identical
+   *  `skBandRadiance` on the identical values, so fogged geometry and open sky
+   *  are the same function of the same argument and converge at the horizon by
+   *  construction.
+   *
+   *  There used to be a separate hand-authored table of in-scatter triples
+   *  here. It cannot work: two independent answers to "what colour is the sky
+   *  in direction d" always disagree somewhere, and they disagree most visibly
+   *  exactly where the two meet — which is what put a razor-straight full-width
+   *  hue step along the horizon line. */
   private refreshAerial(): void {
     const a = aerialForElevation(this.angles.elevationDeg);
-    const m = this.look.skyMul;
-    // Grey weather washes the tint out but does not change its hue balance.
-    const ds = this.look.desaturate;
-    const put = (t: { x: number; y: number; z: number }, c: [number, number, number]): void => {
-      const y = c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722;
-      t.x = (c[0] + (y * 0.96 - c[0]) * ds) * m;
-      t.y = (c[1] + (y * 0.96 - c[1]) * ds) * m;
-      t.z = (c[2] + (y * 1.14 - c[2]) * ds) * m;
+    const k = this.key;
+
+    const put = (t: { x: number; y: number; z: number }, c: THREE.Color): void => {
+      t.x = c.r;
+      t.y = c.g;
+      t.z = c.b;
     };
-    put(AerialUniforms.sunCol, a.sun);
-    put(AerialUniforms.awayCol, a.away);
-    put(AerialUniforms.zenCol, a.zen);
+    put(AerialUniforms.bHorizon, k.horizon);
+    put(AerialUniforms.bLow, k.low);
+    put(AerialUniforms.bMid, k.mid);
+    put(AerialUniforms.bHigh, k.high);
+    put(AerialUniforms.bZenith, k.zenith);
+    put(AerialUniforms.bAway, k.away);
+    put(AerialUniforms.bToward, k.toward);
+    put(AerialUniforms.bGround, k.groundHaze);
+
+    // The halo the shared function uses for its solar veil has to be reddened
+    // by the same airmass the dome shader applies, or the far end of a
+    // boulevard glows a different colour from the sky directly above it.
+    this._c.copy(k.sunHalo).multiply(this.airmassExtinction(this._ext));
+    put(AerialUniforms.bHalo, this._c);
 
     AerialUniforms.sunDir.x = this.sunDirection.x;
     AerialUniforms.sunDir.y = this.sunDirection.y;
     AerialUniforms.sunDir.z = this.sunDirection.z;
+    const azLen = Math.hypot(this.sunDirection.x, this.sunDirection.z) || 1;
+    AerialUniforms.sunAz.x = this.sunDirection.x / azLen;
+    AerialUniforms.sunAz.y = this.sunDirection.z / azLen;
 
     AerialUniforms.params.x = a.density * this.look.fogMul;
     // Steeper height falloff: the haze is a street-level phenomenon, so
@@ -421,22 +450,38 @@ export class SkySystem implements System {
     AerialUniforms.params.y = 0.0115;
     AerialUniforms.params.z = 0.70;
     // The Mie lobe peaks near 1.75 at cos = 1, so this weight is effectively
-    // doubling the in-scatter down-sun. Halved.
-    AerialUniforms.params.w = 0.24 * this.look.shafts + 0.06;
+    // doubling the in-scatter down-sun. Kept small.
+    AerialUniforms.params.w = 0.10 * this.look.shafts + 0.03;
     AerialUniforms.params2.x = 26;
-    AerialUniforms.params2.y = 0.94;
+    /* Max opacity has to be essentially 1. This is what actually closes the
+     * seam: at 0.94 a surface at infinite distance still showed 6% of its own
+     * albedo against 0% for the sky one pixel above it, which is a visible
+     * step all by itself even once the colours agree. */
+    AerialUniforms.params2.y = 0.998;
+    AerialUniforms.params2.z = k.haze * this.look.hazeMul;
+    AerialUniforms.params2.w = this.look.skyMul;
 
     // Keep the legacy fog colour roughly right for anything that falls back.
     const fog = this.ctx.scene.fog as THREE.FogExp2 | null;
     if (fog) {
-      this._fogNear.setRGB(
-        (a.sun[0] + a.away[0]) * 0.5 * m,
-        (a.sun[1] + a.away[1]) * 0.5 * m,
-        (a.sun[2] + a.away[2]) * 0.5 * m,
-      );
+      this._fogNear.copy(k.low).lerp(k.mid, 0.5).multiplyScalar(this.look.skyMul);
       fog.color.copy(this._fogNear);
       fog.density = 0.0009 * this.look.fogMul;
     }
+  }
+
+  private _ext = new THREE.Color();
+
+  /** CPU mirror of `skAirmassExtinction` in sky/skyBands.ts. Keep the two in
+   *  step — the dome and the fog must redden by the same amount. */
+  private airmassExtinction(out: THREE.Color): THREE.Color {
+    const airmass = 1 / Math.max(this.sunDirection.y, 0.025);
+    const t = (airmass - 1) * 0.075;
+    return out.setRGB(
+      Math.exp(-0.55 * t),
+      Math.exp(-1.80 * t),
+      Math.exp(-3.60 * t),
+    );
   }
 
   dispose(): void {

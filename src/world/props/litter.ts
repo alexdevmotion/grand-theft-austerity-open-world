@@ -32,9 +32,15 @@ export function printedLitter(
   for (let i = 0; i < count; i++) {
     const a = rng.range(0, Math.PI * 2);
     const r = Math.sqrt(rng.next()) * radius;
-    const w = rng.range(0.22, 0.46);
-    // Newspapers open out wider than they are tall; flyers are near-square.
-    const d = w * rng.range(0.62, 1.35);
+    /*
+      * SIZED AGAINST A 1.8 M PERSON. A folded A3 newspaper is 297 mm across,
+      * an A5 flyer 148 mm. The previous 220-460 mm cards were A2 posters lying
+      * in the road: at street-camera height they read as big flat white
+      * rectangles rather than as litter, and 77,000 of them carpeted every
+      * surface in the city.
+      */
+     const w = rng.range(0.11, 0.26);
+     const d = w * rng.range(0.62, 1.35);
     panels.addFlat(
       x + Math.cos(a) * r,
       y + 0.004 + (i % 4) * 0.0015,

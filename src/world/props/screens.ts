@@ -13,7 +13,7 @@
  */
 
 import * as THREE from 'three';
-import { Palette } from '../../artDirection';
+import { PAL } from '../../render/materials';
 
 const W = 1024;
 const H = 512;
@@ -305,4 +305,4 @@ export class BroadcastScreens {
 }
 
 /** Colour of the spill a screen throws onto the facade around it. */
-export const SCREEN_SPILL = Palette.builderMagenta;
+export const SCREEN_SPILL = PAL.builderMagenta;

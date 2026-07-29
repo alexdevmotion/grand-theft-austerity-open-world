@@ -611,7 +611,7 @@ const ROAD_CHROMA = 0.62;
  * which is what makes a west-facing facade a full stop and a half above its own
  * north face — the split that gives the city form.
  */
-const SUN_GAIN = 2.45;
+const SUN_GAIN = 2.05;
 /**
  * The IBL is a REFLECTION term. At 2.15 it was the key light and the sun was a
  * rounding error; the city additionally scales it by `envMapIntensity` 0.28-0.35
@@ -620,7 +620,7 @@ const SUN_GAIN = 2.45;
  */
 const ENV_GAIN = 0.8;
 /** The blue fill. Unlike the IBL this lands at full strength on everything. */
-const HEMI_GAIN = 0.62;
+const HEMI_GAIN = 0.44;
 
 /** Minimum shadow-casting elevation. See LightingSystem.keyDirection. */
 const KEY_MIN_ELEVATION_DEG = 8.0;

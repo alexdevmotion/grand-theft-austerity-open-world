@@ -8,7 +8,8 @@
  */
 
 import * as THREE from 'three';
-import { Palette, WorldScale } from '../../artDirection';
+import { WorldScale } from '../../artDirection';
+import { PAL, srgb } from '../../render/materials';
 import type { Rng } from '../../core/rng';
 import type { DistrictKind } from '../../core/services';
 import { DetailBuilder, FacadeBuilder, SurfaceBuilder, Surf } from './builders';
@@ -98,12 +99,12 @@ export function blockBounds(i: number, j: number): BlockBounds {
   };
 }
 
-const STEEL = new THREE.Color(0x2a2830).convertSRGBToLinear();
-const RAIL = new THREE.Color(0x6e6a68).convertSRGBToLinear();
-const MAST = new THREE.Color(0x39424a).convertSRGBToLinear();
-const WIRE = new THREE.Color(0x1a1a20).convertSRGBToLinear();
-const DRAIN = new THREE.Color(0x151318).convertSRGBToLinear();
-const SODIUM = Palette.sodiumLamp;
+const STEEL = srgb(0x2a2830);
+const RAIL = srgb(0x8b8580);
+const MAST = srgb(0x39424a);
+const WIRE = srgb(0x1a1a20);
+const DRAIN = srgb(0x151318);
+const SODIUM = PAL.sodiumLamp;
 
 export interface RoadBuildOptions {
   sink: ChunkSink;

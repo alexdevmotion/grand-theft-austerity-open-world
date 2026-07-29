@@ -57,16 +57,32 @@ import { QUALITY, type Quality } from './renderer';
  * (p50 50, mean 66) across both a street-level and a skyline framing — a
  * single framing is not enough, because the two disagree by a stop.
  */
-const EXPOSURE = Grade.exposure * 1.76;
 /*
- * Only genuinely hot things bloom — sun, sky rip, window emissives. The
- * threshold sits high on purpose: a dusk city is full of moderately bright
- * surfaces, and a low threshold turns the whole frame into haze and destroys
- * the very contrast the reference depends on. Intensity is correspondingly
- * generous so the things that DO cross the threshold really glow.
+ * RECALIBRATED when the exposure shoulder changed shape. The old
+ * `c / (1 + c * 1.1)` divided EVERY value, not just highlights: a mid-tone at
+ * 0.35 came out at 0.25, a 0.5 stop reduction applied across the whole frame,
+ * and the 1.76 here existed to pay that back. The shoulder that replaced it
+ * leaves everything below 0.72 untouched, so keeping 1.76 double-counted the
+ * compensation and blew the frame out — measured p50 67 against the
+ * reference's 50, with the entire city sitting in pale peach.
  */
-const BLOOM_THRESHOLD = Grade.bloomThreshold + 0.20;
-const BLOOM_INTENSITY = Grade.bloomIntensity * 1.15;
+const EXPOSURE = Grade.exposure * 1.38;
+/*
+ * Only genuinely hot things bloom — sun disc, horizon rip, cloud rims, window
+ * emissives. A dusk city is full of moderately bright surfaces and a low
+ * threshold turns the whole frame into haze, destroying the very contrast the
+ * reference depends on.
+ *
+ * THIS NUMBER USED TO BE UNREACHABLE. At 0.92 it sat ABOVE the 0.909 hard
+ * ceiling the old exposure rolloff imposed on every pixel in the game, so
+ * nothing ever crossed it fully and the bloom pass contributed almost nothing.
+ * Now that the exposure shoulder preserves real HDR headroom (ceiling ~21
+ * linear, sun disc landing near 14), the threshold can sit meaningfully above
+ * where lit architecture lands and BELOW where the sun and the rip land — so
+ * the bloom keys off the sun, which is what it is for.
+ */
+const BLOOM_THRESHOLD = 1.05;
+const BLOOM_INTENSITY = Grade.bloomIntensity * 1.95;
 
 /* ------------------------------------------------------------------ */
 /* Wet-street screen-space reflection                                  */
@@ -257,7 +273,10 @@ export class WetReflectionEffect extends Effect {
         ['uThickness', new THREE.Uniform(1.6)],
         // Linear ceiling on the mirrored radiance. The sun smear must peak
         // below 1.0 or it clips to white and loses the orange entirely.
-        ['uPeak', new THREE.Uniform(0.85)],
+        // Lowered when the sky gained real HDR: the dome's horizon rip is now
+        // several times brighter than it was, and mirroring that at the old
+        // ceiling turned every wet surface into a sheet of white.
+        ['uPeak', new THREE.Uniform(0.72)],
       ]),
     });
     this.camera = camera;
@@ -571,7 +590,7 @@ export class PostFXSystem implements System, RenderService {
       intensity: BLOOM_INTENSITY,
       luminanceThreshold: BLOOM_THRESHOLD,
       luminanceSmoothing: Grade.bloomSmoothing,
-      radius: Grade.bloomRadius,
+      radius: 0.86,
       mipmapBlur: true,
       kernelSize: KernelSize.LARGE,
     });

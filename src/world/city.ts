@@ -34,6 +34,7 @@ import {
 } from '../core/services';
 import { Rng } from '../core/rng';
 import { QUALITY, detectQuality, type Quality } from '../render/renderer';
+import { srgb } from '../render/materials';
 
 import { DetailBuilder, FacadeBuilder, SurfaceBuilder } from './city/builders';
 import { createCityMaterials, type CityMaterials } from './city/materials';
@@ -597,8 +598,8 @@ export class CitySystem implements System, CityService {
 /* helpers                                                             */
 /* ------------------------------------------------------------------ */
 
-const PURPLE = new THREE.Color(0x7b3fd4).convertSRGBToLinear();
-const MAGENTA = new THREE.Color(0xc04ad0).convertSRGBToLinear();
+const PURPLE = srgb(0x7b3fd4);
+const MAGENTA = srgb(0xc04ad0);
 
 function isLandmarkVoid(x: number, z: number): boolean {
   for (const v of LANDMARK_VOIDS) {

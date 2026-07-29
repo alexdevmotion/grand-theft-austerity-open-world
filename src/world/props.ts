@@ -36,7 +36,8 @@
 import * as THREE from 'three';
 import type { GameContext, System } from '../core/engine';
 import { Rng } from '../core/rng';
-import { Palette, WorldScale } from '../artDirection';
+import { WorldScale } from '../artDirection';
+import { PAL } from '../render/materials';
 import { Services, type CityService, type DistrictKind } from '../core/services';
 import { QUALITY, detectQuality, type Quality } from '../render/renderer';
 
@@ -325,14 +326,14 @@ export class PropsSystem implements System {
       makeAtlasMaterial(fasciaTex, { emissive: true, emissiveIntensity: 4.4, roughness: 0.42, key: 'fascia' }),
       makeAtlasMaterial(posterTex, { emissive: true, emissiveIntensity: 0.16, roughness: 0.86, key: 'poster' }),
       // Litter is the same print, soaked: darker, rougher, no glow.
-      makeAtlasMaterial(posterTex, { roughness: 0.55, key: 'litter' }),
+      makeAtlasMaterial(posterTex, { roughness: 0.38, key: 'litter' }),
       // Sign faces: retroreflective sheeting, cut out so a STOP is an octagon
       // and a give-way is a triangle rather than a picture on a square.
       makeAtlasMaterial(signTex, {
         roughness: 0.25, key: 'roadsign', alphaTest: 0.45, emissive: true, emissiveIntensity: 0.14,
       }),
     ];
-    (this.atlasMats[2] as THREE.MeshStandardMaterial).color.setRGB(0.55, 0.55, 0.58);
+    (this.atlasMats[2] as THREE.MeshStandardMaterial).color.setRGB(0.26, 0.25, 0.30);
   }
 
   /* ---------------------------------------------------------------- */
@@ -398,8 +399,8 @@ export class PropsSystem implements System {
       const hy = WALK_Y + (ed.rank === 2 ? 9.4 : ed.rank === 1 ? 8.4 : 7.2) + 0.6;
       // Pool radius tracks the street: a 42 m boulevard needs a 14 m pool or
       // the carriageway between the two kerb lines stays pitch dark.
-      const poolR = ed.rank === 2 ? 14.5 : ed.rank === 1 ? 11.0 : 7.5;
-      this.pools.add(hx, POOL_Y, hz, poolR, Palette.sodiumLamp, ed.rank === 0 ? 1.0 : 1.35);
+      const poolR = ed.rank === 2 ? 8.5 : ed.rank === 1 ? 6.8 : 5.0;
+      this.pools.add(hx, POOL_Y, hz, poolR, PAL.sodiumLamp, ed.rank === 0 ? 0.85 : 1.05);
       // THE WET-ROAD SMEAR. A round pool under a lamp reads as damp tarmac; the
       // reference frame's road is a mirror, and a mirror turns every sodium
       // head into a 25 m vertical streak running down the carriageway toward
@@ -412,16 +413,16 @@ export class PropsSystem implements System {
       const outer = road * (ed.rank === 2 ? 0.34 : 0.28);
       this.pools.addStreak(
         hx + ed.ox * outer, POOL_Y - 0.005, hz + ed.oz * outer,
-        poolR * 3.4, poolR * 0.62, tanX, tanZ, Palette.sodiumLamp, 0.5,
+        poolR * 3.0, poolR * 0.5, tanX, tanZ, PAL.sodiumLamp, 0.34,
       );
       this.pools.addStreak(
         hx + ed.ox * 0.6, POOL_Y - 0.004, hz + ed.oz * 0.6,
-        poolR * 2.1, poolR * 0.34, tanX, tanZ, Palette.sodiumLamp, 0.42,
+        poolR * 1.9, poolR * 0.26, tanX, tanZ, PAL.sodiumLamp, 0.30,
       );
-      this.flares.add(hx, hy - 0.03, hz, 1.5, Palette.sodiumLamp, 1.35);
+      this.flares.add(hx, hy - 0.03, hz, 0.5, PAL.sodiumLamp, 1.1);
       this.lamps.register({
         x: hx, y: hy - 0.4, z: hz,
-        color: Palette.sodiumLamp.clone(), intensity: 26, distance: 24,
+        color: PAL.sodiumLamp.clone(), intensity: 26, distance: 24,
       });
     }
 
@@ -456,11 +457,11 @@ export class PropsSystem implements System {
           break;
         case 'news':
           newsStand(b, px, pz, ed.ox, ed.oz, rng);
-          this.pools.add(px + ed.ox * 0.7, POOL_Y, pz + ed.oz * 0.7, 3.4, Palette.sodiumLamp, 0.4);
+          this.pools.add(px + ed.ox * 0.7, POOL_Y, pz + ed.oz * 0.7, 3.4, PAL.sodiumLamp, 0.4);
           break;
         case 'phone':
           phoneBox(b, px, pz, ed.ox, ed.oz);
-          this.flares.add(px, WALK_Y + 2.1, pz, 0.7, Palette.screenBlue, 0.5);
+          this.flares.add(px, WALK_Y + 2.1, pz, 0.7, PAL.screenBlue, 0.5);
           break;
         case 'cabinet':
           utilityCabinet(b, px, pz, ed.ox, ed.oz, rng);
@@ -493,11 +494,11 @@ export class PropsSystem implements System {
         switch (kind) {
           case 'shelter':
             busShelter(bf, px, pz, ed.ox, ed.oz, rng);
-            this.pools.add(px + ed.ox * 1.4, POOL_Y, pz + ed.oz * 1.4, 7.5, Palette.sodiumLamp, 0.6);
-            this.flares.add(px, WALK_Y + 2.4, pz, 1.0, Palette.sodiumLamp, 0.6);
+            this.pools.add(px + ed.ox * 1.4, POOL_Y, pz + ed.oz * 1.4, 7.5, PAL.sodiumLamp, 0.6);
+            this.flares.add(px, WALK_Y + 2.4, pz, 1.0, PAL.sodiumLamp, 0.6);
             this.lamps.register({
               x: px, y: WALK_Y + 2.3, z: pz,
-              color: Palette.sodiumLamp.clone(), intensity: 11, distance: 15,
+              color: PAL.sodiumLamp.clone(), intensity: 11, distance: 15,
             });
             // People wait, and they drop things.
             debris(bn, px + ed.ox * 1.2, pz + ed.oz * 1.2, WALK_Y, 2.4, 7, rng);
@@ -505,18 +506,18 @@ export class PropsSystem implements System {
             break;
           case 'kiosk':
             kiosk(bf, px, pz, ed.ox, ed.oz, rng);
-            this.pools.add(px + ed.ox * 2.0, POOL_Y, pz + ed.oz * 2.0, 8.0, Palette.builderMagenta, 0.7);
-            this.flares.add(px + ed.ox * 1.2, WALK_Y + 2.45, pz + ed.oz * 1.2, 1.3, Palette.neonPink, 0.9);
+            this.pools.add(px + ed.ox * 2.0, POOL_Y, pz + ed.oz * 2.0, 8.0, PAL.builderMagenta, 0.7);
+            this.flares.add(px + ed.ox * 1.2, WALK_Y + 2.45, pz + ed.oz * 1.2, 1.3, PAL.neonPink, 0.9);
             this.lamps.register({
               x: px + ed.ox * 1.3, y: WALK_Y + 2.2, z: pz + ed.oz * 1.3,
-              color: Palette.builderMagenta.clone(), intensity: 14, distance: 16,
+              color: PAL.builderMagenta.clone(), intensity: 14, distance: 16,
             });
             debris(bn, px + ed.ox * 2.0, pz + ed.oz * 2.0, WALK_Y, 3.0, 9, rng);
             break;
           case 'stall':
             marketStall(bf, px, pz, ed.ox, ed.oz, rng);
-            this.pools.add(px, POOL_Y, pz, 5.5, Palette.sodiumLamp, 0.55);
-            this.flares.add(px, WALK_Y + 2.1, pz, 0.9, Palette.sodiumLamp, 1.0);
+            this.pools.add(px, POOL_Y, pz, 5.5, PAL.sodiumLamp, 0.55);
+            this.flares.add(px, WALK_Y + 2.1, pz, 0.9, PAL.sodiumLamp, 1.0);
             debris(bn, px, pz, WALK_Y, 2.6, 8, rng);
             break;
           case 'planters': {
@@ -581,8 +582,8 @@ export class PropsSystem implements System {
           break;
         case 'atm':
           atm(b, wx, wz, ed.ox, ed.oz);
-          this.pools.add(wx + ed.ox * 1.0, WALK_Y + 0.04, wz + ed.oz * 1.0, 4.0, Palette.screenBlue, 0.5);
-          this.flares.add(wx + ed.ox * 0.2, WALK_Y + 1.7, wz + ed.oz * 0.2, 0.55, Palette.screenBlue, 0.6);
+          this.pools.add(wx + ed.ox * 1.0, WALK_Y + 0.04, wz + ed.oz * 1.0, 4.0, PAL.screenBlue, 0.5);
+          this.flares.add(wx + ed.ox * 0.2, WALK_Y + 1.7, wz + ed.oz * 0.2, 0.55, PAL.screenBlue, 0.6);
           break;
         default:
           break;
@@ -601,15 +602,15 @@ export class PropsSystem implements System {
       const t = (n + 0.5) * (len / Math.max(1, leafRuns));
       const [gx, gz] = P(t, 0.35);
       const b = this.near(gx, gz);
-      leafLitter(b, gx, gz, 2.9, 9 + rng.int(0, 7), rng, WALK_Y);
+      leafLitter(b, gx, gz, 2.9, 5 + rng.int(0, 4), rng, WALK_Y);
       if (rng.bool(0.5)) debris(b, gx, gz, WALK_Y, 2.2, 4, rng);
-      printedLitter(this.litterPanels, gx + ed.ox * 0.9, gz + ed.oz * 0.9, POOL_Y - 0.06, 2.8, 3 + rng.int(0, 4), rng);
+      printedLitter(this.litterPanels, gx + ed.ox * 0.9, gz + ed.oz * 0.9, POOL_Y - 0.06, 2.8, 1 + rng.int(0, 2), rng);
       // Out on the carriageway itself, where nothing else ever lands.
       if (rng.bool(0.55)) {
         const out = 1.5 + rng.range(0, ROAD_WIDTH[ed.rank] * 0.4);
         const [rx, rz] = P(t + rng.range(-4, 4), -out);
-        printedLitter(this.litterPanels, rx, rz, POOL_Y - 0.075, 3.2, 2 + rng.int(0, 4), rng);
-        leafLitter(this.near(rx, rz), rx, rz, 3.0, 5 + rng.int(0, 6), rng, 0.095);
+        printedLitter(this.litterPanels, rx, rz, POOL_Y - 0.075, 3.2, 1 + rng.int(0, 2), rng);
+        leafLitter(this.near(rx, rz), rx, rz, 3.0, 3 + rng.int(0, 3), rng, 0.095);
       }
     }
 
@@ -670,7 +671,7 @@ export class PropsSystem implements System {
         this.fascia.add(wx + ed.ox * 0.16, sy, wz + ed.oz * 0.16, sw, sw * 0.26,
           ed.ox, ed.oz, rng.int(0, FASCIA_ROWS));
         // Shopfront glazing below it, lit from inside.
-        const glow = rng.weighted([Palette.sodiumLamp, Palette.builderMagenta, Palette.screenBlue], [4, 2, 1]);
+        const glow = rng.weighted([PAL.sodiumLamp, PAL.builderMagenta, PAL.screenBlue], [4, 2, 1]);
         bn.box(wx + ed.ox * 0.08, WALK_Y + 1.7, wz + ed.oz * 0.08, sw * 0.92, 2.6, 0.1,
           Math.atan2(ed.ox, ed.oz),
           { color: C.glassPale, mr: [0.4, 0.12], emissive: [glow.r * 1.4, glow.g * 1.4, glow.b * 1.4] });
@@ -740,11 +741,11 @@ export class PropsSystem implements System {
         0.22, h + 0.9, 0.3, yaw, { color: C.steel, mr: [0.8, 0.35] });
     }
     // The screen throws magenta onto the pavement below it.
-    this.pools.add(x + nx * (w * 0.4), POOL_Y, z + nz * (w * 0.4), w * 1.5, Palette.builderMagenta, 0.7);
-    this.flares.add(x + nx * 0.4, y, z + nz * 0.4, w * 0.42, Palette.builderMagenta, 0.32);
+    this.pools.add(x + nx * (w * 0.4), POOL_Y, z + nz * (w * 0.4), w * 1.5, PAL.builderMagenta, 0.7);
+    this.flares.add(x + nx * 0.4, y, z + nz * 0.4, w * 0.42, PAL.builderMagenta, 0.32);
     this.lamps.register({
       x: x + nx * 2.5, y: y - h * 0.3, z: z + nz * 2.5,
-      color: Palette.builderMagenta.clone(), intensity: 26 + rng.range(0, 10), distance: 30,
+      color: PAL.builderMagenta.clone(), intensity: 26 + rng.range(0, 10), distance: 30,
     });
   }
 
@@ -864,8 +865,8 @@ export class PropsSystem implements System {
     for (let k = 0; k < 2; k++) {
       const [wx, wz] = P(t0 + k * panels * 2.1, inset);
       warningLamp(bn, wx, WALK_Y, wz);
-      this.flares.add(wx, WALK_Y + 1.0, wz, 0.5, Palette.sodiumLamp, 0.8);
-      this.pools.add(wx, POOL_Y, wz, 3.4, Palette.sodiumLamp, 0.4);
+      this.flares.add(wx, WALK_Y + 1.0, wz, 0.5, PAL.sodiumLamp, 0.8);
+      this.pools.add(wx, POOL_Y, wz, 3.4, PAL.sodiumLamp, 0.4);
     }
     // Jersey barriers protecting the hole from the carriageway.
     if (rng.bool(0.45)) {
@@ -924,7 +925,7 @@ export class PropsSystem implements System {
               const fz = alongX ? 0 : -sz;
               trafficLight(this.far(px, pz), px, pz, fx, fz, rng, mast && corner < 2);
               this.flares.add(px + fx * 0.3, WALK_Y + (mast ? 4.9 : 2.7), pz + fz * 0.3,
-                0.42, Palette.sodiumLamp, 0.35);
+                0.42, PAL.sodiumLamp, 0.35);
               corner++;
             }
           }
@@ -1002,15 +1003,15 @@ export class PropsSystem implements System {
       const haveR = !this.blocked(rx, rz);
       if (haveL) {
         tractionPole(this.far(lx, lz), lx, lz, -px, -pz, rng);
-        this.flares.add(lx - px * 3.0, WALK_Y + 9.6, lz - pz * 3.0, 1.7, Palette.sodiumLamp, 1.5);
-        this.pools.add(lx - px * 3.0, POOL_Y, lz - pz * 3.0, 11.0, Palette.sodiumLamp, 1.25);
+        this.flares.add(lx - px * 3.0, WALK_Y + 9.6, lz - pz * 3.0, 0.6, PAL.sodiumLamp, 1.2);
+        this.pools.add(lx - px * 3.0, POOL_Y, lz - pz * 3.0, 7.5, PAL.sodiumLamp, 0.95);
         // Traction poles straddle the running lanes, so their smear is the
         // longest thing on the road.
         this.pools.addStreak(lx - px * (halfRoad * 0.55), POOL_Y - 0.005, lz - pz * (halfRoad * 0.55),
-          40, 7.5, ux, uz, Palette.sodiumLamp, 0.55);
+          26, 4.5, ux, uz, PAL.sodiumLamp, 0.34);
         this.lamps.register({
           x: lx - px * 3.0, y: WALK_Y + 9.2, z: lz - pz * 3.0,
-          color: Palette.sodiumLamp.clone(), intensity: 34, distance: 30,
+          color: PAL.sodiumLamp.clone(), intensity: 34, distance: 30,
         });
       }
       if (haveR && rng.bool(0.55)) {
@@ -1065,8 +1066,8 @@ export class PropsSystem implements System {
           stoneBollard(bn, px, pz);
         } else {
           kiosk(bf, px, pz, -Math.cos(a), -Math.sin(a), rng);
-          this.pools.add(px, POOL_Y, pz, 8, Palette.builderMagenta, 0.7);
-          this.flares.add(px, WALK_Y + 2.4, pz, 1.2, Palette.neonPink, 0.9);
+          this.pools.add(px, POOL_Y, pz, 8, PAL.builderMagenta, 0.7);
+          this.flares.add(px, WALK_Y + 2.4, pz, 1.2, PAL.neonPink, 0.9);
         }
         if (rng.bool(0.4)) printedLitter(this.litterPanels, px, pz, 0.18, 3.0, 4, rng);
       }
@@ -1112,9 +1113,9 @@ export class PropsSystem implements System {
     skip(bn, bx + 11, 0.18, runZ + 2.2, 0.24, rng);
     spoilHeap(bn, bx - 4, 0.18, runZ + 1.8, 1.6, rng);
     warningLamp(bn, bx - 12, 0.18, runZ - 0.4);
-    this.flares.add(bx - 12, 1.15, runZ - 0.4, 0.55, Palette.sodiumLamp, 1.0);
+    this.flares.add(bx - 12, 1.15, runZ - 0.4, 0.55, PAL.sodiumLamp, 1.0);
     warningLamp(bn, bx + 8, 0.18, runZ - 0.4);
-    this.flares.add(bx + 8, 1.15, runZ - 0.4, 0.55, Palette.sodiumLamp, 1.0);
+    this.flares.add(bx + 8, 1.15, runZ - 0.4, 0.55, PAL.sodiumLamp, 1.0);
     // A second, shorter run raking away to the west so the barrier reads in
     // depth rather than as one flat picket fence.
     const bn2 = this.near(runX0 - 12, runZ + 7);
@@ -1129,13 +1130,13 @@ export class PropsSystem implements System {
 
     // Litter carpeting the foreground — the reference has newspapers all over
     // the wet paving, so this is deliberately heavy.
-    printedLitter(this.litterPanels, bx - 8, runZ - 5, 0.02, 11, 78, rng);
-    printedLitter(this.litterPanels, bx - 30, runZ - 3, 0.02, 9, 54, rng);
-    printedLitter(this.litterPanels, bx + 14, runZ - 4, 0.02, 8, 38, rng);
+    printedLitter(this.litterPanels, bx - 8, runZ - 5, 0.02, 11, 26, rng);
+    printedLitter(this.litterPanels, bx - 30, runZ - 3, 0.02, 9, 18, rng);
+    printedLitter(this.litterPanels, bx + 14, runZ - 4, 0.02, 8, 13, rng);
     debris(this.near(bx - 10, runZ - 5), bx - 10, runZ - 5, 0.02, 7, 34, rng);
     debris(this.near(bx - 28, runZ - 3), bx - 28, runZ - 3, 0.02, 6, 22, rng);
-    leafLitter(this.near(bx - 14, runZ + 1), bx - 14, runZ + 1, 9, 90, rng, 0.19);
-    leafLitter(this.near(bx + 12, runZ - 2), bx + 12, runZ - 2, 7, 54, rng, 0.19);
+    leafLitter(this.near(bx - 14, runZ + 1), bx - 14, runZ + 1, 9, 40, rng, 0.19);
+    leafLitter(this.near(bx + 12, runZ - 2), bx + 12, runZ - 2, 7, 24, rng, 0.19);
 
     // The APPROACH. Everything above is 30 m from the camera in the standard
     // framing; the reference's foreground — the bottom third of the frame — is
@@ -1145,8 +1146,8 @@ export class PropsSystem implements System {
     for (let k = 0; k < 16; k++) {
       const ax = bx - 44 + rng.range(0, 60);
       const az = -34 + rng.range(0, 40);
-      printedLitter(this.litterPanels, ax, az, 0.095, 4.5, 7 + rng.int(0, 8), rng);
-      leafLitter(this.near(ax, az), ax, az, 4.0, 12 + rng.int(0, 10), rng, 0.095);
+      printedLitter(this.litterPanels, ax, az, 0.095, 4.5, 2 + rng.int(0, 3), rng);
+      leafLitter(this.near(ax, az), ax, az, 4.0, 5 + rng.int(0, 5), rng, 0.095);
       if (rng.bool(0.4)) debris(this.near(ax, az), ax, az, 0.095, 3.0, 5, rng);
     }
     // Two more roadwork clusters up the approach so the barrier run reads as
@@ -1160,8 +1161,8 @@ export class PropsSystem implements System {
       }
       spoilHeap(bnA, cx2 + panels, 0.02, cz2 + 1.2, 1.3, rng);
       warningLamp(bnA, cx2 - 0.6, 0.02, cz2 - 0.5);
-      this.flares.add(cx2 - 0.6, 1.0, cz2 - 0.5, 0.5, Palette.sodiumLamp, 1.0);
-      this.pools.add(cx2 + panels, POOL_Y, cz2, 6.5, Palette.sodiumLamp, 0.45);
+      this.flares.add(cx2 - 0.6, 1.0, cz2 - 0.5, 0.5, PAL.sodiumLamp, 1.0);
+      this.pools.add(cx2 + panels, POOL_Y, cz2, 6.5, PAL.sodiumLamp, 0.45);
     }
 
     // Tricolour on the tower's south-west corner, and the hero screens.
@@ -1178,11 +1179,11 @@ export class PropsSystem implements System {
     const px = bx - 34;
     const pz = 4;
     tractionPole(bf, px, pz, 1, 0, rng);
-    this.flares.add(px + 3.0, WIRE_Y + 3.6, pz, 1.9, Palette.sodiumLamp, 1.8);
-    this.pools.add(px + 3.0, POOL_Y, pz, 12, Palette.sodiumLamp, 1.35);
+    this.flares.add(px + 3.0, WIRE_Y + 3.6, pz, 0.65, PAL.sodiumLamp, 1.3);
+    this.pools.add(px + 3.0, POOL_Y, pz, 8, PAL.sodiumLamp, 1.0);
     this.lamps.register({
       x: px + 3.0, y: WIRE_Y + 3.2, z: pz,
-      color: Palette.sodiumLamp.clone(), intensity: 40, distance: 34,
+      color: PAL.sodiumLamp.clone(), intensity: 40, distance: 34,
     });
     contactWires(bf, px + 6, pz - 60, px + 6, pz + 14, 0.62, rng);
   }
@@ -1193,7 +1194,17 @@ export class PropsSystem implements System {
 
   update(dt: number, ctx: GameContext): void {
     this.screens.update(dt);
-    this.leaves.update(ctx.time.elapsed, ctx.camera);
+    // The leaf field belongs to the GROUND under the camera, never to the
+    // camera itself — see the note in LeafDrift's vertex shader.
+    ctx.camera.getWorldPosition(this.camPos);
+    const g = this.city?.spatial.groundHeight(this.camPos.x, this.camPos.z);
+    this.leaves.update(ctx.time.elapsed, ctx.camera, g !== undefined && Number.isFinite(g) ? g : 0);
+
+    // Keep the foliage back-scatter locked to the real sun, so a crown lights
+    // up when you walk round it instead of glowing from a fixed direction.
+    const sky = (window as unknown as { __GTA_SKY__?: { sunDirection: THREE.Vector3 } }).__GTA_SKY__;
+    if (sky?.sunDirection) this.mats.uSunDir.value.copy(sky.sunDirection);
+
     const w = ctx.tryGet(Services.Weather);
     if (w) this.setNight(nightAmount(w.timeOfDay, w.preset === 'night'));
   }
@@ -1230,8 +1241,9 @@ export class PropsSystem implements System {
     if (Math.abs(n - this.night) < 0.004) return;
     this.night = n;
     this.mats.uNight.value = n;
-    this.flares.setGain(0.65 + n * 1.5);
-    this.lamps.setGain(0.5 + n * 1.4);
+    this.flares.setGain(0.42 + n * 1.5);
+    this.pools.setGain(0.34 + n * 0.9);
+    this.lamps.setGain(0.45 + n * 1.4);
   }
 
   /* ---------------------------------------------------------------- */

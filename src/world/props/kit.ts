@@ -19,9 +19,15 @@
  */
 
 import * as THREE from 'three';
-import { Palette } from '../../artDirection';
+import { PAL, srgb } from '../../render/materials';
 
-const lin = (hex: number): THREE.Color => new THREE.Color(hex).convertSRGBToLinear();
+/**
+ * Decoded EXACTLY once — see the colour-space note in `src/render/materials.ts`.
+ * The previous `new Color(hex).convertSRGBToLinear()` double-decoded every prop
+ * colour in the game, which is why every piece of street furniture, every tree
+ * and every litter card rendered as a black or burnt-red silhouette.
+ */
+const lin = srgb;
 
 /* ------------------------------------------------------------------ */
 /* Palette                                                             */
@@ -69,30 +75,29 @@ export const PropColor = {
   cardboard: lin(0x6f5a3e),
 
   /* signature colours pulled from art direction */
-  sodium: Palette.sodiumLamp,
-  purple: Palette.builderPurple,
-  magenta: Palette.builderMagenta,
-  screenBlue: Palette.screenBlue,
-  neon: Palette.neonPink,
-  scooter: Palette.scooterGreen,
+  sodium: PAL.sodiumLamp,
+  purple: PAL.builderPurple,
+  magenta: PAL.builderMagenta,
+  screenBlue: PAL.screenBlue,
+  neon: PAL.neonPink,
+  scooter: PAL.scooterGreen,
   /**
-   * FOLIAGE. Authored bright on purpose. Every one of these is applied to a
-   * crown that the low sun sits BEHIND, so whatever hex goes in here loses
-   * roughly a stop and a half before it reaches the frame. At the palette's
-   * nominal values (`leafOlive` 0x5d6a3a is 0.10 linear) the result was a set
-   * of near-black lumps; these sit around 2x that in linear space, which lands
-   * a backlit crown in the dark-amber band the reference frame actually has.
+   * FOLIAGE — late-autumn Bucharest. These are now decoded once, so they are
+   * roughly three times the linear value they used to reach the frame at, and
+   * a backlit crown lands in the amber band the reference actually has rather
+   * than reading as a hole punched in the sky. Translucency (see `PropOpts.trans`)
+   * carries the rest of the backlit read.
    */
-  leafAmber: lin(0xd9a256),
-  leafOlive: lin(0x8a9455),
-  leafRust: lin(0xc2732f),
-  leafGold: lin(0xf0c268),
-  leafPale: lin(0xe4d089),
-  bark: lin(0x584437),
-  roBlue: Palette.roBlue,
-  roYellow: Palette.roYellow,
-  roRed: Palette.roRed,
-  daciaYellow: Palette.daciaYellow,
+  leafAmber: lin(0xc48f43),
+  leafOlive: lin(0x77804a),
+  leafRust: lin(0xa85f28),
+  leafGold: lin(0xd8ab55),
+  leafPale: lin(0xc9b477),
+  bark: lin(0x5b4a3c),
+  roBlue: PAL.roBlue,
+  roYellow: PAL.roYellow,
+  roRed: PAL.roRed,
+  daciaYellow: PAL.daciaYellow,
 } as const;
 
 /**
@@ -132,6 +137,17 @@ export interface PropOpts {
   /** [metalness, roughness] */
   mr?: readonly [number, number];
   emissive?: number[];
+  /**
+   * TRANSLUCENCY 0..1 — how much light passes THROUGH this surface.
+   *
+   * The sun in this game sits three degrees above the horizon, so every street
+   * tree is lit from behind. A leaf is not opaque: a backlit autumn canopy is
+   * the brightest amber in the reference frame, not the darkest mass. This
+   * drives a wrapped back-scatter term in the prop shader that only fires when
+   * the viewer is looking toward the sun through the surface, which is exactly
+   * when real foliage glows.
+   */
+  trans?: number;
 }
 
 const NO_E = [0, 0, 0];
@@ -151,6 +167,7 @@ export class PropBuilder {
   readonly col: number[] = [];
   readonly mr: number[] = [];
   readonly emis: number[] = [];
+  readonly trans: number[] = [];
   readonly idx: number[] = [];
 
   get triangles(): number {
@@ -173,6 +190,7 @@ export class PropBuilder {
     this.mr.push(m[0], m[1]);
     const e = o.emissive ?? NO_E;
     this.emis.push(e[0], e[1], e[2]);
+    this.trans.push(o.trans ?? 0);
   }
 
   /** Quad with a derived normal. Winding a→b→c→d, front face CCW. */
@@ -518,6 +536,7 @@ export class PropBuilder {
     g.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3));
     g.setAttribute('aMR', new THREE.Float32BufferAttribute(this.mr, 2));
     g.setAttribute('aEmissive', new THREE.Float32BufferAttribute(this.emis, 3));
+    g.setAttribute('aTrans', new THREE.Float32BufferAttribute(this.trans, 1));
     g.setIndex(this.idx);
     g.computeBoundingSphere();
     return g;
@@ -532,29 +551,47 @@ export interface PropMaterialSet {
   solid: THREE.MeshStandardMaterial;
   /** Night ramp shared with the city: emissives lift after dusk. */
   uNight: { value: number };
+  /** World-space direction TO the sun. Drives foliage back-scatter. */
+  uSunDir: { value: THREE.Vector3 };
+  /** Linear radiance of the key light, so translucency matches the sun. */
+  uSunColor: { value: THREE.Color };
   dispose(): void;
 }
 
 const PROP_VERT_PARS = /* glsl */ `
 attribute vec2 aMR;
 attribute vec3 aEmissive;
+attribute float aTrans;
 varying vec2 vPMR;
 varying vec3 vPEmi;
+varying float vPTrans;
+varying vec3 vPWPos;
+varying vec3 vPWNrm;
 `;
 
 const PROP_VERT_MAIN = /* glsl */ `
 vPMR = aMR;
 vPEmi = aEmissive;
+vPTrans = aTrans;
+vPWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+vPWNrm = normalize(mat3(modelMatrix) * objectNormal);
 `;
 
 const PROP_FRAG_PARS = /* glsl */ `
 varying vec2 vPMR;
 varying vec3 vPEmi;
+varying float vPTrans;
+varying vec3 vPWPos;
+varying vec3 vPWNrm;
 uniform float uNight;
+uniform vec3 uPropSunDir;
+uniform vec3 uPropSunColor;
 `;
 
 export function createPropMaterials(): PropMaterialSet {
   const uNight = { value: 0 };
+  const uSunDir = { value: new THREE.Vector3(-0.95, 0.056, -0.31).normalize() };
+  const uSunColor = { value: srgb(0xffab72).multiplyScalar(2.6) };
 
   const solid = new THREE.MeshStandardMaterial({
     color: 0xffffff,
@@ -569,6 +606,8 @@ export function createPropMaterials(): PropMaterialSet {
 
   solid.onBeforeCompile = (shader) => {
     shader.uniforms.uNight = uNight;
+    shader.uniforms.uPropSunDir = uSunDir;
+    shader.uniforms.uPropSunColor = uSunColor;
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>\n${PROP_VERT_PARS}`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>\n${PROP_VERT_MAIN}`);
@@ -585,14 +624,37 @@ export function createPropMaterials(): PropMaterialSet {
       .replace(
         '#include <emissivemap_fragment>',
         '#include <emissivemap_fragment>\ntotalEmissiveRadiance = vPEmi * (1.0 + 2.2 * uNight);',
+      )
+      .replace(
+        '#include <lights_fragment_end>',
+        /* glsl */ `
+        #include <lights_fragment_end>
+        // BACK-SCATTER through thin surfaces (leaves, fabric awnings, paper).
+        // Two terms, because foliage does two things at once:
+        //   - a broad WRAPPED diffuse, so the shadow side of a crown is lit by
+        //     the sun that is behind it instead of falling to the fill alone;
+        //   - a tight forward-scatter lobe that fires when the viewer looks
+        //     along the sun ray THROUGH the canopy, which is the amber glow
+        //     that makes an autumn tree read as foliage and not as a lump.
+        if (vPTrans > 0.001) {
+          vec3 _n = normalize(vPWNrm);
+          vec3 _v = normalize(vPWPos - cameraPosition);
+          float _wrapT = max(0.0, (-dot(_n, uPropSunDir) + 0.45) / 1.45);
+          float _thru = pow(max(0.0, dot(_v, uPropSunDir)), 4.0);
+          totalEmissiveRadiance += diffuseColor.rgb * uPropSunColor * vPTrans *
+            (_wrapT * 0.34 + _thru * 0.85) * (1.0 - uNight * 0.8);
+        }
+        `,
       );
   };
-  solid.customProgramCacheKey = () => 'gta-prop-solid';
+  solid.customProgramCacheKey = () => 'gta-prop-solid-v2';
   solid.name = 'gta:props';
 
   return {
     solid,
     uNight,
+    uSunDir,
+    uSunColor,
     dispose() {
       solid.dispose();
     },

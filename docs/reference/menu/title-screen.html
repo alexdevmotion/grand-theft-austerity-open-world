@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#12051f" />
+    <title>Grand Theft Austerity — Visual Proof</title>
+    <link rel="stylesheet" href="./visual-proof.css" />
+  </head>
+  <body>
+    <main class="proof-shell">
+      <section class="title-screen" aria-label="Grand Theft Austerity title menu">
+        <div class="art" aria-hidden="true"></div>
+        <div class="color-wash" aria-hidden="true"></div>
+        <div class="grain" aria-hidden="true"></div>
+        <div class="tricolor" aria-hidden="true"></div>
+
+        <img
+          class="studio-mark"
+          src="./builderstar-mark.svg"
+          alt="Builderstar Games"
+        />
+
+        <div class="title-lockup">
+          <p class="location">BUCUREȘTI</p>
+          <h1>
+            <span>GRAND</span>
+            <span>THEFT</span>
+            <span class="austerity">AUSTERITY</span>
+          </h1>
+          <p class="tagline">TAKE BACK THE HOUSE</p>
+        </div>
+
+        <nav class="menu" aria-label="Main menu">
+          <button class="selected" data-action="start">
+            <span>START</span><small>THE LAST SERVER</small>
+          </button>
+          <button><span>CONTROLS</span></button>
+          <button><span>AUDIO</span></button>
+          <button><span>CREDITS</span></button>
+        </nav>
+
+        <aside class="crisis-preview" aria-label="Political instability">
+          <span>POLITICAL INSTABILITY</span>
+          <b aria-label="Five crisis stars">★ ★ ★ ★ ★</b>
+        </aside>
+
+        <p class="edition">A BUILDERSTAR HACKATHON PROTOTYPE</p>
+      </section>
+
+      <section class="loading-screen" aria-label="Loading screen" hidden>
+        <div class="loading-art" aria-hidden="true"></div>
+        <div class="loading-shade" aria-hidden="true"></div>
+        <div class="grain" aria-hidden="true"></div>
+        <img
+          class="loading-mark"
+          src="./builderstar-mark.svg"
+          alt="Builderstar Games"
+        />
+        <div class="loading-copy">
+          <p class="panel-index">01 / 04 — THE HOUSE UNDER SIEGE</p>
+          <h2>They closed the House.<br />They forgot about the builders.</h2>
+          <p>
+            Recover the last server. Find the bootstrapped Dacia. Keep the
+            ecosystem alive.
+          </p>
+        </div>
+        <div class="loading-footer">
+          <span id="loading-status">LOADING BUCUREȘTI...</span>
+          <div class="progress" aria-label="Loading progress">
+            <i id="progress-bar"></i>
+          </div>
+          <b id="progress-value">42%</b>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const start = document.querySelector('[data-action="start"]');
+      const title = document.querySelector(".title-screen");
+      const loading = document.querySelector(".loading-screen");
+      const bar = document.querySelector("#progress-bar");
+      const value = document.querySelector("#progress-value");
+
+      start.addEventListener("click", () => {
+        title.hidden = true;
+        loading.hidden = false;
+        let progress = 42;
+        const tick = window.setInterval(() => {
+          progress = Math.min(progress + 1, 92);
+          bar.style.width = `${progress}%`;
+          value.textContent = `${progress}%`;
+          if (progress === 92) window.clearInterval(tick);
+        }, 90);
+      });
+    </script>
+  </body>
+</html>

@@ -28,6 +28,9 @@ import { HudSystem } from './ui/hud';
 import { AudioSystem } from './audio/audioSystem';
 import { WeatherSystem } from './world/weather';
 import { DebugSystem } from './core/debug';
+import { MenuSystem } from './ui/menu/menuSystem';
+import { MinimapSystem } from './ui/map/minimapSystem';
+import { InteriorSystem } from './world/interiors/interiorSystem';
 
 export interface GameHandle {
   engine: Engine;
@@ -57,6 +60,7 @@ export async function createGame(
     .add(new WeatherSystem())             // 14
     .add(new CitySystem())                // 20
     .add(new PropsSystem())               // 30
+    .add(new InteriorSystem())            // 25
     // --- simulation ---------------------------------------------------
     .add(new VehicleSystem())             // 110
     .add(new PedSystem())                 // 120
@@ -72,6 +76,8 @@ export async function createGame(
     // --- presentation --------------------------------------------------
     .add(new AudioSystem())               // 410
     .add(new HudSystem())                 // 420
+    .add(new MinimapSystem())             // 425
+    .add(new MenuSystem())                // 430
     .add(new DebugSystem())               // 990
     .add(new PostFXSystem(quality));      // 900
 

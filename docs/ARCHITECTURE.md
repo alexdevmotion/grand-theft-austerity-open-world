@@ -105,3 +105,18 @@ docs/reference/       the visual target
 To keep parallel work conflict-free, each area has one owner at a time. Do not
 edit files outside your area; if you need a change there, note it in your
 report instead of making it.
+
+## Audio verification must be silent
+
+Automated verification renders audio but must never reach the machine's
+speakers. Always launch the browser muted:
+
+```
+agent-browser --session gta --args "--mute-audio" open "http://127.0.0.1:5273/?q=high"
+```
+
+Chrome still runs the full WebAudio graph under `--mute-audio`, so
+`AnalyserNode` taps, RMS/peak metering and spectral measurements all behave
+normally — only the output device is silenced. Verify audio by **measurement**
+(`window.__GTA_AUDIO__`) and by `OfflineAudioContext` unit tests, never by
+playing it aloud.

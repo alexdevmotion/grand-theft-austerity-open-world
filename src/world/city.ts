@@ -488,6 +488,10 @@ export class CitySystem implements System, CityService {
   /* ---------------------------------------------------------------- */
 
   update(_dt: number, ctx: GameContext): void {
+    // Foliage wind. Wrapped so the phase never loses float precision on a long
+    // session; 3600 s is an exact multiple of nothing in the gust field, but at
+    // this amplitude the discontinuity is a few millimetres of leaf.
+    this.mats.shared.uTime.value = (this.mats.shared.uTime.value + _dt) % 3600;
     const w = ctx.tryGet(Services.Weather);
     if (w) {
       this.mats.setWetness(w.wetness);

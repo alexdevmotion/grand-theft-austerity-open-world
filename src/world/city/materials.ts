@@ -290,11 +290,15 @@ Fac facadeGrammar() {
     // u restarts at 0 on every wall face, so a pier at low u lands exactly on
     // the building's vertical corner — which is where a real stone-clad core
     // or lift shaft expresses itself, and where the reference has its slab.
-    float pierW = 2.6 + 3.4 * h11(seed * 1.73);
+    float pierW = 4.0 + 4.6 * h11(seed * 1.73);
     float corner = 1.0 - smoothstep(pierW, pierW + 0.9, u);
-    // Plus whole three-bay groups elsewhere on the elevation.
+    // Plus whole three-bay groups elsewhere on the elevation. Raised from one
+    // group in three to nearly one in two: the reference's tower is roughly
+    // half stone by area, and the violet glass only reads as COLD because a
+    // large warm surface is standing next to it. Too little stone and the
+    // whole building collapses into one cold value with nothing to play off.
     float grp = floor(bi / 3.0);
-    float band3 = step(0.70, h11(grp * 7.31 + seed * 2.17 + 1.0));
+    float band3 = step(0.56, h11(grp * 7.31 + seed * 2.17 + 1.0));
     float stone = clamp(corner + band3, 0.0, 1.0);
 
     if (stone > 0.5) {
@@ -364,9 +368,23 @@ Fac facadeGrammar() {
     // and its own reflectance. Those three together are what turn a curtain
     // wall into a hundred different slices of sunset rather than one gradient.
     vec3 pid = h23(cell + seed * 3.0);
-    // The bow: a shallow pillow across the pane plus a per-pane constant tilt.
+    /*
+     * THE BOW, AND WHY IT HAS TO BE THIS BIG.
+     *
+     * A reflected ray turns by TWICE the surface normal, and the sky this game
+     * reflects goes from hot orange at the horizon to violet thirty degrees up.
+     * So a pane needs several degrees of tilt before its reflection lands in a
+     * measurably different band of that gradient. The previous authoring used
+     * a 2-degree per-pane constant, which is physically about right for real
+     * glazing and visually did nothing at all: every pane sampled the same
+     * slice of probe and the curtain wall rendered as one smooth gradient —
+     * the exact flat-rectangle read this whole grammar exists to avoid.
+     *
+     * 0.16 rad (9 degrees) of per-pane constant plus a pillow across the pane
+     * is an exaggeration, and it is the exaggeration that buys the mosaic.
+     */
     vec2 pn = vec2(um / bayW - 0.5, (vm - spandrel) / max(floorH - spandrel, 0.5) - 0.5);
-    f.tilt = (pn * (0.16 + pid.z * 0.22) + (pid.xy - 0.5) * 0.075) * inGlass;
+    f.tilt = (pn * (0.22 + pid.z * 0.30) + (pid.xy - 0.5) * 0.32) * inGlass;
 
     // DARK glass. Acceptance test from the previous pass still holds: the mean
     // luminance of the tower must sit below the mean luminance of the open sky.
@@ -392,13 +410,16 @@ Fac facadeGrammar() {
 
     f.albedo = mix(glass, spandrelCol, inSpandrel);
     f.emissive = emis * inGlass;
-    f.metal = mix(0.10, 0.72, inGlass);
+    f.metal = mix(0.10, 0.78, inGlass);
     // Per-pane roughness drift: a real facade has clean panes and dirty ones,
     // and the dirty ones blur the sunset while the clean ones mirror it. That
-    // difference is most of what makes the mosaic read.
-    f.rough = mix(0.55, 0.035 + pid.x * 0.075, inGlass);
+    // difference is most of what makes the mosaic read, so the spread is wide
+    // — a near-mirror at 0.03 against a milky 0.24 in the same elevation.
+    f.rough = mix(0.55, 0.030 + pid.x * 0.21, inGlass);
     // The pane is where the environment reflection belongs, at full strength.
-    f.env = mix(0.55, 1.6 + pid.y * 1.1, inGlass);
+    // Widened for the same reason as the tilt: panes must differ in how much
+    // sky they throw back, not only in which bit of it they throw back.
+    f.env = mix(0.55, 1.1 + pid.y * 2.3, inGlass);
     f.ao = mix(1.0, 0.9, onFrame);
 
     // Mullion caps: anodised aluminium, warm, catching the sun along its length.
@@ -421,16 +442,35 @@ Fac facadeGrammar() {
       float cut = max(course, joint);
       f.albedo *= 1.0 - 0.32 * cut;
       f.height = -0.024 * cut;
-      // Lobby glazing strip: a deep recess, so the reveal reads at street level.
+      /*
+       * THE LOBBY. In the reference you look THROUGH the ground floor into a
+       * lit room with people and furniture in it, and it glows purple. A flat
+       * emissive panel at the same brightness reads as a light box stuck to a
+       * wall; the depth comes from the interior silhouettes breaking it up and
+       * from the glazing sitting 220 mm behind its frame.
+       */
       float lobby = step(1.6, v) * step(v, groundH - 0.9);
       float pier = step(0.20, bu) * step(bu, 0.80);
       float glassBand = lobby * pier;
       f.albedo = mix(f.albedo, uGlassTint * 0.5, glassBand);
-      f.emissive += mix(uOffice, mix(uPurple, uMagenta, h11(bi + seed)), 0.45) * glassBand * 0.046 * uLitGain;
-      f.metal = mix(f.metal, 0.35, glassBand);
+      vec3 lobbyLight = mix(uOffice, mix(uPurple, uMagenta, h11(bi + seed)), 0.55);
+      vec2 lp = vec2(clamp((bu - 0.20) / 0.60, 0.0, 1.0),
+                     clamp((v - 1.6) / max(groundH - 2.5, 0.8), 0.0, 1.0));
+      float lobbyInner = officeInterior(lp, h11(bi * 5.9 + seed) * 71.0 + seed);
+      // Ceiling wash: the brightest part of any lit interior seen from outside.
+      float ceil_ = smoothstep(0.68, 0.98, lp.y);
+      f.emissive += lobbyLight * glassBand * (1.0 - lobbyInner * 0.86) * 0.085 * uLitGain;
+      f.emissive += lobbyLight * glassBand * ceil_ * 0.07 * uLitGain;
+      f.metal = mix(f.metal, 0.30, glassBand);
       f.rough = mix(f.rough, 0.11, glassBand);
       f.env = mix(f.env, 1.5, glassBand);
       f.height -= 0.22 * glassBand;
+      // Transoms across the shopfront: without them a 4 m tall glazed strip is
+      // one undivided sheet, which no real lobby ever is.
+      float lt = band(fract((v - 1.6) / 1.6) - 0.5, 0.035) * glassBand;
+      f.albedo = mix(f.albedo, uStone * 0.18, lt);
+      f.height += 0.06 * lt;
+      f.emissive *= 1.0 - lt * 0.8;
     }
     return f;
   }
@@ -492,7 +532,21 @@ Fac facadeGrammar() {
       f.rough = mix(0.72, 0.30, shopGlass);
       f.metal = mix(0.0, 0.05, shopGlass);
       vec3 sign = mix(uNeon, uSodium, sh);
-      f.emissive += sign * shopGlass * (0.05 + sh * 0.08) * uLitGain;
+      /*
+       * SHOP INTERIORS WITH DEPTH. A lit rectangle in a wall is a light box.
+       * A shop is a lit ceiling with shelving and people in front of it, and
+       * the silhouettes are what turn the glazing from a panel into a room —
+       * the same trick the upper floors use, at a scale you walk past.
+       */
+      vec2 spq = vec2(clamp((bu - 0.14) / 0.72, 0.0, 1.0),
+                      clamp((v - 0.75) / max(groundH - 2.1, 0.8), 0.0, 1.0));
+      float shopInner = officeInterior(spq, sh * 83.0 + seed);
+      f.emissive += sign * shopGlass * (1.0 - shopInner * 0.82) * (0.075 + sh * 0.10) * uLitGain;
+      // Ceiling strip deep inside the shop.
+      f.emissive += uOffice * shopGlass * smoothstep(0.72, 0.97, spq.y) * 0.09 * uLitGain;
+      // The glazing is 180 mm behind its frame, so the head and the stallriser
+      // both throw a shadow into it under a raking sun.
+      f.height -= 0.18 * shopGlass;
       // Fascia sign band above the glazing.
       float fascia = step(groundH - 1.25, v) * step(v, groundH - 0.35);
       f.albedo = mix(f.albedo, mix(uRust, uNeon, sh) * 0.25, fascia);
@@ -866,8 +920,14 @@ Surf surfaceShade() {
     s.height = -0.02 * broken;
     // Water sits in the joints and in every sunken slab — this is what makes a
     // wet pavement read as paving rather than as one shiny sheet.
-    pooling = broken * 0.7 - 0.12;
-    wet *= 0.8;
+    //
+    // The joints must NOT be pooled: they are 8 mm antialiased bands, so any
+    // extra wetness on them turns them into near-mirrors and the whole pavement
+    // renders as a glowing orange lattice of reflected sky. Water in a joint is
+    // sub-pixel; water in a sunken slab is metres across, and only the second
+    // one is something the eye can read as wet.
+    pooling = broken * 0.7 - 0.06;
+    wet *= 0.92;
   } else if (kind < 2.5) {
     /* ---- kerb face ---- */
     float grain = fbm2(wp * 3.0 + vWPosS.y * 4.0);
@@ -887,7 +947,13 @@ Surf surfaceShade() {
     float joint = max(band(fj.x - 0.5, 0.020), band(fj.y - 0.5, 0.020));
     s.albedo *= 1.0 - 0.30 * joint;
     s.rough = 0.66;
-    pooling = -0.12;
+    // A civic plaza is dead flat and drains badly: after rain it is among the
+    // wettest walkable surfaces in the city, and it is what the reference's
+    // foreground actually is. Held just below the damp threshold so the sheet
+    // still breaks up into dry patches rather than becoming one mirror. The
+    // joints are deliberately NOT pooled — see the note on paving above.
+    pooling = -0.02;
+    s.height = -0.012 * joint;
   } else if (kind < 4.5) {
     /* ---- lawn ---- */
     float n = fbm2(wp * 2.2);
@@ -996,10 +1062,15 @@ Surf surfaceShade() {
   // 2 + 3 + 4. Fresnel, then hand the reflection to the probe.
   float fres = pow(1.0 - max(dot(-vd, nrm), 0.0), 5.0);
   float F = 0.02 + 0.98 * fres;
-  // Close up you look THROUGH the film and read the aggregate; the mirror only
-  // takes over with distance. Beyond ~260 m aerial perspective owns the frame
-  // and any reflection left is a streak running off the edge of it.
-  float nearFade = smoothstep(2.5, 22.0, dist);
+  /*
+   * Close up you look partly THROUGH the film and read the aggregate, so the
+   * mirror strengthens with distance. But it never goes to ZERO: the reference
+   * frame's foreground pavers, two metres from the lens, carry individual
+   * reflections of the sky and the kerb, and fading the term out entirely
+   * under the camera is what left every on-foot framing standing on a sheet of
+   * flat violet felt. Floored at 0.35 and ramped in much sooner.
+   */
+  float nearFade = 0.35 + 0.65 * smoothstep(1.0, 12.0, dist);
   float farFade = 1.0 - smoothstep(150.0, 340.0, dist);
   s.env = 1.0 + wetAmt * F * (2.0 + 9.0 * standing) * nearFade * farFade;
 
@@ -1027,15 +1098,38 @@ Surf surfaceShade() {
 const DETAIL_VERT_PARS = /* glsl */ `
 attribute vec2 aMR;
 attribute vec3 aEmissive;
+attribute vec2 aFoliage;
 varying vec2 vMR;
 varying vec3 vEmi;
 varying vec3 vWPosD;
 varying vec3 vWNrmD;
+varying float vTrans;
+uniform float uTime;
 `;
 
+/**
+ * WIND. Every tree in the city is baked into one static chunk geometry, so
+ * motion has to come from the vertex shader. aFoliage.y is the sway amplitude
+ * in metres, authored per vertex: zero on trunks, ~0.02 on inner branches,
+ * 0.10-0.20 on crown tips. Two frequencies — a slow 0.55 Hz sway plus a faster
+ * flutter — with the phase taken from world position so neighbouring trees
+ * never move in unison, which is what makes a whole avenue read as one object.
+ *
+ * Chunk meshes carry identity matrices and their geometry is authored in world
+ * metres, so `position` IS the world position here.
+ */
 const DETAIL_VERT_MAIN = /* glsl */ `
 vMR = aMR;
 vEmi = aEmissive;
+vTrans = aFoliage.x;
+if (aFoliage.y > 0.0001) {
+  float ph = position.x * 0.21 + position.z * 0.17;
+  float sway = sin(uTime * 0.55 + ph) * 0.7 + sin(uTime * 1.43 + ph * 2.7) * 0.3;
+  float flut = sin(uTime * 3.1 + position.y * 1.9 + ph * 4.1);
+  transformed.x += (sway * 0.92 + flut * 0.22) * aFoliage.y;
+  transformed.z += (sway * 0.46 - flut * 0.26) * aFoliage.y;
+  transformed.y += flut * aFoliage.y * 0.18;
+}
 vec4 wpD = modelMatrix * vec4(transformed, 1.0);
 vWPosD = wpD.xyz;
 vWNrmD = normalize(mat3(modelMatrix) * objectNormal);
@@ -1046,6 +1140,7 @@ varying vec2 vMR;
 varying vec3 vEmi;
 varying vec3 vWPosD;
 varying vec3 vWNrmD;
+varying float vTrans;
 uniform float uNight;
 ${SKY_GLSL}
 `;
@@ -1064,6 +1159,8 @@ export interface CityMaterials {
     uWetness: { value: number };
     uEnvMix: { value: number };
     uNight: { value: number };
+    /** Seconds since world start. Drives foliage wind in the detail shader. */
+    uTime: { value: number };
     /** Look-dev multipliers on the facade's interior glow and its reflection. */
     uEmissiveGain: { value: number };
     uEnvGain: { value: number };
@@ -1161,6 +1258,7 @@ export function createCityMaterials(): CityMaterials {
     uWetness: { value: Atmosphere.wetness as number },
     uEnvMix: { value: 1.0 },
     uNight: { value: 0.0 },
+    uTime: { value: 0.0 },
     uEmissiveGain: { value: 1.0 },
     uEnvGain: { value: 1.0 },
   };
@@ -1290,7 +1388,18 @@ export function createCityMaterials(): CityMaterials {
         #include <lights_fragment_end>
         {
           vec3 _vd = normalize(vWPosF - cameraPosition);
-          vec3 _n = normalize(vWNrmF);
+          /*
+           * THE ANALYTIC REFLECTION MUST SEE THE PANE TILT TOO.
+           *
+           * This term used the flat geometric normal, so while the PROBE
+           * reflection mosaicked, the analytic sky on top of it did not — and
+           * being the sharper of the two it averaged the mosaic back out. Both
+           * halves of the reflection now sample the same bowed pane.
+           */
+          vec3 _flat = normalize(vWNrmF);
+          vec3 _t = normalize(cross(vec3(0.0, 1.0, 0.0), _flat) + vec3(1e-5));
+          vec3 _b = cross(_flat, _t);
+          vec3 _n = normalize(_flat + _t * _f.tilt.x + _b * _f.tilt.y);
           vec3 _r = reflect(_vd, _n);
           float _f0 = mix(0.045, 1.0, metalnessFactor);
           float _fres = _f0 + (1.0 - _f0) * pow(1.0 - max(dot(-_vd, _n), 0.0), 5.0);
@@ -1304,7 +1413,7 @@ export function createCityMaterials(): CityMaterials {
         `,
       );
   };
-  facade.customProgramCacheKey = () => 'gta-facade-v6';
+  facade.customProgramCacheKey = () => 'gta-facade-v7';
 
   /* ---- surface ---- */
   const surface = new THREE.MeshStandardMaterial({
@@ -1377,7 +1486,7 @@ export function createCityMaterials(): CityMaterials {
         `,
       );
   };
-  surface.customProgramCacheKey = () => 'gta-surface-v5';
+  surface.customProgramCacheKey = () => 'gta-surface-v7';
 
   /* ---- detail ---- */
   const detail = new THREE.MeshStandardMaterial({
@@ -1390,7 +1499,10 @@ export function createCityMaterials(): CityMaterials {
     dithering: true,
   });
   detail.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, skyUniforms(shared), { uNight: shared.uNight });
+    Object.assign(shader.uniforms, skyUniforms(shared), {
+      uNight: shared.uNight,
+      uTime: shared.uTime,
+    });
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>\n${DETAIL_VERT_PARS}`)
       .replace('#include <fog_vertex>', `#include <fog_vertex>\n${DETAIL_VERT_MAIN}`);
@@ -1415,11 +1527,40 @@ export function createCityMaterials(): CityMaterials {
           float _gloss = 1.0 - roughnessFactor;
           reflectedLight.indirectSpecular += gtaSky(reflect(_vd, _n)) * _fres * _gloss * _gloss * 0.7;
           reflectedLight.indirectDiffuse += gtaSky(_n * 0.5 + vec3(0.0, 0.5, 0.0)) * diffuseColor.rgb * 0.25;
+
+          /*
+           * SUB-SURFACE SCATTER through thin surfaces — leaves, above all.
+           *
+           * With the sun three degrees up, a street tree is always between the
+           * camera and the key. An opaque crown therefore renders as a black
+           * plate on a magenta sky, which is exactly what the whole foliage
+           * layer used to do. Two terms:
+           *   wrap     broad back-lit diffuse, so the shadow side of a crown
+           *            is lit by the sun BEHIND it rather than by fill alone;
+           *   thru     a tight forward lobe that fires only when you look
+           *            along the sun ray through the canopy — the amber glow.
+           * Both are gated on the view/sun geometry, so a crown lights up as
+           * you walk round it and goes olive when the sun is behind you.
+           */
+          if (vTrans > 0.001) {
+            float _wrap = max(0.0, (-dot(_n, uSunDir) + 0.45) / 1.45);
+            float _thru = pow(max(0.0, dot(_vd, uSunDir)), 4.0);
+            // Weighted so the DIRECTIONAL term dominates. Turned up, the broad
+            // wrapped term fires on half the facets of every lobe at once and
+            // bleaches an amber canopy to cream — which is the failure mode
+            // opposite to the black plates, and just as obviously wrong.
+            totalEmissiveRadiance += diffuseColor.rgb * uSunCore * 2.1 * vTrans *
+              (_wrap * 0.24 + _thru * 1.05) * (1.0 - uNight * 0.82);
+            // Sky fill through the leaf as well, or a crown with its back to
+            // the sun goes to a flat silhouette instead of a dim olive mass.
+            totalEmissiveRadiance += diffuseColor.rgb * gtaSky(_n * -0.4 + vec3(0.0, 0.55, 0.0))
+              * vTrans * 0.10;
+          }
         }
         `,
       );
   };
-  detail.customProgramCacheKey = () => 'gta-detail-v1';
+  detail.customProgramCacheKey = () => 'gta-detail-v2';
 
   (window as unknown as { __GTA_CITYMAT__: unknown }).__GTA_CITYMAT__ = {
     emissive: (v: number) => { shared.uEmissiveGain.value = v; },

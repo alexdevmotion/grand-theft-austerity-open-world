@@ -38,3 +38,35 @@ of political satire. They carry altered names (Bolojan-Agatinei, Nicușor LAN,
 Alex Need-Aid, George Georgescu) and are authored as stylised caricatures
 rather than photoreal digital doubles — no photograph is projected onto face
 geometry.
+
+## Audio
+
+Copied from the concept repo's `output/reference-assets/audio/`. Like the image
+references, these are **third-party recordings held as prototype material only**
+— they are gitignored, exactly as the upstream repo keeps them, and are restored
+with `bun run audio:sync`.
+
+| Set | Files | Source |
+| --- | --- | --- |
+| `vo/ce-ne-enerveaza-55-intro-clips` | 23 | *Ce Ne Enervează*, a Romanian satirical show |
+| `vo/ce-ne-enerveaza-55-matze-clips` | 20 | as above |
+| `vo/ce-ne-enerveaza-61-matze-clips` | 22 | as above |
+| `vo/ce-ne-enerveaza-intro-clips` | 14 | as above |
+| `music/fecioreasca-de-pe-mures-dumitru-farcas.mp3` | 1 | Romanian folk recording — the Builders House afterparty in `docs/STORY.md` |
+
+### Deliberately NOT copied
+
+- **`gta-iv-theme.mp3`** — Rockstar's copyrighted score. This game is a
+  Grand Theft Auto parody, which makes shipping the actual GTA theme the single
+  most likely thing to attract a takedown. The title/menu music should be an
+  original composition in that register instead.
+- **`ce-ne-enerveaza-55-full.mp3` and `-61-full.mp3`** (103 MB) — the complete
+  episodes the clips were cut from. The clips are what the game needs; the full
+  episodes are redundant weight.
+
+### Not present anywhere, and still required
+
+The concept repo contains **no sound effects at all** — no engine, tyres,
+collisions, sirens, horns, footsteps, rain or city ambience. Every one of those
+has to be synthesised procedurally with the WebAudio API. The imported files
+cover voice and the finale music only.

@@ -88,11 +88,19 @@ export const PropColor = {
    * than reading as a hole punched in the sky. Translucency (see `PropOpts.trans`)
    * carries the rest of the backlit read.
    */
-  leafAmber: lin(0xc48f43),
-  leafOlive: lin(0x77804a),
-  leafRust: lin(0xa85f28),
-  leafGold: lin(0xd8ab55),
-  leafPale: lin(0xc9b477),
+  /*
+   * AUTHORED DARK AND SATURATED, matching `DetailColor` in city/facades.ts.
+   * A turned plane leaf measures ~0.20-0.30 linear in red and under 0.05 in
+   * blue. Authored at the obvious "autumn gold" (0xd8ab55, 0.69 linear red)
+   * every crown in the game bleached to cream under the key and there was
+   * nothing left for the translucency term to add — the failure mode opposite
+   * to the old black plates, and just as obviously not a tree.
+   */
+  leafAmber: lin(0x8a5a1c),
+  leafOlive: lin(0x4a5626),
+  leafRust: lin(0x74341a),
+  leafGold: lin(0xa06c20),
+  leafPale: lin(0xa8843c),
   bark: lin(0x5b4a3c),
   roBlue: PAL.roBlue,
   roYellow: PAL.roYellow,
@@ -639,15 +647,19 @@ export function createPropMaterials(): PropMaterialSet {
         if (vPTrans > 0.001) {
           vec3 _n = normalize(vPWNrm);
           vec3 _v = normalize(vPWPos - cameraPosition);
+          // Weighted so the DIRECTIONAL term dominates — matched to the city's
+          // detail shader. Turned up, the broad wrapped term fires on half the
+          // facets of every cluster at once and bleaches an amber canopy to
+          // cream, which is as wrong as the black plates it replaced.
           float _wrapT = max(0.0, (-dot(_n, uPropSunDir) + 0.45) / 1.45);
           float _thru = pow(max(0.0, dot(_v, uPropSunDir)), 4.0);
           totalEmissiveRadiance += diffuseColor.rgb * uPropSunColor * vPTrans *
-            (_wrapT * 0.34 + _thru * 0.85) * (1.0 - uNight * 0.8);
+            (_wrapT * 0.24 + _thru * 1.05) * (1.0 - uNight * 0.8);
         }
         `,
       );
   };
-  solid.customProgramCacheKey = () => 'gta-prop-solid-v2';
+  solid.customProgramCacheKey = () => 'gta-prop-solid-v3';
   solid.name = 'gta:props';
 
   return {

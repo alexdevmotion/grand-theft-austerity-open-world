@@ -1,0 +1,334 @@
+{
+ "voice": {
+  "ce-ne-enerveaza-55-intro-clips": [
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-intro-clips/00-intro-complete.mp3",
+    "phrase": "intro complete"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-intro-clips/01-salutare-patrioti-treziti-va.mp3",
+    "phrase": "salutare patrioti treziti va"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-intro-clips/02-copil-batut-de-ambii-parinti.mp3",
+    "phrase": "copil batut de ambii parinti"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-intro-clips/03-parinte-unu-si-doi.mp3",
+    "phrase": "parinte unu si doi"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-intro-clips/04-parintii-divorteaza.mp3",
+    "phrase": "parintii divorteaza"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-intro-clips/05-pe-cine-iubesti-mai-mult.mp3",
+    "phrase": "pe cine iubesti mai mult"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-intro-clips/06-pe-asistenta-sociala.mp3",
+    "phrase": "pe asistenta sociala"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-intro-clips/07-da.mp3",
+    "phrase": "da"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-intro-clips/08-alta-guvernare-de-rahat.mp3",
+    "phrase": "alta guvernare de rahat"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-intro-clips/09-ati-venit-cu-caii.mp3",
+    "phrase": "ati venit cu caii"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-intro-clips/10-grindeanu-salvator-bolojan-reformist.mp3",
+    "phrase": "grindeanu salvator bolojan reformist"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-intro-clips/11-interesul-marei.mp3",
+    "phrase": "interesul marei"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-intro-clips/12-salut-eu-sunt-mihai-radu.mp3",
+    "phrase": "salut eu sunt mihai radu"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-intro-clips/13-stimati-tovarasi-prieteni-cetateni.mp3",
+    "phrase": "stimati tovarasi prieteni cetateni"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-intro-clips/14-ma-nenorocitilor-ma-jafelor.mp3",
+    "phrase": "ma nenorocitilor ma jafelor"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-intro-clips/15-exact.mp3",
+    "phrase": "exact"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-intro-clips/16-avem-o-vaca.mp3",
+    "phrase": "avem o vaca"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-intro-clips/17-aduce-roada-doamne-ajuta.mp3",
+    "phrase": "aduce roada doamne ajuta"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-intro-clips/18-nici-anul-viitor-euro-din-buzunar.mp3",
+    "phrase": "nici anul viitor euro din buzunar"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-intro-clips/19-ce-este-cu-aceasta-debandada.mp3",
+    "phrase": "ce este cu aceasta debandada"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-intro-clips/20-armata-domnule.mp3",
+    "phrase": "armata domnule"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-intro-clips/21-va-place-nu-vreau.mp3",
+    "phrase": "va place nu vreau"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-intro-clips/22-aici-nu-se-mai-poate-trai.mp3",
+    "phrase": "aici nu se mai poate trai"
+   }
+  ],
+  "ce-ne-enerveaza-55-matze-clips": [
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-matze-clips/00-matze-complete.mp3",
+    "phrase": "matze complete"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-matze-clips/01-sa-nu-uitam-cine-suntem.mp3",
+    "phrase": "sa nu uitam cine suntem"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-matze-clips/02-intrebarea-rosie.mp3",
+    "phrase": "intrebarea rosie"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-matze-clips/03-unde-suntem-la-psd.mp3",
+    "phrase": "unde suntem la psd"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-matze-clips/04-mici-si-bere.mp3",
+    "phrase": "mici si bere"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-matze-clips/05-dupa-fumul-de-la-gratare.mp3",
+    "phrase": "dupa fumul de la gratare"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-matze-clips/06-vrem-sa-traim-si-noi-saraci.mp3",
+    "phrase": "vrem sa traim si noi saraci"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-matze-clips/07-globalist-puppets.mp3",
+    "phrase": "globalist puppets"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-matze-clips/08-stabilitate-si-rezultate.mp3",
+    "phrase": "stabilitate si rezultate"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-matze-clips/09-simion-nu-bate-palma-cu-psd.mp3",
+    "phrase": "simion nu bate palma cu psd"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-matze-clips/10-george-simion-papusa.mp3",
+    "phrase": "george simion papusa"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-matze-clips/11-pispirica-tiripirica.mp3",
+    "phrase": "pispirica tiripirica"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-matze-clips/12-marionete-masonice.mp3",
+    "phrase": "marionete masonice"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-matze-clips/13-formula-este-una-simpla.mp3",
+    "phrase": "formula este una simpla"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-matze-clips/14-poate-romanii-uita.mp3",
+    "phrase": "poate romanii uita"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-matze-clips/15-ea-este-tara-mea.mp3",
+    "phrase": "ea este tara mea"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-matze-clips/16-mai-multe-explozii.mp3",
+    "phrase": "mai multe explozii"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-matze-clips/17-milioane-de-cozonaci.mp3",
+    "phrase": "milioane de cozonaci"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-matze-clips/18-societatea-s-a-schimbat.mp3",
+    "phrase": "societatea s a schimbat"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-55-matze-clips/19-eu-raman-tampit.mp3",
+    "phrase": "eu raman tampit"
+   }
+  ],
+  "ce-ne-enerveaza-61-matze-clips": [
+   {
+    "file": "audio/vo/ce-ne-enerveaza-61-matze-clips/00-matze-complete.mp3",
+    "phrase": "matze complete"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-61-matze-clips/01-a-venit-vacanta.mp3",
+    "phrase": "a venit vacanta"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-61-matze-clips/02-am-uitat-de-fotbalul-nostru.mp3",
+    "phrase": "am uitat de fotbalul nostru"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-61-matze-clips/03-mircea-branzcoveanu-tepes-stefan.mp3",
+    "phrase": "mircea branzcoveanu tepes stefan"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-61-matze-clips/04-suntem-niste-catastrofe.mp3",
+    "phrase": "suntem niste catastrofe"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-61-matze-clips/05-le-vreau-pe-ele.mp3",
+    "phrase": "le vreau pe ele"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-61-matze-clips/06-trebuie-sa-fim-atenti-pericol.mp3",
+    "phrase": "trebuie sa fim atenti pericol"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-61-matze-clips/07-ne-vreau-pe-ele.mp3",
+    "phrase": "ne vreau pe ele"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-61-matze-clips/08-suntem-latini-creativi.mp3",
+    "phrase": "suntem latini creativi"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-61-matze-clips/09-pauza-ca-mi-bate-inima.mp3",
+    "phrase": "pauza ca mi bate inima"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-61-matze-clips/10-nu-putem-fi-olandezi-nemti-belgieni.mp3",
+    "phrase": "nu putem fi olandezi nemti belgieni"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-61-matze-clips/11-nu-putem-fi-nordici.mp3",
+    "phrase": "nu putem fi nordici"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-61-matze-clips/12-cu-bolovani-topoare-furci.mp3",
+    "phrase": "cu bolovani topoare furci"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-61-matze-clips/13-de-la-bautura.mp3",
+    "phrase": "de la bautura"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-61-matze-clips/14-tara-lui-eminescu.mp3",
+    "phrase": "tara lui eminescu"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-61-matze-clips/15-criticilor-mei-flori-desarte.mp3",
+    "phrase": "criticilor mei flori desarte"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-61-matze-clips/16-mintea-inseamna-mentalul.mp3",
+    "phrase": "mintea inseamna mentalul"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-61-matze-clips/17-repetitie.mp3",
+    "phrase": "repetitie"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-61-matze-clips/18-tic-tac.mp3",
+    "phrase": "tic tac"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-61-matze-clips/19-repetitie-biserica-clasa-rugaciune.mp3",
+    "phrase": "repetitie biserica clasa rugaciune"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-61-matze-clips/20-danemarca-se-numea-dacia.mp3",
+    "phrase": "danemarca se numea dacia"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-61-matze-clips/21-circulati-va-rog.mp3",
+    "phrase": "circulati va rog"
+   }
+  ],
+  "ce-ne-enerveaza-intro-clips": [
+   {
+    "file": "audio/vo/ce-ne-enerveaza-intro-clips/01-salut-eu-sunt-mihai-radu.mp3",
+    "phrase": "salut eu sunt mihai radu"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-intro-clips/02-stimati-tovarasi-prieteni-cetateni.mp3",
+    "phrase": "stimati tovarasi prieteni cetateni"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-intro-clips/03-ma-nenorocitilor-ma-jafelor.mp3",
+    "phrase": "ma nenorocitilor ma jafelor"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-intro-clips/04-exact.mp3",
+    "phrase": "exact"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-intro-clips/05-avem-o-vaca-dumnezeu-sa-ne-ajute.mp3",
+    "phrase": "avem o vaca dumnezeu sa ne ajute"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-intro-clips/06-aduce-roada-doamne-ajuta.mp3",
+    "phrase": "aduce roada doamne ajuta"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-intro-clips/07-nici-anul-viitor-nu-va-fi-simplu.mp3",
+    "phrase": "nici anul viitor nu va fi simplu"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-intro-clips/08-vrea-sa-mi-extraga-euro-din-buzunar.mp3",
+    "phrase": "vrea sa mi extraga euro din buzunar"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-intro-clips/09-ce-este-cu-aceasta-debandada.mp3",
+    "phrase": "ce este cu aceasta debandada"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-intro-clips/10-ma-duc-sa-armata.mp3",
+    "phrase": "ma duc sa armata"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-intro-clips/11-domnule-georgescu.mp3",
+    "phrase": "domnule georgescu"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-intro-clips/12-va-place-cum-arata.mp3",
+    "phrase": "va place cum arata"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-intro-clips/13-nu-vreau.mp3",
+    "phrase": "nu vreau"
+   },
+   {
+    "file": "audio/vo/ce-ne-enerveaza-intro-clips/14-aici-nu-se-mai-poate-trai.mp3",
+    "phrase": "aici nu se mai poate trai"
+   }
+  ]
+ },
+ "music": [
+  {
+   "file": "audio/music/fecioreasca-de-pe-mures-dumitru-farcas.mp3",
+   "phrase": "fecioreasca de pe mures dumitru farcas"
+  }
+ ]
+}

@@ -290,6 +290,22 @@ export interface DetailOpts {
   /** metalness, roughness */
   mr?: [number, number];
   emissive?: number[];
+  /**
+   * TRANSLUCENCY 0..1 — how much light passes THROUGH this surface.
+   *
+   * The sun sits three degrees above the horizon, so every street tree in the
+   * city is backlit. An opaque leaf cluster under that key renders as a black
+   * hole punched in a magenta sky; a real backlit autumn canopy is the
+   * brightest amber in the frame. This drives a wrapped back-scatter plus a
+   * forward-scatter lobe in the detail shader (see createCityMaterials).
+   */
+  trans?: number;
+  /**
+   * WIND SWAY AMPLITUDE in metres. Displaced in the vertex shader by a cheap
+   * two-frequency gust field; 0 for anything that is not foliage. Crown tips
+   * want ~0.10-0.18, inner branches ~0.02, trunks 0.
+   */
+  wind?: number;
 }
 
 const WHITE: [number, number] = [0, 0.85];
@@ -301,6 +317,8 @@ export class DetailBuilder {
   readonly col: number[] = [];
   readonly mr: number[] = [];
   readonly emi: number[] = [];
+  /** (translucency, wind sway amplitude) per vertex. */
+  readonly fol: number[] = [];
   readonly idx: number[] = [];
 
   get triangles(): number {
@@ -328,6 +346,7 @@ export class DetailBuilder {
     this.mr.push(m[0], m[1]);
     const e = o.emissive ?? NO_E;
     this.emi.push(e[0], e[1], e[2]);
+    this.fol.push(o.trans ?? 0, o.wind ?? 0);
   }
 
   quad(a: number[], b: number[], c: number[], d: number[], o: DetailOpts): void {
@@ -398,6 +417,128 @@ export class DetailBuilder {
     }
   }
 
+  /**
+   * Tube between two arbitrary points — branches, brackets, handrails.
+   * Untapered and uncapped: at branch radii the caps are invisible and cost
+   * two thirds of the triangles.
+   */
+  tube(
+    ax: number, ay: number, az: number,
+    bx: number, by: number, bz: number,
+    r: number, seg: number, o: DetailOpts,
+  ): void {
+    const dx = bx - ax;
+    const dy = by - ay;
+    const dz = bz - az;
+    const len = Math.hypot(dx, dy, dz);
+    if (len < 1e-5) return;
+    const ux = dx / len;
+    const uy = dy / len;
+    const uz = dz / len;
+    let px = 0;
+    let py = 1;
+    let pz = 0;
+    if (Math.abs(uy) > 0.9) { px = 1; py = 0; pz = 0; }
+    let tx = uy * pz - uz * py;
+    let ty = uz * px - ux * pz;
+    let tz = ux * py - uy * px;
+    const tl = Math.hypot(tx, ty, tz) || 1;
+    tx /= tl; ty /= tl; tz /= tl;
+    const sx = uy * tz - uz * ty;
+    const sy = uz * tx - ux * tz;
+    const sz = ux * ty - uy * tx;
+
+    const base = this.pos.length / 3;
+    for (let i = 0; i <= seg; i++) {
+      const a = (i / seg) * Math.PI * 2;
+      const ca = Math.cos(a);
+      const sa = Math.sin(a);
+      const nx = tx * ca + sx * sa;
+      const ny = ty * ca + sy * sa;
+      const nz = tz * ca + sz * sa;
+      this.push(ax + nx * r, ay + ny * r, az + nz * r, nx, ny, nz, o);
+      this.push(bx + nx * r, by + ny * r, bz + nz * r, nx, ny, nz, o);
+    }
+    for (let i = 0; i < seg; i++) {
+      const i0 = base + i * 2;
+      this.idx.push(i0, i0 + 1, i0 + 3, i0, i0 + 3, i0 + 2);
+    }
+  }
+
+  /**
+   * Low-poly irregular blob — leaf clusters and shrub masses.
+   *
+   * `rings` 1 => 12 triangles, 2 => 24. `jitter` deforms the POSITIONS so the
+   * silhouette is ragged; `nJitter` scatters the NORMALS independently, which
+   * is what stops a backlit crown collapsing into one flat dark facet. Both
+   * matter: position jitter fixes the outline, normal jitter fixes the shading.
+   */
+  blob(
+    cx: number, cy: number, cz: number,
+    rx: number, ry: number, rz: number,
+    o: DetailOpts, jitter = 0, seedIn = 1, rings: 1 | 2 = 2, nJitter = 0,
+    /** Radial segments. 6 is cheap; 8 stops a >1 m lobe reading as a hexagon. */
+    seg = 6,
+  ): void {
+    const base = this.pos.length / 3;
+    let seed = seedIn >>> 0 || 1;
+    const rnd = (): number => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+    const dev = (nx: number, ny: number, nz: number): [number, number, number] => {
+      if (nJitter <= 0) return [nx, ny, nz];
+      const ax = nx + (rnd() - 0.5) * 2 * nJitter;
+      const ay = ny + (rnd() - 0.5) * 2 * nJitter;
+      const az = nz + (rnd() - 0.5) * 2 * nJitter;
+      const l = Math.hypot(ax, ay, az) || 1;
+      return [ax / l, ay / l, az / l];
+    };
+    {
+      const [px, py, pz] = dev(0, 1, 0);
+      this.push(cx, cy + ry, cz, px, py, pz, o);
+    }
+    for (let r = 1; r <= rings; r++) {
+      const phi = (r / (rings + 1)) * Math.PI;
+      const sp = Math.sin(phi);
+      const cp = Math.cos(phi);
+      for (let i = 0; i < seg; i++) {
+        const th = (i / seg) * Math.PI * 2 + rnd() * 0.25;
+        const j = 1 + (rnd() - 0.5) * jitter;
+        const nx = sp * Math.cos(th);
+        const ny = cp;
+        const nz = sp * Math.sin(th);
+        const [dx, dy, dz] = dev(nx, ny, nz);
+        this.push(cx + nx * rx * j, cy + ny * ry * j, cz + nz * rz * j, dx, dy, dz, o);
+      }
+    }
+    {
+      const [px, py, pz] = dev(0, -1, 0);
+      this.push(cx, cy - ry, cz, px, py, pz, o);
+    }
+    const ringStart = (r: number): number => base + 1 + (r - 1) * seg;
+    for (let i = 0; i < seg; i++) {
+      const a = ringStart(1) + i;
+      const b = ringStart(1) + ((i + 1) % seg);
+      this.idx.push(base, b, a);
+    }
+    for (let r = 1; r < rings; r++) {
+      for (let i = 0; i < seg; i++) {
+        const a = ringStart(r) + i;
+        const b = ringStart(r) + ((i + 1) % seg);
+        const c = ringStart(r + 1) + i;
+        const d = ringStart(r + 1) + ((i + 1) % seg);
+        this.idx.push(a, b, d, a, d, c);
+      }
+    }
+    const bottom = base + 1 + rings * seg;
+    for (let i = 0; i < seg; i++) {
+      const a = ringStart(rings) + i;
+      const b = ringStart(rings) + ((i + 1) % seg);
+      this.idx.push(bottom, a, b);
+    }
+  }
+
   /** Ring of boxes forming a parapet / cornice around a rectangle. */
   ring(
     x0: number, z0: number, x1: number, z1: number,
@@ -424,6 +565,7 @@ export class DetailBuilder {
     g.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3));
     g.setAttribute('aMR', new THREE.Float32BufferAttribute(this.mr, 2));
     g.setAttribute('aEmissive', new THREE.Float32BufferAttribute(this.emi, 3));
+    g.setAttribute('aFoliage', new THREE.Float32BufferAttribute(this.fol, 2));
     g.setIndex(this.idx);
     g.computeBoundingSphere();
     return g;

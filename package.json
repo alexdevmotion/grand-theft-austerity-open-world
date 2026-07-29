@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "preview": "vite preview --port 5274 --strictPort",
     "shot": "node tools/shot.mjs",
-    "test": "bun test"
+    "test": "bun test",
+    "audio:sync": "node tools/sync-audio.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "0.19.3",

@@ -447,7 +447,16 @@ function dressBlock(
         const inset = Math.min(2.6, Math.abs(ed.inner - ed.k) * 0.55);
         const tx = px - ed.ox * inset;
         const tz = pz - ed.oz * inset;
-        planeTree(sink.detail(tx, tz), tx, tz, rng, district === 'parc' ? 1.3 : 1.0);
+        /*
+         * FOLIAGE LOD. Trees are baked into static chunk geometry, so the
+         * only LOD available is a spatial one: full armature and canopy near
+         * the hero crossroads where the camera actually lives, thinner
+         * further out. The same tiering the buildings use (see detailTier),
+         * and it is what pays for a real branching tree at all.
+         */
+        const td = Math.hypot(tx, tz);
+        const tlod: 0 | 1 | 2 = td < 260 ? 2 : td < 700 ? 1 : 0;
+        planeTree(sink.detail(tx, tz), tx, tz, rng, district === 'parc' ? 1.15 : 1.0, tlod);
       }
     }
 

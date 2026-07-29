@@ -452,7 +452,12 @@ export class SkySystem implements System {
     // The Mie lobe peaks near 1.75 at cos = 1, so this weight is effectively
     // doubling the in-scatter down-sun. Kept small.
     AerialUniforms.params.w = 0.10 * this.look.shafts + 0.03;
-    AerialUniforms.params2.x = 26;
+    // Near-field guard: nothing inside 70 m is veiled, and the veil eases in
+    // to full physical strength by 260 m. See FOG_FRAGMENT in
+    // sky/aerialPerspective.ts — this is what keeps the foreground's contrast
+    // while still letting the far boulevard dissolve.
+    AerialUniforms.params2.x = 70;
+    AerialUniforms.params3.w = 260;
     /* Max opacity has to be essentially 1. This is what actually closes the
      * seam: at 0.94 a surface at infinite distance still showed 6% of its own
      * albedo against 0% for the sky one pixel above it, which is a visible

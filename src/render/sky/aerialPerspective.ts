@@ -57,14 +57,23 @@ export interface AerialStop {
   density: number;
 }
 
-/** Ordered high sun -> deep night. */
+/**
+ * Ordered high sun -> deep night.
+ *
+ * These are deliberately a little heavier than they used to be. The near-field
+ * guard (`params2.x` .. `params3.w`, see `FOG_FRAGMENT`) now holds the first
+ * ~200 m at essentially zero veil, so the density no longer has to stay low to
+ * protect the foreground — it only has to make the far end of a boulevard
+ * genuinely dissolve. Raising it here while gating the near field is what gives
+ * the reference's depth cue: full contrast up close, real atmosphere at 500 m.
+ */
 export const AERIAL_STOPS: readonly AerialStop[] = [
-  { elev: 46, density: 0.00070 },
-  { elev: 18, density: 0.00080 },
-  { elev: 3.2, density: 0.00082 },
-  { elev: -3.5, density: 0.00086 },
-  { elev: -9.5, density: 0.00084 },
-  { elev: -20, density: 0.00090 },
+  { elev: 46, density: 0.00092 },
+  { elev: 18, density: 0.00106 },
+  { elev: 3.2, density: 0.00112 },
+  { elev: -3.5, density: 0.00118 },
+  { elev: -9.5, density: 0.00114 },
+  { elev: -20, density: 0.00120 },
 ];
 
 const _stop = { density: 0.0009 };
@@ -117,8 +126,11 @@ export const AerialUniforms = {
 
   /** x density, y height falloff (1/m), z Mie g, w Mie strength */
   params: { x: 0.0016, y: 0.006, z: 0.72, w: 0.5 },
-  /** x start distance (m), y max opacity, z haze, w sky multiplier */
-  params2: { x: 22, y: 0.998, z: 1, w: 1 },
+  /** x near-guard start (m), y max opacity, z haze, w sky multiplier.
+   *
+   * `x` is where the veil is allowed to begin at all. Inside it a surface shows
+   * pure albedo, which is what keeps the foreground's contrast. */
+  params2: { x: 70, y: 0.998, z: 1, w: 1 },
   /**
    * x: how much of the dome's radiance the airlight carries.
    *
@@ -133,8 +145,11 @@ export const AerialUniforms = {
    * fog is forced to full opacity regardless of what the physical optical
    * depth says, so the edge of the finite world dissolves completely into the
    * sky instead of ending in a hard line. See FOG_FRAGMENT.
+   *
+   * w: the far end of the near-field guard, in metres. The veil eases in over
+   * `params2.x` .. `params3.w`; below `params2.x` there is none at all.
    */
-  params3: { x: 0.86, y: 1250, z: 2900, w: 0 },
+  params3: { x: 0.86, y: 1250, z: 2900, w: 260 },
 };
 
 const FOG_PARS_VERTEX = /* glsl */ `
@@ -211,6 +226,23 @@ const FOG_FRAGMENT = /* glsl */ `
 
 		float od = uAerialParams.x * meanDensity * max( aerialDist - uAerialParams2.x, 0.0 );
 		float fogFactor = 1.0 - exp( - od );
+
+		/* NEAR-FIELD GUARD.
+		 *
+		 * Optical depth is linear in distance from the very first metre, so a
+		 * physically-correct veil is never actually zero — and the in-scatter it
+		 * mixes in is the BRIGHTEST part of the dome (the horizon rip, on the
+		 * solar side). Two percent coverage of something that hot is enough to
+		 * lift black asphalt to lilac and turn dark glass into milky beige,
+		 * which is exactly what destroyed the frame's contrast.
+		 *
+		 * The reference has no veil on anything you could walk to. So the veil
+		 * is gated off entirely inside uAerialParams2.x and eased in from there
+		 * to uAerialParams3.w; past that the physical term takes over
+		 * unmodified. This costs nothing in correctness at the horizon — the
+		 * ramp is 1 long before the closure below matters — and it is what lets
+		 * the density be raised enough for 500 m to genuinely dissolve. */
+		fogFactor *= smoothstep( uAerialParams2.x, uAerialParams3.w, aerialDist );
 
 		/* HORIZON CLOSURE.
 		 *

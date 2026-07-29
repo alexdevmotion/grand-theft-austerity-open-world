@@ -1189,6 +1189,13 @@ export class CharacterActor {
     if (this.disposed) return;
     this.disposed = true;
     this.object.removeFromParent();
+    // The skeleton is per-actor (only its bind inverses are shared), and once
+    // the actor has rendered once the renderer has attached a bone texture to
+    // it. Neither is reachable from the geometry/material caches, so without
+    // this every promote/demote cycle in the crowd leaks a 22-bone matrix
+    // buffer and one GPU texture for the rest of the session.
+    this.rig.skeleton.dispose();
+    this.factory.forget(this);
     this.factory.release(this.geoKey, this.texKey);
   }
 }
@@ -1250,6 +1257,22 @@ export class CharacterFactory {
     const actor = new CharacterActor(this, appearance, ge.geo, me.mat, geoKey, texKey, opts);
     this.actors.push(actor);
     return actor;
+  }
+
+  /**
+   * Drop a disposed actor from the live list.
+   *
+   * `create` pushes every actor here and nothing used to take them out, so the
+   * array grew for the life of the session in the one system — crowd streaming
+   * — that creates and destroys actors continuously. That made `stats.actors`
+   * meaningless and turned `updateAll` into a loop over every actor ever made.
+   */
+  forget(actor: CharacterActor): void {
+    const i = this.actors.indexOf(actor);
+    if (i >= 0) {
+      this.actors[i] = this.actors[this.actors.length - 1];
+      this.actors.pop();
+    }
   }
 
   release(geoKey: string, texKey: string): void {

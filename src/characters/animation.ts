@@ -206,14 +206,37 @@ const CROUCH_IDLE_GAIT: Gait = {
 
 const LOCOMOTION_LADDER: Gait[] = [IDLE_GAIT, WALK_GAIT, JOG_GAIT, SPRINT_GAIT];
 
+/**
+ * Blend two gaits. Runs unconditionally for every actor every frame.
+ *
+ * This used to build a generic closure and drive it with 22 computed-key
+ * accesses — 88 megamorphic property lookups plus one closure allocation per
+ * actor per frame. Written out as straight field assignments it is the same
+ * arithmetic against inline-cached slots, and allocates nothing.
+ */
 function lerpGait(a: Gait, b: Gait, t: number, out: Gait): Gait {
-  const k = <K extends keyof Gait>(key: K) => {
-    (out[key] as number) = (a[key] as number) + ((b[key] as number) - (a[key] as number)) * t;
-  };
-  k('speed'); k('stride'); k('duty'); k('thighA'); k('thighBias'); k('kneeLoad');
-  k('kneeSwing'); k('kneeBase'); k('ankPush'); k('ankLift'); k('bob'); k('lateral');
-  k('hipRoll'); k('pelvisYaw'); k('chestYaw'); k('armA'); k('armBias'); k('elbow');
-  k('elbowSwing'); k('lean'); k('shoulderDrop'); k('headBob');
+  out.speed = a.speed + (b.speed - a.speed) * t;
+  out.stride = a.stride + (b.stride - a.stride) * t;
+  out.duty = a.duty + (b.duty - a.duty) * t;
+  out.thighA = a.thighA + (b.thighA - a.thighA) * t;
+  out.thighBias = a.thighBias + (b.thighBias - a.thighBias) * t;
+  out.kneeLoad = a.kneeLoad + (b.kneeLoad - a.kneeLoad) * t;
+  out.kneeSwing = a.kneeSwing + (b.kneeSwing - a.kneeSwing) * t;
+  out.kneeBase = a.kneeBase + (b.kneeBase - a.kneeBase) * t;
+  out.ankPush = a.ankPush + (b.ankPush - a.ankPush) * t;
+  out.ankLift = a.ankLift + (b.ankLift - a.ankLift) * t;
+  out.bob = a.bob + (b.bob - a.bob) * t;
+  out.lateral = a.lateral + (b.lateral - a.lateral) * t;
+  out.hipRoll = a.hipRoll + (b.hipRoll - a.hipRoll) * t;
+  out.pelvisYaw = a.pelvisYaw + (b.pelvisYaw - a.pelvisYaw) * t;
+  out.chestYaw = a.chestYaw + (b.chestYaw - a.chestYaw) * t;
+  out.armA = a.armA + (b.armA - a.armA) * t;
+  out.armBias = a.armBias + (b.armBias - a.armBias) * t;
+  out.elbow = a.elbow + (b.elbow - a.elbow) * t;
+  out.elbowSwing = a.elbowSwing + (b.elbowSwing - a.elbowSwing) * t;
+  out.lean = a.lean + (b.lean - a.lean) * t;
+  out.shoulderDrop = a.shoulderDrop + (b.shoulderDrop - a.shoulderDrop) * t;
+  out.headBob = a.headBob + (b.headBob - a.headBob) * t;
   return out;
 }
 

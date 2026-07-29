@@ -46,19 +46,23 @@ const _fwd = new THREE.Vector3();
  */
 export function applyLookAt(rig: Rig, yaw: number, pitch: number): void {
   if (Math.abs(yaw) < 1e-4 && Math.abs(pitch) < 1e-4) return;
-  const share: Array<[number, number]> = [
-    [BI.chest, 0.14],
-    [BI.upperChest, 0.10],
-    [BI.neck, 0.32],
-    [BI.head, 0.44],
-  ];
-  for (const [bone, w] of share) {
+  // The distribution table is constant. It used to be rebuilt here — one outer
+  // array, four tuples and an array iterator per actor per frame — and the
+  // early-out above does not save it, because the look weights decay
+  // exponentially and stay above the threshold for about a second after the
+  // target is released.
+  for (let i = 0; i < LOOK_BONES.length; i++) {
+    const w = LOOK_WEIGHTS[i];
     // Bone rest frame: +Y rotation turns left, +X rotation pitches forward.
     _q0.setFromAxisAngle(UP, yaw * w);
     _q1.setFromAxisAngle(RIGHT_AXIS, -pitch * w);
-    rig.bones[bone].quaternion.multiply(_q0).multiply(_q1);
+    rig.bones[LOOK_BONES[i]].quaternion.multiply(_q0).multiply(_q1);
   }
 }
+
+/** How a look-at is shared down the spine. Parallel arrays, module scope. */
+const LOOK_BONES = [BI.chest, BI.upperChest, BI.neck, BI.head] as const;
+const LOOK_WEIGHTS = [0.14, 0.10, 0.32, 0.44] as const;
 
 const RIGHT_AXIS = new THREE.Vector3(1, 0, 0);
 
@@ -168,6 +172,15 @@ export function solveFootIk(
   let drop = 0;
   let anyHit = false;
   for (let s = 0; s < 2; s++) {
+    // A foot in mid-swing contributes nothing: `target` below is driven by
+    // `plant[s]`, and at 0 the computed delta is 0 and the re-solve loop skips
+    // the leg outright at `w < 0.02`. Raycasting for it was a full Rapier
+    // query — and ~6 heap objects — thrown away every frame. Gating on the
+    // planted weight halves the IK ray count for a walking crowd.
+    if (plant[s] < 0.02 && state.blend[s] < 0.02) {
+      state.blend[s] = 0;
+      continue;
+    }
     const footBone = s === 0 ? rig.byName.footL : rig.byName.footR;
     _ankle.setFromMatrixPosition(footBone.matrixWorld);
     _rayOrigin.set(_ankle.x, _ankle.y + 0.62 * scale, _ankle.z);
@@ -315,6 +328,10 @@ export class Ragdoll {
   private groundY = -Infinity;
   private groundAge = 99;
   private settled = 0;
+  /** Scratch for `apply()`, allocated on first use and reused thereafter. */
+  private worldQ: THREE.Quaternion[] | null = null;
+  /** Parent bone index per bone, -1 for the root. Resolved once. */
+  private parentOf: Int8Array | null = null;
 
   constructor(rig: Rig, root: THREE.Object3D, impulse?: THREE.Vector3) {
     this.rig = rig;
@@ -436,10 +453,16 @@ export class Ragdoll {
     this.root.worldToLocal(hipsLocal);
     rig.bones[0].position.copy(hipsLocal);
 
-    const worldQ: THREE.Quaternion[] = [];
-    for (let i = 0; i < rig.bones.length; i++) worldQ.push(rig.rest[i].clone());
+    // Reused across frames: this used to allocate an array plus one Quaternion
+    // clone per bone (23 objects) on every frame that any corpse was on screen.
+    const worldQ = this.worldQ ?? (this.worldQ = rig.bones.map(() => new THREE.Quaternion()));
+    for (let i = 0; i < rig.bones.length; i++) worldQ[i].copy(rig.rest[i]);
 
-    const rootQ = this.root.getWorldQuaternion(_pw).clone().invert();
+    const rootQ = _q2.copy(this.root.getWorldQuaternion(_pw)).invert();
+
+    // Parent index per bone, resolved once. `bones.indexOf(parent)` inside the
+    // per-bone loop below was a 22-element scan per bone, per frame.
+    const parentOf = this.parentOf ?? (this.parentOf = buildParentIndex(rig));
 
     for (const [bone, from, to] of BONE_OF) {
       _c.subVectors(this.pos[to], this.pos[from]);
@@ -458,17 +481,31 @@ export class Ragdoll {
     // Convert world orientations to parent-relative locals, in hierarchy order.
     for (let i = 0; i < rig.bones.length; i++) {
       const bone = rig.bones[i];
-      const parent = bone.parent;
-      const isBone = parent && (parent as THREE.Bone).isBone === true;
-      if (!isBone) {
+      const pi = parentOf[i];
+      if (pi < 0) {
         // hips: world -> object local
         bone.quaternion.copy(rootQ).multiply(worldQ[i]);
       } else {
-        const pi = rig.bones.indexOf(parent as THREE.Bone);
         _q1.copy(worldQ[pi]).invert();
         bone.quaternion.copy(_q1).multiply(worldQ[i]);
       }
     }
     rig.root.updateMatrixWorld(true);
   }
+}
+
+/**
+ * Bone -> parent bone index, or -1 where the parent is not a bone (the root).
+ * The hierarchy is fixed by `buildRig`, so this is resolved once per ragdoll
+ * instead of scanning the bone array for every bone on every frame.
+ */
+function buildParentIndex(rig: Rig): Int8Array {
+  const out = new Int8Array(rig.bones.length).fill(-1);
+  for (let i = 0; i < rig.bones.length; i++) {
+    const parent = rig.bones[i].parent;
+    if (parent && (parent as THREE.Bone).isBone === true) {
+      out[i] = rig.bones.indexOf(parent as THREE.Bone);
+    }
+  }
+  return out;
 }

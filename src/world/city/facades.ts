@@ -884,7 +884,7 @@ export function planeTree(
   const lobeK = 0.55 + 0.45 * Math.pow(scale, 2.4);
   const nLobe = bare
     ? rng.int(2, 5)
-    : Math.round((lod === 2 ? 17 + rng.int(0, 5) : lod === 1 ? 10 : 5) * lobeK);
+    : Math.round((lod === 2 ? 24 + rng.int(0, 7) : lod === 1 ? 10 : 5) * lobeK);
   // A >1 m six-sided lobe reads as a hexagon; eight segments costs 8 more
   // triangles and buys a lobe that never shows a straight edge close up.
   const lobeSeg = lod === 2 ? 8 : 6;
@@ -899,7 +899,10 @@ export function planeTree(
    * trees (scale 1.3). A leaf cluster is roughly the same physical size on
    * every tree; it is the NUMBER of them that changes.
    */
-  const lobeR = Math.min(crownR * (species === 1 ? 0.66 : 0.42), 0.95);
+  // Capped at 0.78 m radius. A 1.9 m lobe is bigger than a real leaf cluster
+  // and, three metres from a third-person camera, reads as folded card; 1.5 m
+  // is about the largest that still passes as foliage at arm's length.
+  const lobeR = Math.min(crownR * (species === 1 ? 0.62 : 0.38), 0.78);
   // Golden-angle spiral: the cheapest way to get points that are evenly
   // spread over a sphere without clumping or banding.
   const GOLD = Math.PI * (3 - Math.sqrt(5));

@@ -1572,6 +1572,8 @@ export function createCityMaterials(): CityMaterials {
       night: shared.uNight.value,
       wetness: shared.uWetness.value,
       envMix: shared.uEnvMix.value,
+      /** Foliage wind clock. If this is not advancing, the trees are frozen. */
+      time: shared.uTime.value,
     }),
   };
 

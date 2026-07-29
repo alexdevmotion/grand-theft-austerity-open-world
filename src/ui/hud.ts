@@ -7,6 +7,7 @@
 import * as THREE from 'three';
 import type { GameContext, System } from '../core/engine';
 import { Services, type HudService } from '../core/services';
+import { PauseMenu } from './pauseMenu';
 
 export class HudSystem implements System, HudService {
   readonly name = 'hud';
@@ -19,6 +20,13 @@ export class HudSystem implements System, HudService {
   private speedEl!: HTMLDivElement;
   private ctx!: GameContext;
   private waypoint: THREE.Vector3 | null = null;
+  /**
+   * The pause screen lives here rather than as its own System because the
+   * engine only ticks systems with `order >= 400` while `time.paused` is true.
+   * The HUD is 420, so hanging the menu off it is what keeps it alive — and
+   * able to read Escape again — once the world has stopped.
+   */
+  private pause = new PauseMenu();
 
   init(ctx: GameContext): void {
     this.ctx = ctx;
@@ -60,9 +68,14 @@ export class HudSystem implements System, HudService {
     });
     ctx.events.on('ui:toast', ({ text, ms }) => this.toast(text, 'info', ms));
     ctx.events.on('ui:subtitle', ({ speaker, text, ms }) => this.subtitle(speaker, text, ms));
+
+    this.pause.init(ctx);
   }
 
+  private visible = true;
+
   setVisible(v: boolean): void {
+    this.visible = v;
     this.root.style.display = v ? '' : 'none';
   }
 
@@ -91,7 +104,14 @@ export class HudSystem implements System, HudService {
     this.waypoint = p;
   }
 
-  update(): void {
+  update(dt: number): void {
+    // Escape only ever *opens* the menu from here: once it is up the menu owns
+    // the key on its own capture-phase listener, with gameplay input disabled.
+    if (!this.pause.isOpen && this.ctx.input.actionPressed('pause')) this.pause.show();
+    this.pause.update(dt);
+    this.root.style.display = this.pause.isOpen || !this.visible ? 'none' : '';
+    if (this.pause.isOpen) return;
+
     const player = this.ctx.tryGet(Services.Player);
     const veh = player?.inVehicle;
     if (veh) {
@@ -105,6 +125,7 @@ export class HudSystem implements System, HudService {
   }
 
   dispose(): void {
+    this.pause.dispose();
     this.root?.remove();
   }
 }

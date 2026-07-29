@@ -351,16 +351,54 @@ export class CitySystem implements System, CityService {
   /* ground + baking                                                   */
   /* ---------------------------------------------------------------- */
 
+  /**
+   * The bedrock the whole city sits on.
+   *
+   * THIS USED TO BE A SINGLE `PlaneGeometry`, AND THAT IS WHERE THE
+   * "artifacts under the pavement" CAME FROM. Every horizontal surface in the
+   * city — carriageway ribbons, junction patches, footway slabs, block
+   * interiors — is emitted as ONE upward-facing quad by `SurfaceBuilder`, and
+   * the underlay was upward-facing too. So the world had no skin on its
+   * underside at all: drop the camera below y = -0.06 and the depth buffer is
+   * empty, the sky dome (a `BackSide` sphere) renders straight through the
+   * pavement, and the city reads as a set of floating zero-thickness sheets
+   * with the building interiors showing through the floor.
+   *
+   * The fix is a DOUBLE-SIDED SLAB — twelve triangles. From above, the top
+   * face is exactly the plane that was there before: same y, same material,
+   * pixel-identical. Below it the camera is inside a closed, double-sided box,
+   * so every direction resolves to opaque bedrock instead of to the sky dome.
+   *
+   * Both halves of that description are load-bearing. A single double-sided
+   * plane still leaves the *downward* view open (a zero-thickness floor blocks
+   * nothing when you look down past its edge), and a single-sided box is worse
+   * still — from inside it you see only backfaces and the hole comes straight
+   * back. It has to be a box AND double sided.
+   *
+   * The `polygonOffset` is the second half of the fix. The slab top sits only
+   * 60 mm under the carriageway (which is at y = 0 rising to y = 0.09 at the
+   * crown). With near = 0.15 and far = 3000 the depth buffer resolves about
+   * 60 mm at 390 m, so past that the bedrock and the road were interleaving
+   * into the speckled seam you could see running along the street. Biasing the
+   * bedrock away from the eye makes the road win that comparison at every
+   * distance, whatever the depth precision happens to be.
+   */
   private buildGroundPlane(): void {
     const phys = this.findPhysics();
     const size = gridBlocks * blockSize + blockSize * 6;
-    // A dark under-plane so the horizon never shows sky through the grid.
+    const TOP_Y = -0.06;
+    const THICKNESS = 80;
     const mat = new THREE.MeshStandardMaterial({
       color: 0x0a0812, roughness: 0.55, metalness: 0.0,
+      side: THREE.DoubleSide,
+      polygonOffset: true, polygonOffsetFactor: 8, polygonOffsetUnits: 16,
     });
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(size * 2.4, size * 2.4, 1, 1), mat);
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -0.06;
+    const ground = new THREE.Mesh(
+      new THREE.BoxGeometry(size * 2.4, THICKNESS, size * 2.4, 1, 1, 1),
+      mat,
+    );
+    ground.position.y = TOP_Y - THICKNESS / 2;
+    ground.castShadow = false;
     ground.receiveShadow = false;
     ground.name = 'ground-underlay';
     this.root.add(ground);

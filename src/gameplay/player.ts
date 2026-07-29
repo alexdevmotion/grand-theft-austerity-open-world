@@ -217,10 +217,14 @@ export class PlayerSystem implements System, PlayerService {
 
     // Movement is relative to the camera yaw.
     const yaw = this.desiredYaw;
+    // Camera-relative basis.
+    //   forward F = ( sin(yaw), 0,  cos(yaw) )   — matches CameraSystem's rig
+    //   right   R = F x up = (-cos(yaw), 0, sin(yaw))
+    // The strafe terms used +R's negation, so A and D were swapped on screen.
     this._desired.set(
-      Math.sin(yaw) * ay + Math.cos(yaw) * ax,
+      Math.sin(yaw) * ay - Math.cos(yaw) * ax,
       0,
-      Math.cos(yaw) * ay - Math.sin(yaw) * ax,
+      Math.cos(yaw) * ay + Math.sin(yaw) * ax,
     );
     if (this._desired.lengthSq() > 0.0001) {
       this._desired.normalize().multiplyScalar(speed);

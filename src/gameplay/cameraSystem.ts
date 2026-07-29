@@ -88,7 +88,12 @@ export class CameraSystem implements System, CameraService {
       // Auto-align behind the car when the player isn't actively looking.
       if (Math.abs(input.axes.lookX) < 0.0005) {
         const e = new THREE.Euler().setFromQuaternion(veh.rotation, 'YXZ');
-        const behind = e.y + Math.PI;
+        // The camera sits at `target - F * distance` and looks back along F,
+        // so the camera's own forward IS F = (sin(yaw), 0, cos(yaw)). To view
+        // the car from behind, the camera must look the same way the car is
+        // pointing, i.e. yaw == car heading. The extra PI here rotated the rig
+        // to the far side and framed the car head-on.
+        const behind = e.y;
         const speedFactor = THREE.MathUtils.clamp(Math.abs(veh.speed) / 12, 0, 1);
         this.yaw = dampAngle(this.yaw, behind, 2.6 * speedFactor, dt);
       }

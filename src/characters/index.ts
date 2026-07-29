@@ -42,6 +42,9 @@ export { AnimationController, Pose, type Drive } from './animation';
 export {
   rollAppearance,
   HERO_APPEARANCE,
+  NICUSOR_APPEARANCE,
+  ALLY_APPEARANCE,
+  CAST_APPEARANCES,
   appearanceGeoKey,
   appearanceTexKey,
   buildAppearanceTextures,
@@ -80,3 +83,10 @@ export {
 export { Ragdoll, solveTwoBone } from './ik';
 
 export { prof } from './profile';
+
+/**
+ * The landmark-fitted hero head. Built automatically for any Appearance that
+ * carries a `cast` id — nothing outside `src/characters/` has to construct it.
+ */
+export { HeroHead, CAST, type CastConfig } from './face/heroHead';
+export { type CastId, type FitId, fitMeasure, fitPose } from './face/fitData';

@@ -33,6 +33,7 @@ import { Rng } from '../core/rng';
 import { Services, type LocomotionState } from '../core/services';
 import type { PhysicsWorld } from '../physics/physics';
 import { AnimationController, type Drive } from './animation';
+import { CAST, HeroHead } from './face/heroHead';
 import { Ragdoll } from './ik';
 import { prof } from './profile';
 import {
@@ -414,8 +415,11 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
     );
   }
 
-  /* ---------------- head ---------------- */
-  {
+  /* ---------------- head ----------------
+   * Named cast members get a landmark-fitted head parented to the head bone
+   * instead (see face/heroHead.ts), so the low-poly skull, nose, ears and hair
+   * are left out entirely rather than hidden inside it. */
+  if (!a.cast) {
     const jaw = a.face.jaw;
     const rings: Ring[] = HEAD_PROFILE.map(([t]) => {
       const p = headProfile(m, t, jaw);
@@ -470,7 +474,7 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
   }
 
   /* ---------------- hair + headwear ---------------- */
-  buildHair(b, a, m, chinY, crownY);
+  if (!a.cast) buildHair(b, a, m, chinY, crownY);
   buildHeadwear(b, a, m, chinY, crownY);
 
   /* ---------------- arms ---------------- */
@@ -1030,6 +1034,8 @@ export class CharacterActor {
   private readonly texKey: string;
   private readonly geoKey: string;
   private _visible = true;
+  /** Only ever non-null for the four named cast members. */
+  private heroHead: HeroHead | null = null;
 
   constructor(
     factory: CharacterFactory,
@@ -1059,6 +1065,36 @@ export class CharacterActor {
     this.object.add(this.mesh);
     this.object.scale.setScalar(this.scale);
     this.object.name = `char:${appearance.id}`;
+
+    if (appearance.cast) {
+      const t = prof.begin();
+      const m = this.rig.metrics;
+      this.heroHead = new HeroHead(CAST[appearance.cast], {
+        chinY: m.headY - 0.010,
+        crownY: m.headTopY,
+        boneOrigin: this.rig.points.joint.head,
+        seed: opts.seed ?? 0,
+        // The player is the one face the camera ever gets close to.
+        detail: appearance.cast === 'player' ? 1 : 0.8,
+      });
+      this.heroHead.attachTo(this.rig.byName.head);
+      prof.add('factory.heroHead', t);
+      // Inspection hook: nothing in gameplay spawns the story cast yet, so this
+      // is how Nicusor's and Alex's heads get looked at.
+      const swap = (id: 'player' | 'nicusor' | 'ally'): void => {
+        this.heroHead?.dispose();
+        this.heroHead = new HeroHead(CAST[id], {
+          chinY: m.headY - 0.010,
+          crownY: m.headTopY,
+          boneOrigin: this.rig.points.joint.head,
+          seed: opts.seed ?? 0,
+          detail: 1,
+        });
+        this.heroHead.attachTo(this.rig.byName.head);
+        HeroHead.debugHook(this.heroHead, swap);
+      };
+      HeroHead.debugHook(this.heroHead, swap);
+    }
 
     this.anim = new AnimationController(this.rig, opts.seed ?? 0);
     this.anim.onFootfall = (foot, local, intensity) => {
@@ -1139,6 +1175,10 @@ export class CharacterActor {
     _actorPos.setFromMatrixPosition(this.object.matrixWorld);
     const dist = _camPos.distanceTo(_actorPos);
 
+    // The hero face runs its own distance LOD: full scattering and micro-detail
+    // near the camera, standard material past ~30 m.
+    if (this.heroHead) this.heroHead.update(ctx, dist);
+
     let rate = 1;
     if (!this.hero) {
       _sphere.center.copy(_actorPos);
@@ -1195,6 +1235,10 @@ export class CharacterActor {
     // this every promote/demote cycle in the crowd leaks a 22-bone matrix
     // buffer and one GPU texture for the rest of the session.
     this.rig.skeleton.dispose();
+    if (this.heroHead) {
+      this.heroHead.dispose();
+      this.heroHead = null;
+    }
     this.factory.forget(this);
     this.factory.release(this.geoKey, this.texKey);
   }

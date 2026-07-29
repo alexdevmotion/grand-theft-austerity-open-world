@@ -23,6 +23,7 @@ import * as THREE from 'three';
 import type { PedArchetype } from '../core/services';
 import { Rng } from '../core/rng';
 import { HERO_FACE, paintFace, rollFace, type FaceParams } from './faces';
+import type { CastId } from './face/fitData';
 import type { BodyType } from './rig';
 
 /* ------------------------------------------------------------------ */
@@ -97,6 +98,12 @@ export interface Appearance {
   shortSleeve: boolean;
   /** Texture seed so two identical wardrobes still get different grain. */
   texSeed: number;
+  /**
+   * Named cast member. When set, the low-poly skull, nose, ears and hair are
+   * left out of the body mesh and a full landmark-fitted head is attached to
+   * the head bone instead (`face/heroHead.ts`). Four people, never the crowd.
+   */
+  cast?: CastId;
 }
 
 /* ------------------------------------------------------------------ */
@@ -386,6 +393,96 @@ export const HERO_APPEARANCE: Appearance = {
   glow: 0.13,
   shortSleeve: false,
   texSeed: 0x8ea55,
+  // The `lead` fit with Bolojan pushed in — see face/heroHead.ts.
+  cast: 'player',
+};
+
+/**
+ * NICUSOR LAN — infrastructure ally.
+ *
+ * Slight build and narrow shoulders under a plain dark suit with no tie (he is
+ * the network guy), a lanyard and cable coils as role props. He must be
+ * silhouette-distinct from the player at a glance: the head carries that with a
+ * tall curly mop over a lean face against the player's cropped hair and heavy
+ * build, and the body carries the rest.
+ */
+export const NICUSOR_APPEARANCE: Appearance = {
+  id: 'nicusor-lan',
+  body: 'slim',
+  female: false,
+  height: 1.79,
+  top: 'shirt',
+  outer: 'suit',
+  legs: 'suitTrousers',
+  shoes: 'dressShoes',
+  hair: 'medium',
+  headwear: 'none',
+  accessory: 'lanyard',
+  colors: {
+    skin: 0xd7ac8a,
+    hair: 0x3b2f24,
+    top: 0xd8dce4,
+    outer: 0x1b1f2b,
+    legs: 0x1b1f2b,
+    shoes: 0x14141a,
+    accent: 0x6d7d8c,
+    detail: 0x2a2530,
+  },
+  face: {
+    ...HERO_FACE,
+    age: 0.6, beard: 0, stubble: 0.06, tired: 0.3, jaw: 0.42,
+    browThick: 0.5, noseLength: 0.86, noseWidth: 0.62, lipFull: 0.18,
+  },
+  glow: 0,
+  shortSleeve: false,
+  texSeed: 0x4c17b,
+  cast: 'nicusor',
+};
+
+/**
+ * ALEX NEED-AID — Recorder operative.
+ *
+ * Slim athletic build, black `recorder` t-shirt with the small red circular
+ * logo at the chest; that logo is his identifier and has to stay legible.
+ */
+export const ALLY_APPEARANCE: Appearance = {
+  id: 'alex-need-aid',
+  body: 'slim',
+  female: false,
+  height: 1.80,
+  top: 'tee',
+  outer: 'none',
+  legs: 'jeans',
+  shoes: 'sneakers',
+  hair: 'sweptShort',
+  headwear: 'none',
+  accessory: 'satchel',
+  colors: {
+    skin: 0xc99873,
+    hair: 0x2a2018,
+    top: 0x0e0e11,
+    outer: 0x0e0e11,
+    legs: 0x232a38,
+    shoes: 0x14141a,
+    accent: 0xc0392b,
+    detail: 0x2a2530,
+  },
+  face: {
+    ...HERO_FACE,
+    age: 0.44, beard: 0, stubble: 0.35, tired: 0.42, jaw: 0.6,
+    browThick: 0.6, noseLength: 0.62, noseWidth: 0.52, lipFull: 0.42,
+  },
+  glow: 0,
+  shortSleeve: true,
+  texSeed: 0x2be91,
+  cast: 'ally',
+};
+
+/** Every named cast member, for anything that wants to spawn the story cast. */
+export const CAST_APPEARANCES: Record<CastId, Appearance> = {
+  player: HERO_APPEARANCE,
+  nicusor: NICUSOR_APPEARANCE,
+  ally: ALLY_APPEARANCE,
 };
 
 /* ------------------------------------------------------------------ */
@@ -398,6 +495,7 @@ export function appearanceGeoKey(a: Appearance): string {
     a.body, a.female ? 'f' : 'm', a.top, a.outer, a.legs, a.shoes,
     a.hair, a.headwear, a.accessory, a.shortSleeve ? 's' : 'l',
     (a.face.jaw * 3) | 0, (a.face.noseWidth * 3) | 0,
+    a.cast ?? '-',
   ].join('|');
 }
 
@@ -413,7 +511,7 @@ export function appearanceTexKey(a: Appearance): string {
     (f.noseWidth * 5) | 0, (f.noseLength * 5) | 0, (f.browThick * 5) | 0,
     (f.browHeight * 5) | 0, (f.lipFull * 5) | 0, (f.makeup * 4) | 0,
     f.eyeColor, (f.freckles * 4) | 0, (f.jaw * 4) | 0, (f.cheek * 4) | 0,
-    (f.brow * 4) | 0,
+    (f.brow * 4) | 0, a.cast ?? '-',
   ].join('|');
 }
 

@@ -51,6 +51,75 @@
 
       const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, (a.z - b.z) || 0);
 
+      /* ---------------------------------------------------------------- *
+       * De-rotation to frontal.
+       *
+       * MediaPipe's normalised landmarks are in IMAGE space: x is divided by
+       * the image width, y by the height, and z carries the width scale. On a
+       * three-quarter-view photo every width measured in that space is
+       * foreshortened by cos(yaw), which is exactly the caveat FACE_PIPELINE
+       * warns about. `facialTransformationMatrixes` gives the rigid head pose,
+       * so undoing its rotation puts every subject in one frontal frame and
+       * makes the widths comparable.
+       * ---------------------------------------------------------------- */
+
+      /** Image-normalised landmark -> isotropic, right-handed, Y-up units of image height. */
+      function toMetric(p, aspect) {
+        return { x: (p.x - 0.5) * aspect, y: -(p.y - 0.5), z: -p.z * aspect };
+      }
+
+      /** Rotation part of the 4x4 column-major transform, transposed (= its inverse). */
+      function inverseRotation(mat) {
+        // column-major: mat[col*4 + row]
+        return [
+          [mat[0], mat[1], mat[2]],   // row i of R^T = column i of R
+          [mat[4], mat[5], mat[6]],
+          [mat[8], mat[9], mat[10]],
+        ];
+      }
+
+      function applyRt(Rt, v) {
+        return {
+          x: Rt[0][0] * v.x + Rt[0][1] * v.y + Rt[0][2] * v.z,
+          y: Rt[1][0] * v.x + Rt[1][1] * v.y + Rt[1][2] * v.z,
+          z: Rt[2][0] * v.x + Rt[2][1] * v.y + Rt[2][2] * v.z,
+        };
+      }
+
+      /** Yaw/pitch/roll in degrees, for the human reading the log. */
+      function poseAngles(mat) {
+        const r = (c, row) => mat[c * 4 + row];
+        const yaw = Math.atan2(-r(2, 0), Math.hypot(r(2, 1), r(2, 2)));
+        const pitch = Math.atan2(r(2, 1), r(2, 2));
+        const roll = Math.atan2(r(1, 0), r(0, 0));
+        const d = (v) => +(v * 180 / Math.PI).toFixed(2);
+        return { yawDeg: d(yaw), pitchDeg: d(pitch), rollDeg: d(roll) };
+      }
+
+      /**
+       * De-rotate, re-centre on the eye midpoint and scale by frontal face
+       * height. The result is directly comparable across subjects: +x is the
+       * subject's LEFT in image terms (screen right), +y is up, +z is forward
+       * out of the face, and 1.0 unit is the forehead-to-chin span.
+       */
+      function frontalise(lm, mat, aspect) {
+        const Rt = inverseRotation(mat);
+        const pts = lm.map((p) => applyRt(Rt, toMetric(p, aspect)));
+        const eyeMid = {
+          x: (pts[33].x + pts[263].x) * 0.5,
+          y: (pts[33].y + pts[263].y) * 0.5,
+          z: (pts[33].z + pts[263].z) * 0.5,
+        };
+        const faceH = Math.hypot(
+          pts[10].x - pts[152].x, pts[10].y - pts[152].y, pts[10].z - pts[152].z,
+        );
+        return pts.map((p) => ({
+          x: (p.x - eyeMid.x) / faceH,
+          y: (p.y - eyeMid.y) / faceH,
+          z: (p.z - eyeMid.z) / faceH,
+        }));
+      }
+
       function measure(lm) {
         const p = (k) => lm[IDX[k]];
         // Every measurement is normalised by face height so it is independent
@@ -114,19 +183,38 @@
           if (!r.faceLandmarks?.length) { log(`✗ ${s.id}: no face found`); continue; }
           const lm = r.faceLandmarks[0];
 
+          const mat = r.facialTransformationMatrixes?.[0]?.data
+            ? Array.from(r.facialTransformationMatrixes[0].data)
+            : null;
+          const aspect = img.width / img.height;
+          const front = mat ? frontalise(lm, mat, aspect) : null;
+
           results[s.id] = {
             source: s.src,
             landmarkCount: lm.length,
+            imageSize: [img.width, img.height],
+            /** 4x4 column-major head pose from MediaPipe. */
+            transform: mat ? mat.map((v) => +v.toFixed(6)) : null,
+            pose: mat ? poseAngles(mat) : null,
             measurements: measure(lm),
+            // Same measurements on the DE-ROTATED cloud: widths are no longer
+            // foreshortened, so they are comparable between the frontal photos
+            // (bolojan, nicusor) and the three-quarter crops (lead, ally).
+            frontalMeasurements: front ? measure(front) : null,
             // Full landmark set, rounded — this is what drives mesh deformation.
             landmarks: lm.map((p) => [ +p.x.toFixed(5), +p.y.toFixed(5), +p.z.toFixed(5) ]),
+            // De-rotated, eye-centred, face-height-normalised. THIS is what the
+            // head deformation should consume.
+            frontal: front
+              ? front.map((p) => [ +p.x.toFixed(5), +p.y.toFixed(5), +p.z.toFixed(5) ])
+              : null,
             blendshapes: Object.fromEntries(
               (r.faceBlendshapes?.[0]?.categories ?? [])
                 .filter((c) => c.score > 0.04)
                 .map((c) => [c.categoryName, +c.score.toFixed(3)]),
             ),
           };
-          log(`✓ ${s.id}: ${lm.length} landmarks`);
+          log(`✓ ${s.id}: ${lm.length} landmarks  pose=${JSON.stringify(results[s.id].pose)}`);
 
           // Draw an overlay so a human can confirm the fit landed on the face.
           const cv = document.createElement('canvas');

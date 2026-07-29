@@ -24,13 +24,38 @@
 
 import * as THREE from 'three';
 
-export const BONE_NAMES = [
+/**
+ * The body. Twenty-two bones, and their indices are FROZEN — `src/ai/**` reads
+ * `BI.handR`, `BI.upperArmL` and friends, and the skinIndex attribute in every
+ * cached geometry is these numbers. Anything new goes on the end.
+ */
+export const CORE_BONE_NAMES = [
   'hips', 'spine', 'chest', 'upperChest', 'neck', 'head',
   'clavicleL', 'upperArmL', 'forearmL', 'handL',
   'clavicleR', 'upperArmR', 'forearmR', 'handR',
   'thighL', 'shinL', 'footL', 'toeL',
   'thighR', 'shinR', 'footR', 'toeR',
 ] as const;
+
+/** Digits, thumb first. Two phalanges each — enough to curl and to oppose. */
+export const DIGIT_NAMES = ['thumb', 'index', 'middle', 'ring', 'pinky'] as const;
+export type DigitName = (typeof DIGIT_NAMES)[number];
+
+/**
+ * HANDS. The stumps are gone: every character now carries a palm, four fingers
+ * and an opposed thumb, each with a proximal and a distal segment, so a hand
+ * can rest, point and — the reason this exists — close around a steering wheel.
+ *
+ * Twenty bones for two hands is deliberate restraint. Three phalanges per digit
+ * is the anatomical answer and costs thirty; at the distances this game shows a
+ * hand, the second knuckle carries the read and the third does not, and the
+ * whole crowd pays for every bone in the rig.
+ */
+const HAND_BONE_NAMES = (['L', 'R'] as const).flatMap((side) =>
+  DIGIT_NAMES.flatMap((d) => [`${d}0${side}`, `${d}1${side}`] as const),
+);
+
+export const BONE_NAMES = [...CORE_BONE_NAMES, ...HAND_BONE_NAMES] as const;
 
 export type BoneName = (typeof BONE_NAMES)[number];
 
@@ -41,6 +66,19 @@ export const BI = BONE_NAMES.reduce((acc, n, i) => {
 }, {} as Record<BoneName, number>);
 
 export const BONE_COUNT = BONE_NAMES.length;
+
+/**
+ * Bones a character that is not showing its hands has to evaluate. Poses stop
+ * here for the crowd, leaving the fingers in their (already relaxed) bind pose
+ * — so eighty pedestrians cost exactly what they cost before the hands landed.
+ */
+export const CORE_BONE_COUNT = CORE_BONE_NAMES.length;
+
+/** [proximal, distal] bone indices per digit, per hand. */
+export const DIGITS: Record<'L' | 'R', ReadonlyArray<readonly [number, number]>> = {
+  L: DIGIT_NAMES.map((d) => [BI[`${d}0L` as BoneName], BI[`${d}1L` as BoneName]] as const),
+  R: DIGIT_NAMES.map((d) => [BI[`${d}0R` as BoneName], BI[`${d}1R` as BoneName]] as const),
+};
 
 /** Every build is authored at this height and scaled per character. */
 export const NOMINAL_HEIGHT = 1.75;
@@ -229,6 +267,8 @@ export interface RigPoints {
   handTipR: THREE.Vector3;
   toeTipL: THREE.Vector3;
   toeTipR: THREE.Vector3;
+  /** Per-hand frame the digits were authored in — the mesh builder reuses it. */
+  hand: Record<'L' | 'R', { down: THREE.Vector3; palmN: THREE.Vector3; across: THREE.Vector3 }>;
 }
 
 export interface Rig {
@@ -244,7 +284,7 @@ export interface Rig {
   skeleton: THREE.Skeleton;
 }
 
-const PARENT: Record<BoneName, BoneName | null> = {
+const PARENT_CORE: Record<string, BoneName | null> = {
   hips: null,
   spine: 'hips',
   chest: 'spine',
@@ -269,9 +309,42 @@ const PARENT: Record<BoneName, BoneName | null> = {
   toeR: 'footR',
 };
 
+const PARENT = ((): Record<BoneName, BoneName | null> => {
+  const out = { ...PARENT_CORE } as Record<BoneName, BoneName | null>;
+  for (const side of ['L', 'R'] as const) {
+    for (const d of DIGIT_NAMES) {
+      out[`${d}0${side}` as BoneName] = `hand${side}` as BoneName;
+      out[`${d}1${side}` as BoneName] = `${d}0${side}` as BoneName;
+    }
+  }
+  return out;
+})();
+
 export function parentOf(n: BoneName): BoneName | null {
   return PARENT[n];
 }
+
+/* ------------------------------------------------------------------ */
+/* Hand proportions                                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Digit geometry as fractions of `handLen` (wrist to fingertip). Sourced from
+ * standard adult hand anthropometry: the palm is a little over half the hand,
+ * the middle finger is the longest, and the little finger is about four-fifths
+ * of it. `spread` is the knuckle's offset across the palm in units of `handW`,
+ * signed so that +1 is the thumb side.
+ */
+export const DIGIT_SPEC: Record<DigitName, {
+  root: number; spread: number; lift: number; prox: number; dist: number; curl: number;
+}> = {
+  //        along palm    across       out of palm   segment lengths    bind curl
+  thumb:  { root: 0.215, spread: 0.86, lift: 0.62, prox: 0.240, dist: 0.185, curl: 0.24 },
+  index:  { root: 0.545, spread: 0.80, lift: 0.10, prox: 0.230, dist: 0.185, curl: 0.24 },
+  middle: { root: 0.560, spread: 0.27, lift: 0.06, prox: 0.250, dist: 0.200, curl: 0.26 },
+  ring:   { root: 0.545, spread: -0.27, lift: 0.02, prox: 0.230, dist: 0.185, curl: 0.30 },
+  pinky:  { root: 0.505, spread: -0.80, lift: 0.00, prox: 0.180, dist: 0.145, curl: 0.34 },
+};
 
 /**
  * Rest orientation for a bone pointing along `dir`.
@@ -332,10 +405,62 @@ export function rigPoints(m: BodyMetrics): RigPoints {
   const handDirR = joint.handR.clone().sub(joint.forearmR).normalize();
   const handTipL = joint.handL.clone().addScaledVector(handDirL, m.handLen);
   const handTipR = joint.handR.clone().addScaledVector(handDirR, m.handLen);
+
+  /* ---- digits ----
+   * Built in the hand's own frame:
+   *   down   — along the hand, wrist to fingertip
+   *   palmN  — out of the PALM. The arms hang mid-pronated, so the palms face
+   *            the thighs and `palmN` is medial. Fingers curl along it.
+   *   across — from the little finger toward the thumb, which lands anterior
+   *            for both hands, because that is where thumbs point.
+   *
+   * The bind pose is a RELAXED hand, not a flat one — every joint carries a
+   * little curl — which is why a pedestrian that never touches a finger bone
+   * still has hands that hang like hands. */
+  const digitTip = {} as Record<BoneName, THREE.Vector3>;
+  const digitFrames = {} as Record<'L' | 'R', { down: THREE.Vector3; palmN: THREE.Vector3; across: THREE.Vector3 }>;
+  for (const s of [1, -1] as const) {
+    const L = s > 0 ? 'L' : 'R';
+    const wrist = joint[`hand${L}` as BoneName];
+    const down = (s > 0 ? handDirL : handDirR).clone();
+    const palmN = V(-s, 0, 0);
+    palmN.addScaledVector(down, -palmN.dot(down)).normalize();
+    const across = new THREE.Vector3().crossVectors(down, palmN).normalize();
+    if (across.z < 0) across.negate();
+    digitFrames[L] = { down, palmN, across };
+
+    for (const d of DIGIT_NAMES) {
+      const spec = DIGIT_SPEC[d];
+      const knuckle = wrist.clone()
+        .addScaledVector(down, m.handLen * spec.root)
+        .addScaledVector(across, m.handW * spec.spread)
+        .addScaledVector(palmN, m.handT * spec.lift);
+
+      // Each phalanx points a little further round than the last: that is the
+      // curl. The thumb also swings across the palm — it is OPPOSED, which is
+      // the whole point of a thumb.
+      const oppose = d === 'thumb' ? 0.70 : 0;
+      const p0 = down.clone()
+        .addScaledVector(palmN, Math.sin(spec.curl) + oppose * 0.35)
+        .addScaledVector(across, oppose)
+        .normalize();
+      const p1 = down.clone()
+        .addScaledVector(palmN, Math.sin(spec.curl * 2.1) + oppose * 0.55)
+        .addScaledVector(across, oppose * 0.60)
+        .normalize();
+
+      const mid = knuckle.clone().addScaledVector(p0, m.handLen * spec.prox);
+      const tip = mid.clone().addScaledVector(p1, m.handLen * spec.dist);
+      joint[`${d}0${L}` as BoneName] = knuckle;
+      joint[`${d}1${L}` as BoneName] = mid;
+      digitTip[`${d}1${L}` as BoneName] = tip;
+    }
+  }
   const toeTipL = joint.toeL.clone().add(V(0, -m.ankleY * 0.30, m.footLen * 0.30));
   const toeTipR = joint.toeR.clone().add(V(0, -m.ankleY * 0.30, m.footLen * 0.30));
 
   const tip: Partial<Record<BoneName, THREE.Vector3>> = {
+    ...digitTip,
     head: V(0, m.headTopY, 0.002),
     handL: handTipL,
     handR: handTipR,
@@ -351,6 +476,9 @@ export function rigPoints(m: BodyMetrics): RigPoints {
     thighL: 'shinL', shinL: 'footL', footL: 'toeL',
     thighR: 'shinR', shinR: 'footR', footR: 'toeR',
   };
+  for (const L of ['L', 'R'] as const) {
+    for (const d of DIGIT_NAMES) CHILD[`${d}0${L}` as BoneName] = `${d}1${L}` as BoneName;
+  }
 
   const dir = {} as Record<BoneName, THREE.Vector3>;
   const len = {} as Record<BoneName, number>;
@@ -362,7 +490,7 @@ export function rigPoints(m: BodyMetrics): RigPoints {
     dir[n] = len[n] > 1e-5 ? d.divideScalar(len[n]) : UP.clone();
   }
 
-  return { joint, dir, len, handTipL, handTipR, toeTipL, toeTipR };
+  return { joint, dir, len, handTipL, handTipR, toeTipL, toeTipR, hand: digitFrames };
 }
 
 /** Bind-pose inverse matrices, cached per body key (shared across actors). */

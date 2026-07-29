@@ -37,7 +37,7 @@ import { CAST, HeroHead } from './face/heroHead';
 import { Ragdoll } from './ik';
 import { prof } from './profile';
 import {
-  BI, BONE_COUNT, NOMINAL_HEIGHT, bodyMetrics, buildRig,
+  BI, BONE_COUNT, DIGIT_NAMES, NOMINAL_HEIGHT, bodyMetrics, buildRig,
   type BodyMetrics, type Rig,
 } from './rig';
 import {
@@ -564,21 +564,7 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
       7, foreSlot, {},
     );
 
-    // hand: palm block + thumb
-    const tip = (s > 0 ? rig.points.handTipL : rig.points.handTipR);
-    const dH = tip.clone().sub(wrist).normalize();
-    b.tube(
-      [
-        { c: wrist.clone().addScaledVector(dH, 0.006), dir: dH, rx: m.handW * 0.80, rzF: m.handT * 1.05, n: 3, b0: hand, w0: 1, v: 0.50 },
-        { c: at(wrist, dH, 0.42, m.handLen), dir: dH, rx: m.handW, rzF: m.handT, n: 3.2, b0: hand, w0: 1, v: 0.55 },
-        { c: at(wrist, dH, 0.86, m.handLen), dir: dH, rx: m.handW * 0.92, rzF: m.handT * 0.86, n: 3.2, b0: hand, w0: 1, v: 0.60 },
-        { c: at(wrist, dH, 1.0, m.handLen), dir: dH, rx: m.handW * 0.62, rzF: m.handT * 0.62, n: 3, b0: hand, w0: 1, v: 0.62 },
-      ],
-      8, SLOT.SKIN, { capStart: true, capEnd: true },
-    );
-    const thumbBase = at(wrist, dH, 0.26, m.handLen).add(V(-s * m.handW * 0.55, 0, m.handT * 0.2));
-    const thumbTip = thumbBase.clone().addScaledVector(dH, m.handLen * 0.42).add(V(-s * m.handW * 0.30, 0, 0));
-    b.slab(thumbBase, thumbTip, m.handT * 0.95, m.handT * 0.85, SLOT.SKIN, hand, 0.52, 0.58, undefined, 3);
+    buildHand(b, m, rig, L, hand);
   }
 
   /* ---------------- legs ---------------- */
@@ -677,6 +663,113 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
   buildAccessory(b, a, m, rng);
 
   return b.build();
+}
+
+/* ---------------- hands ---------------- */
+
+/**
+ * A HAND, not a stump.
+ *
+ * What was here before was a four-ring tapered block with one slab glued to the
+ * side for a thumb: from any distance the character had mittens, and at the
+ * wheel he had two paddles resting on the rim. Hands are the second thing after
+ * the face that an eye checks a humanoid against, and they are on screen
+ * permanently in third person.
+ *
+ * This builds the real thing in the hand's own frame (`rig.points.hand`):
+ *   - a PALM whose cross-section is wide across the knuckles and thin through
+ *     the back, with a thenar bulge under the thumb, tapering toward the wrist
+ *   - FOUR FINGERS, each two swept tapered tubes over its own two bones, with
+ *     a visible knuckle swell and a rounded tip
+ *   - an OPPOSED THUMB set low and forward on the palm, angled across it
+ *
+ * Every ring is bound to the bone that moves it, so the fingers articulate.
+ * Radial resolution is deliberately low (5 columns per finger); at the size a
+ * finger occupies on screen, its silhouette is carried by its taper and its
+ * curl, and never by the number of sides on the tube.
+ */
+function buildHand(
+  b: SkinBuilder, m: BodyMetrics, rig: Rig, L: 'L' | 'R', handBone: number,
+): void {
+  const P = rig.points.joint;
+  const wrist = P[`hand${L}` as 'handL'];
+  const f = rig.points.hand[L];
+  const down = f.down;
+  const across = f.across;   // toward the thumb
+  const palmN = f.palmN;     // out of the palm
+
+  // Palm thickness and half-width. `handW` is the half-width across the
+  // knuckles, `handT` the half-thickness through the palm.
+  const kW = m.handW;
+  const kT = m.handT;
+  const at = (t: number, a = 0, n = 0): THREE.Vector3 =>
+    wrist.clone().addScaledVector(down, m.handLen * t)
+      .addScaledVector(across, kW * a)
+      .addScaledVector(palmN, kT * n);
+
+  /* ---- palm ----
+   * `ref: palmN` puts the ring's local +Z along the palm normal, so `rzF/rzB`
+   * is the palm's THICKNESS and `rx` — the ring's other axis, `dir x ref` — is
+   * the half-width ACROSS the knuckles. A palm is roughly twice as wide as it
+   * is thick; getting these two the wrong way round is what turns a hand into
+   * a bar of soap. */
+  const palmRing = (t: number, halfAcross: number, halfThick: number, a: number, v: number): Ring => ({
+    c: at(t, a, 0), dir: down, rx: halfAcross * kW, rzF: halfThick * kT, rzB: halfThick * kT,
+    n: 3.0, b0: handBone, w0: 1, v, ref: palmN,
+  });
+  b.tube(
+    [
+      palmRing(0.02, 0.62, 0.74, 0.02, 0.50),
+      palmRing(0.18, 0.82, 0.86, 0.06, 0.53),
+      palmRing(0.38, 0.92, 0.80, 0.05, 0.56),
+      palmRing(0.55, 0.90, 0.66, 0.00, 0.59),
+    ],
+    9, SLOT.SKIN, { capStart: true, capEnd: true },
+  );
+  // Thenar eminence — the muscle pad at the base of the thumb. Without it the
+  // palm reads as a card with sticks on it.
+  b.tube(
+    [
+      { c: at(0.08, 0.44, 0.26), dir: down, rx: kW * 0.24, rzF: kT * 0.52, n: 3, b0: handBone, w0: 1, v: 0.52, ref: palmN },
+      { c: at(0.24, 0.54, 0.30), dir: down, rx: kW * 0.28, rzF: kT * 0.58, n: 3, b0: handBone, w0: 1, v: 0.55, ref: palmN },
+      { c: at(0.42, 0.48, 0.16), dir: down, rx: kW * 0.22, rzF: kT * 0.44, n: 3, b0: handBone, w0: 1, v: 0.58, ref: palmN },
+    ],
+    7, SLOT.SKIN, { capStart: true, capEnd: true },
+  );
+
+  /* ---- digits ---- */
+  for (let d = 0; d < DIGIT_NAMES.length; d++) {
+    const name = DIGIT_NAMES[d];
+    const prox = BI[`${name}0${L}` as 'index0L'];
+    const dist = BI[`${name}1${L}` as 'index1L'];
+    const j0 = P[`${name}0${L}` as 'index0L'];
+    const j1 = P[`${name}1${L}` as 'index1L'];
+    const tipDir = rig.points.dir[`${name}1${L}` as 'index1L'];
+    const len1 = rig.points.len[`${name}1${L}` as 'index1L'];
+    const d0 = j1.clone().sub(j0).normalize();
+    const tip = j1.clone().addScaledVector(tipDir, len1);
+
+    // Fingers taper from the knuckle to the nail; the thumb is thicker. The
+    // four knuckles are 0.53 * handW apart, so anything above ~0.26 fuses the
+    // fingers into a mitten.
+    const base = (name === 'thumb' ? 0.30 : 0.245) * kW;
+    const mid = base * 0.88;
+    const end = base * 0.74;
+    const R = (r: number): Partial<Ring> => ({ rx: r, rzF: r * 0.90, rzB: r * 0.90, ref: palmN });
+
+    b.tube(
+      [
+        // buried a little inside the palm so the knuckle is a joint, not a peg
+        { c: j0.clone().addScaledVector(d0, -m.handLen * 0.045), dir: d0, ...R(base * 1.02), n: 2.6, b0: handBone, w0: 0.6, b1: prox, w1: 0.4, v: 0.50 } as Ring,
+        { c: j0.clone().addScaledVector(d0, m.handLen * 0.035), dir: d0, ...R(base), n: 2.6, b0: handBone, w0: 0.2, b1: prox, w1: 0.8, v: 0.53 } as Ring,
+        { c: j1.clone().addScaledVector(d0, -m.handLen * 0.018), dir: d0, ...R(mid * 1.05), n: 2.5, b0: prox, w0: 0.6, b1: dist, w1: 0.4, v: 0.58 } as Ring,
+        { c: j1.clone().addScaledVector(tipDir, len1 * 0.30), dir: tipDir, ...R(mid), n: 2.5, b0: dist, w0: 1, v: 0.62 } as Ring,
+        { c: j1.clone().addScaledVector(tipDir, len1 * 0.82), dir: tipDir, ...R(end), n: 2.4, b0: dist, w0: 1, v: 0.66 } as Ring,
+        { c: tip, dir: tipDir, ...R(end * 0.48), n: 2.4, b0: dist, w0: 1, v: 0.68 } as Ring,
+      ],
+      5, SLOT.SKIN, { capStart: true, capEnd: true },
+    );
+  }
 }
 
 /* ---------------- hair ---------------- */
@@ -1016,6 +1109,8 @@ export type FootfallListener = (foot: 'left' | 'right', worldPos: THREE.Vector3,
 
 /** Distance bands (metres) for skeleton update rate. */
 const LOD_FULL = 22;
+/** Past this a finger is sub-pixel; the crowd leaves its hands in bind pose. */
+const LOD_HANDS = 9;
 const LOD_HALF = 55;
 const LOD_QUARTER = 110;
 
@@ -1121,6 +1216,9 @@ export class CharacterActor {
     }
 
     this.anim = new AnimationController(this.rig, opts.seed ?? 0);
+    // The hero's hands are on screen permanently; everyone else's are earned by
+    // distance. See `Pose.limit`.
+    this.anim.handDetail = this.hero;
     this.anim.onFootfall = (foot, local, intensity) => {
       if (!this.onFootfall) return;
       _tmpV.copy(local).applyMatrix4(this.object.matrixWorld);
@@ -1216,6 +1314,9 @@ export class CharacterActor {
         return;
       }
       rate = dist < LOD_FULL ? 1 : dist < LOD_HALF ? 2 : dist < LOD_QUARTER ? 4 : 8;
+      // Fingers are worth evaluating only when they cover more than a pixel.
+      const wantHands = dist < LOD_HANDS;
+      if (this.anim.handDetail !== wantHands) this.anim.handDetail = wantHands;
     }
 
     this.lastLodDt += dt;

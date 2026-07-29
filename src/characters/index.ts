@@ -37,7 +37,7 @@ export {
   type FootfallListener,
 } from './humanoid';
 
-export { AnimationController, Pose, type Drive } from './animation';
+export { AnimationController, Pose, WHEEL_GRIP, type BoardPose, type Drive } from './animation';
 
 export {
   rollAppearance,
@@ -68,8 +68,13 @@ export {
 
 export {
   BONE_NAMES,
+  CORE_BONE_NAMES,
+  DIGIT_NAMES,
+  DIGITS,
+  DIGIT_SPEC,
   BI,
   BONE_COUNT,
+  CORE_BONE_COUNT,
   NOMINAL_HEIGHT,
   BODY_TYPES,
   bodyMetrics,

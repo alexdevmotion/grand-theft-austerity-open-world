@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>facefit — photo to head parameters</title>
+    <style>
+      body { background:#120e1c; color:#e8dcff; font:13px/1.5 ui-monospace,monospace; padding:18px; }
+      .row { display:flex; gap:16px; flex-wrap:wrap; margin-bottom:18px; }
+      .card { background:#1c1530; padding:10px; border-radius:6px; }
+      canvas { display:block; background:#000; }
+      h2 { font-size:13px; margin:0 0 8px; color:#ffb454; letter-spacing:.1em; }
+      pre { white-space:pre-wrap; color:#9fe8b0; max-height:220px; overflow:auto; }
+    </style>
+  </head>
+  <body>
+    <h2>FACEFIT — MediaPipe FaceLandmarker → head parameters</h2>
+    <div id="out" class="row"></div>
+    <pre id="log">booting…</pre>
+
+    <script type="module">
+      import { FaceLandmarker, FilesetResolver } from '/node_modules/@mediapipe/tasks-vision/vision_bundle.mjs';
+
+      const log = (m) => { document.getElementById('log').textContent += `\n${m}`; console.log(m); };
+
+      /** Faces to fit: id -> reference image served by vite. */
+      const SUBJECTS = [
+        { id: 'lead',      src: '/docs/reference/likeness/ref-lead-head.png' },
+        { id: 'ally',      src: '/docs/reference/likeness/ref-ally-head.png' },
+        { id: 'bolojan',   src: '/docs/reference/likeness/bolojan.jpg' },
+        { id: 'nicusor',   src: '/docs/reference/likeness/nicusor-dan.jpg' },
+      ];
+
+      /**
+       * Landmark indices in MediaPipe's 468-point canonical mesh that we use to
+       * derive stable, scale-independent facial proportions. These are the
+       * measurements that actually carry recognition at gameplay distance.
+       */
+      const IDX = {
+        chin: 152, forehead: 10, noseTip: 1, noseBridge: 168, noseBottom: 2,
+        leftEyeOuter: 33, leftEyeInner: 133, rightEyeInner: 362, rightEyeOuter: 263,
+        leftEyeTop: 159, leftEyeBottom: 145, rightEyeTop: 386, rightEyeBottom: 374,
+        mouthLeft: 61, mouthRight: 291, mouthTop: 13, mouthBottom: 14,
+        leftCheek: 234, rightCheek: 454,
+        leftJaw: 172, rightJaw: 397,
+        leftBrowInner: 55, leftBrowOuter: 46, rightBrowInner: 285, rightBrowOuter: 276,
+        leftBrowTop: 52, rightBrowTop: 282,
+        noseLeft: 129, noseRight: 358,
+        upperLip: 0, lowerLip: 17,
+        templeL: 127, templeR: 356,
+      };
+
+      const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, (a.z - b.z) || 0);
+
+      function measure(lm) {
+        const p = (k) => lm[IDX[k]];
+        // Every measurement is normalised by face height so it is independent
+        // of image resolution and how tightly the photo is cropped.
+        const faceH = dist(p('forehead'), p('chin'));
+        const n = (v) => +(v / faceH).toFixed(4);
+        const faceW = dist(p('leftCheek'), p('rightCheek'));
+        const jawW = dist(p('leftJaw'), p('rightJaw'));
+        const eyeSpan = dist(p('leftEyeOuter'), p('rightEyeOuter'));
+        const ipd = dist(p('leftEyeInner'), p('rightEyeInner'));
+        const leftEyeOpen = dist(p('leftEyeTop'), p('leftEyeBottom'));
+        const rightEyeOpen = dist(p('rightEyeTop'), p('rightEyeBottom'));
+        const noseLen = dist(p('noseBridge'), p('noseBottom'));
+        const noseW = dist(p('noseLeft'), p('noseRight'));
+        const mouthW = dist(p('mouthLeft'), p('mouthRight'));
+        const lipH = dist(p('mouthTop'), p('mouthBottom'));
+        const browRaise = (dist(p('leftBrowTop'), p('leftEyeTop')) + dist(p('rightBrowTop'), p('rightEyeTop'))) / 2;
+        const browTilt = (p('leftBrowOuter').y - p('leftBrowInner').y) - (p('rightBrowOuter').y - p('rightBrowInner').y);
+        const templeW = dist(p('templeL'), p('templeR'));
+
+        return {
+          faceWidthRatio: n(faceW),        // broad vs narrow face
+          jawWidthRatio: n(jawW),          // heavy jaw (Bolojan) vs narrow (Dan)
+          jawToCheek: +(jawW / faceW).toFixed(4),
+          templeWidthRatio: n(templeW),
+          eyeSpanRatio: n(eyeSpan),
+          ipdRatio: n(ipd),
+          eyeOpenRatio: n((leftEyeOpen + rightEyeOpen) / 2),
+          noseLengthRatio: n(noseLen),
+          noseWidthRatio: n(noseW),
+          noseProjection: +((p('noseTip').z - p('noseBridge').z) / faceH).toFixed(4),
+          mouthWidthRatio: n(mouthW),
+          lipThicknessRatio: n(lipH),
+          browRaiseRatio: n(browRaise),
+          browTilt: +(browTilt / faceH).toFixed(4),
+          // Vertical thirds — the classic proportion that reads as "this person".
+          upperThird: n(dist(p('forehead'), p('leftBrowTop'))),
+          midThird: n(dist(p('leftBrowTop'), p('noseBottom'))),
+          lowerThird: n(dist(p('noseBottom'), p('chin'))),
+        };
+      }
+
+      async function main() {
+        const fileset = await FilesetResolver.forVisionTasks('/node_modules/@mediapipe/tasks-vision/wasm');
+        const landmarker = await FaceLandmarker.createFromOptions(fileset, {
+          baseOptions: { modelAssetPath: '/tools/facefit/face_landmarker.task' },
+          runningMode: 'IMAGE',
+          numFaces: 1,
+          outputFaceBlendshapes: true,
+          outputFacialTransformationMatrixes: true,
+        });
+        log('landmarker ready');
+
+        const results = {};
+        for (const s of SUBJECTS) {
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error(s.src)); img.src = s.src; });
+
+          const r = landmarker.detect(img);
+          if (!r.faceLandmarks?.length) { log(`✗ ${s.id}: no face found`); continue; }
+          const lm = r.faceLandmarks[0];
+
+          results[s.id] = {
+            source: s.src,
+            landmarkCount: lm.length,
+            measurements: measure(lm),
+            // Full landmark set, rounded — this is what drives mesh deformation.
+            landmarks: lm.map((p) => [ +p.x.toFixed(5), +p.y.toFixed(5), +p.z.toFixed(5) ]),
+            blendshapes: Object.fromEntries(
+              (r.faceBlendshapes?.[0]?.categories ?? [])
+                .filter((c) => c.score > 0.04)
+                .map((c) => [c.categoryName, +c.score.toFixed(3)]),
+            ),
+          };
+          log(`✓ ${s.id}: ${lm.length} landmarks`);
+
+          // Draw an overlay so a human can confirm the fit landed on the face.
+          const cv = document.createElement('canvas');
+          const scale = Math.min(1, 320 / img.width);
+          cv.width = img.width * scale; cv.height = img.height * scale;
+          const g = cv.getContext('2d');
+          g.drawImage(img, 0, 0, cv.width, cv.height);
+          g.fillStyle = '#4ade50';
+          for (const p of lm) g.fillRect(p.x * cv.width - 1, p.y * cv.height - 1, 2, 2);
+          g.strokeStyle = '#ff3d7f'; g.lineWidth = 1.5;
+          for (const k of ['leftEyeOuter','rightEyeOuter','noseTip','chin','mouthLeft','mouthRight','leftJaw','rightJaw']) {
+            const p = lm[IDX[k]];
+            g.beginPath(); g.arc(p.x * cv.width, p.y * cv.height, 3, 0, 7); g.stroke();
+          }
+          const card = document.createElement('div');
+          card.className = 'card';
+          card.innerHTML = `<h2>${s.id}</h2>`;
+          card.appendChild(cv);
+          document.getElementById('out').appendChild(card);
+        }
+
+        window.__FACEFIT__ = results;
+        window.__FACEFIT_DONE__ = true;
+        log(`done — ${Object.keys(results).length} subjects. window.__FACEFIT__ ready.`);
+      }
+
+      main().catch((e) => { log(`FATAL ${e.message}`); window.__FACEFIT_ERROR__ = e.message; });
+    </script>
+  </body>
+</html>

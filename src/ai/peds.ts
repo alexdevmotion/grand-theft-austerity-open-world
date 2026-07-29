@@ -37,6 +37,7 @@ import {
 import {
   BI,
   CharacterFactory,
+  prof,
   rollAppearance,
   type Appearance,
   type CharacterActor,
@@ -620,8 +621,13 @@ export class PedSystem implements System, PedService {
       Math.min(1, (wanted?.stars ?? 0) / 3),
     );
 
+    let t = prof.begin();
     this.buildVehicleGrid(dt, ctx);
+    prof.add('peds.vehGrid', t);
+
+    t = prof.begin();
     this.grid.rebuild(this.list);
+    prof.add('peds.grid', t);
 
     this.env.time = ctx.time.elapsed;
     this.env.hour = ctx.tryGet(Services.Weather)?.timeOfDay ?? 19;
@@ -630,9 +636,13 @@ export class PedSystem implements System, PedService {
     this.env.playerSpeed = player?.inVehicle ? Math.abs(player.inVehicle.speed) : 0;
     this.env.tension = this.tension;
 
+    t = prof.begin();
     for (const p of this.list) p.update(dt, this.env);
+    prof.add('peds.steer', t);
 
+    t = prof.begin();
     this.stream(dt);
+    prof.add('peds.stream', t);
     this.stats.peds = this.list.length;
   }
 
@@ -730,6 +740,7 @@ export class PedSystem implements System, PedService {
 
     // Nearest first — the skinned budget goes to whoever is close enough for
     // a face and a wardrobe to read.
+    let tp = prof.begin();
     this.ranked.length = 0;
     for (const p of this.list) {
       if (!p.active) continue;
@@ -739,6 +750,7 @@ export class PedSystem implements System, PedService {
       });
     }
     this.ranked.sort(byDistance);
+    prof.add('peds.rank', tp);
 
     let promotions = 0;
     let skinned = 0;
@@ -750,7 +762,9 @@ export class PedSystem implements System, PedService {
       if (wants && !actor && promotions < 2) {
         // Rate-limited: building a skeleton is cheap but not free, and a
         // hundred at once is a visible hitch.
+        tp = prof.begin();
         actor = this.promote(p);
+        prof.add('peds.promote', tp);
         promotions++;
       } else if (!wants && actor && !p.ragdolled && (i > this.actorBudget + 5 || d > cut)) {
         this.demote(p);
@@ -759,22 +773,32 @@ export class PedSystem implements System, PedService {
 
       if (actor) {
         if (!actor.object.visible) actor.setVisible(true);
+        tp = prof.begin();
         driveActor(actor, p, dt, ctx, d, this.shadowRadius, t);
+        prof.add('peds.skinnedActors', tp);
         if (d < 44) this.handLight(actor, p, r, t);
         skinned++;
       } else if (d <= cut) {
+        tp = prof.begin();
         r.draw(p, t, d);
+        prof.add('peds.imposters', tp);
       }
 
       if (p.dog && d < r.lod2) {
         r.drawDog(p.dog.x, p.dog.y, p.dog.z, p.dog.yaw, p.dog.phase, p.dog.size, p.dog.colour, d);
       }
     }
+    tp = prof.begin();
     r.end();
+    prof.add('peds.upload', tp);
     this.stats.drawn = this.ranked.length;
     this.stats.skinned = skinned;
     this.stats.instances = r.stats.instances;
     this.stats.triangles = r.stats.triangles;
+
+    // Peds are the last simulation system to run a lateUpdate, so this is the
+    // natural place to close the profiler's frame.
+    prof.endFrame();
   }
 
   /** Phone screens and cigarette embers, pinned to the rig's hand bones. */

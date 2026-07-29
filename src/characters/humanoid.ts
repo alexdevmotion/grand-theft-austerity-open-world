@@ -34,6 +34,7 @@ import { Services, type LocomotionState } from '../core/services';
 import type { PhysicsWorld } from '../physics/physics';
 import { AnimationController, type Drive } from './animation';
 import { Ragdoll } from './ik';
+import { prof } from './profile';
 import {
   BI, BONE_COUNT, NOMINAL_HEIGHT, bodyMetrics, buildRig,
   type BodyMetrics, type Rig,
@@ -1164,13 +1165,22 @@ export class CharacterActor {
       return;
     }
 
+    let tp = prof.begin();
     this.anim.update(useDt);
+    prof.add('actor.anim', tp);
+
+    tp = prof.begin();
     this.anim.applyTo(this.rig);
+    prof.add('actor.applyTo', tp);
 
     const wantIk = this.footIk && (this.hero || dist < LOD_FULL);
     if (wantIk && this.phys && this.anim.groundedPose) {
+      tp = prof.begin();
       this.object.updateMatrixWorld(true);
+      prof.add('actor.matrixWorld', tp);
+      tp = prof.begin();
       this.anim.solveFootIk(this.rig, this.object, this.phys);
+      prof.add('actor.footIk', tp);
     }
   }
 
@@ -1215,17 +1225,25 @@ export class CharacterFactory {
 
     let ge = this.geos.get(geoKey);
     if (!ge) {
+      const t = prof.begin();
       const rig = buildRig(bodyMetrics(appearance.body, appearance.female));
       ge = { geo: buildHumanoidGeometry(appearance, rig), refs: 0 };
       this.geos.set(geoKey, ge);
+      prof.add('factory.geoMiss', t);
+    } else {
+      prof.count('factory.geoHit');
     }
     ge.refs++;
 
     let me = this.mats.get(texKey);
     if (!me) {
+      const t = prof.begin();
       const tex = buildAppearanceTextures(appearance);
       me = { mat: buildCharacterMaterial(appearance, tex), tex, refs: 0 };
       this.mats.set(texKey, me);
+      prof.add('factory.texMiss', t);
+    } else {
+      prof.count('factory.texHit');
     }
     me.refs++;
 

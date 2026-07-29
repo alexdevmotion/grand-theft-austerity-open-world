@@ -78,3 +78,5 @@ export {
 } from './rig';
 
 export { Ragdoll, solveTwoBone } from './ik';
+
+export { prof } from './profile';

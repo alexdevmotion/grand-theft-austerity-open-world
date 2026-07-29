@@ -30,6 +30,7 @@ import {
   type VehicleService,
 } from '../core/services';
 import { QUALITY, detectQuality, type Quality } from '../render/renderer';
+import { prof } from '../characters/profile';
 import { CG, groups, type PhysicsWorld } from '../physics/physics';
 import { TRAM_LANE, TrafficGraph } from './traffic/roadGraph';
 import { JunctionControl } from './traffic/junctions';
@@ -221,12 +222,19 @@ export class TrafficSystem implements System, TrafficService {
       }
     }
 
+    let tp = prof.begin();
     this.buildField(ctx);
+    prof.add('traffic.field', tp);
+
+    tp = prof.begin();
     this.prune(ctx);
+    prof.add('traffic.prune', tp);
 
     // Sensing pass: everyone bids for the junctions they are approaching before
     // anyone acts, so a step's give-way decisions are mutually consistent.
+    tp = prof.begin();
     for (const s of this.slots) s.agent.bid(this.junctions);
+    prof.add('traffic.bid', tp);
 
     this.hornGate = Math.max(0, this.hornGate - dt);
     const horn = {
@@ -241,7 +249,9 @@ export class TrafficSystem implements System, TrafficService {
         this.ctx.events.emit('audio:oneShot', { id: 'horn', position: _hornAt.clone(), volume: 0.7 });
       },
     };
+    tp = prof.begin();
     for (const s of this.slots) s.agent.update(dt, this.field, this.junctions, horn);
+    prof.add('traffic.drive', tp);
 
     // A camera cut (debug framing, respawn, a mission jump) invalidates every
     // "do not appear on screen" rule — the whole frame just changed anyway, so
@@ -252,6 +262,7 @@ export class TrafficSystem implements System, TrafficService {
     if (jump > 60 * 60) this.warpRefill = 1.2;
     this.lastFocus.copy(this.focus);
 
+    tp = prof.begin();
     this.spawnCooldown -= dt;
     if (this.spawnCooldown <= 0) {
       this.spawnCooldown = this.warpRefill > 0 ? 0.02 : 0.2;
@@ -264,6 +275,7 @@ export class TrafficSystem implements System, TrafficService {
         if (!this.trySpawn()) break;
       }
     }
+    prof.add('traffic.spawn', tp);
   }
 
   update(dt: number, ctx: GameContext): void {

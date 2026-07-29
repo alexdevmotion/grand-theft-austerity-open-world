@@ -6,3 +6,6 @@ dist/
 tools/out/
 bun.lock
 bun.lockb
+
+# MediaPipe model — 3.7MB binary, re-downloadable via docs/FACE_PIPELINE.md
+tools/facefit/face_landmarker.task

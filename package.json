@@ -20,6 +20,7 @@
     "three-mesh-bvh": "0.9.13"
   },
   "devDependencies": {
+    "@mediapipe/tasks-vision": "^1.0.0",
     "@types/node": "24",
     "@types/three": "0.185.0",
     "typescript": "5.9.3",

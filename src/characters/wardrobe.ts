@@ -104,6 +104,18 @@ export interface Appearance {
    * the head bone instead (`face/heroHead.ts`). Four people, never the crowd.
    */
   cast?: CastId;
+  /**
+   * Wear the outer garment's collar UP, standing at the jaw, instead of the flat
+   * shirt neckline every other outfit gets.
+   *
+   * Off by default: a street full of popped collars reads as a costume party.
+   * It is on for the player because the reference frame is unambiguous about it
+   * — dark navy jacket, collar up under the beard — and because it is the
+   * cheapest identity win available. A low neckline leaves 25 mm of bare neck
+   * under a bearded jaw, which is the single largest area of flat untextured
+   * skin in the whole portrait and pulls the eye straight off the face.
+   */
+  collarUp?: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -378,7 +390,15 @@ export const HERO_APPEARANCE: Appearance = {
   headwear: 'none',
   accessory: 'builderHarness',
   colors: {
-    skin: 0xc9976f,
+    /* The NECK is this colour and the FACE is `CAST.player.skin`, and they were
+     * two different men: 0xc9976f against 0x8b6d53 is 29% brighter and a good
+     * deal more orange, so the neck rendered as a pale column under a dark
+     * bearded jaw and read as "the collar sits too low" long before anyone
+     * measured the collar. It does sit too low — see `collarUp` — but the value
+     * mismatch was doing at least as much of the damage. Held a little lighter
+     * than the face on purpose: a neck genuinely is, because it spends its life
+     * shaded by the jaw and gets less sun than a forehead. */
+    skin: 0x81644c,
     hair: 0x2b2119,
     top: 0x14151a,
     outer: 0x1c2230,
@@ -395,6 +415,7 @@ export const HERO_APPEARANCE: Appearance = {
   texSeed: 0x8ea55,
   // The `lead` fit with Bolojan pushed in — see face/heroHead.ts.
   cast: 'player',
+  collarUp: true,
 };
 
 /**
@@ -496,6 +517,10 @@ export function appearanceGeoKey(a: Appearance): string {
     a.hair, a.headwear, a.accessory, a.shortSleeve ? 's' : 'l',
     (a.face.jaw * 3) | 0, (a.face.noseWidth * 3) | 0,
     a.cast ?? '-',
+    // A mesh change, so it has to be in the MESH key. It happens to be implied
+    // by `cast` today because only the player sets it, but two appearances that
+    // differ only here must not share a geometry.
+    a.collarUp ? 'cu' : '-',
   ].join('|');
 }
 

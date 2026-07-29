@@ -87,8 +87,32 @@ export const CAST: Record<CastId, CastConfig> = {
      * white under the game's low sunset key, which is the whole of "waxy": a
      * clipped highlight carries no pore detail, no scattering and no colour,
      * however good the shader under it is. A weathered olive complexion is
-     * genuinely this dark in base albedo — the sun is what makes it read warm. */
-    skin: 0x9c7452,
+     * genuinely this dark in base albedo — the sun is what makes it read warm.
+     *
+     * 0x9c7452 was still not dark enough and was still not olive. Sampled off
+     * the sunset render, the face came back at R = 240-251 out of 255 with
+     * G/R = 0.57 and B/R = 0.42; the reference photograph measures G/R = 0.64-0.71
+     * and B/R = 0.50-0.58 on the same features. Two separate faults, and the
+     * first causes half of the second: red was CLIPPING, which throws away every
+     * pore, blotch and capillary in that channel and drags the hue bodily toward
+     * orange no matter what the other two do. So the value comes down about 12%
+     * to stop the clip, and green and blue come up against red to put the cool
+     * green-grey undertone back into an otherwise pure orange-brown. Checked
+     * under a neutral noon key as well as the sunset, because a warm key is a
+     * legitimate reason for a face to look warm and is not a reason to
+     * mis-author the albedo.
+     *
+     * And then it had to come down a great deal FURTHER than that reasoning
+     * suggested, because the face sits in the shoulder of the tone curve where
+     * the response is almost flat: measured on the sunset render, an 11% cut in
+     * albedo moved the rendered red by 2 counts (240 -> 238). Sweeping a
+     * multiplier on the live material found the knee — 0.72 in linear takes the
+     * cheek from 240 to 186, which is the reference photograph's range, and it
+     * is the point where the cheekbone, the sub-malar hollow and the brow shadow
+     * come back out of the highlight. Below about 0.6 the scene's purple sky
+     * ambient starts to dominate and the face goes magenta, so this is a knee
+     * with a floor under it, not a direction to keep pushing. */
+    skin: 0x775d47,
     /* `microScale` is tiles per metre of object space. At 820 one tile of the
      * 256 px pore map covered 1.2 mm of skin, so a pore was seven microns
      * across: it mipmapped to flat grey long before it reached a pixel, which
@@ -96,28 +120,50 @@ export const CAST: Record<CastId, CastConfig> = {
      * one pixel subtends 0.21 mm, so detail has to be around half a millimetre
      * to read at all. 34 tiles/metre puts a tile at 29 mm and the crease octave
      * at 0.5-1.8 mm — visible, and still fine enough not to read as noise. */
-    skinOpts: { sss: 0.36, sssTint: 0xffe2d0, transScale: 1.05, microScale: 34, microStrength: 0.88 },
+    /* `sssTint` and `transColor` are the shader's OWN warm terms, and they are
+     * where the last of the orange lives once the albedo is right.
+     *
+     * Under a neutral noon key the corrected albedo renders at G/R = 0.718
+     * against the reference photograph's 0.713 — so the base colour is not the
+     * problem and darkening it further would only make a grey man. Under the
+     * sunset it still came back at R = 236/255 with B/R = 0.43. Two reasons, and
+     * neither is the albedo: the scattered diffuse is multiplied by a warm tint,
+     * and the transmission term adds a saturated orange-red to direct diffuse
+     * over the WHOLE face, because `thick` has a 0.06 floor everywhere and the
+     * term is deliberately unshadowed. Those are legitimate effects at an ear
+     * rim and a nostril and they were being applied at cheek scale. */
+    skinOpts: {
+      sss: 0.36, sssTint: 0xffeadf, transScale: 0.80, transColor: 0xf05a30,
+      microScale: 34, microStrength: 0.88,
+    },
     irisColor: 0x4a3520,
     tired: 0.95,
     age: 0.82,
     jawPush: 0.046,
     browPush: 0.024,
     beardShade: 1.0,
-    // The stubble tone under the cards: a salt-and-pepper beard is much greyer
-    // than the hair, so this is a warm iron grey, not the hair's near-black.
-    beardColor: 0x2f2821,
+    /* The stubble tone under the cards: a salt-and-pepper beard is much greyer
+     * than the hair, so this is a warm iron grey, not the hair's near-black.
+     *
+     * Still 0.24 lighter than the hair (0x1d1710), and a lot darker than it was.
+     * Measured against the reference photograph the beard was rendering at
+     * 140-193/255 where the reference sits at 64-118 — roughly twice as bright,
+     * which is what turns a beard into a haze. Skin albedo came down 28% in the
+     * same pass, so holding the beard where it was would have shrunk the
+     * contrast between them as well. */
+    beardColor: 0x241e17,
     hair: PLAYER_HAIR,
     hairColor: 0x1d1710,
     brow: HEAVY_BROW,
     // The signature: heavy, dark, and they stay dark as the hair greys.
     browColor: 0x0f0b07,
-    beard: { density: 1.0, length: 0.0056, grey: 0.33 },
-    beardCardColor: 0x2b241d,
+    beard: { density: 1.0, length: 0.0056, grey: 0.24 },
+    beardCardColor: 0x221c16,
   },
   nicusor: {
     id: 'nicusor',
     cloud: () => cloud('nicusor'),
-    skin: 0xb8927a,
+    skin: 0x9e7d68,   // same 0.72 linear trim as the player — same key, same shoulder.
     skinOpts: { sss: 0.32, sssTint: 0xffe8da, transScale: 1.00, microScale: 34, microStrength: 0.74 },
     irisColor: 0x4d5a4c,
     tired: 0.30,
@@ -136,7 +182,7 @@ export const CAST: Record<CastId, CastConfig> = {
   ally: {
     id: 'ally',
     cloud: () => cloud('ally'),
-    skin: 0xac8365,
+    skin: 0x946f55,   // same 0.72 linear trim as the player — same key, same shoulder.
     skinOpts: { sss: 0.33, sssTint: 0xffe4d4, transScale: 0.95, microScale: 34, microStrength: 0.74 },
     irisColor: 0x4a3826,
     tired: 0.42,
@@ -201,9 +247,33 @@ export interface HeroHeadOptions {
   detail?: number;
 }
 
+/**
+ * The hero's default head set: a few degrees of yaw and tilt, baked in.
+ *
+ * A head squared dead-on to the camera with a symmetric brow is a passport
+ * photograph, and it is most of why the front view read as stiffer than the
+ * three-quarter even once the geometry was the same man. Nobody holds their head
+ * level and square. The reference is turned very slightly to his own left with
+ * the chin a fraction down and one brow lower than the other, and that asymmetry
+ * is doing as much identifying work as any single feature.
+ *
+ * Small on purpose: past about five degrees this stops reading as a pose and
+ * starts reading as a rigging error, and it also has to survive being composed
+ * with the animation system's own head stabilisation.
+ */
+const HEAD_SET = { pitch: 0.022, yaw: -0.062, roll: 0.020 } as const;
+
 export class HeroHead {
+  /** Parented to the head bone; carries the default head set. */
   readonly group = new THREE.Group();
   readonly anchors: HeadAnchors;
+
+  /**
+   * Inside `group`, carrying the bone-origin offset so the head set above
+   * rotates about the base of the skull rather than about the character-space
+   * origin — which is on the floor, and would swing the head across the street.
+   */
+  private readonly pivot = new THREE.Group();
 
   private readonly headMesh: THREE.Mesh;
   private readonly skinMat: SkinMaterial;
@@ -249,7 +319,7 @@ export class HeroHead {
     this.headMesh.castShadow = true;
     this.headMesh.receiveShadow = true;
     this.headMesh.frustumCulled = false;
-    this.group.add(this.headMesh);
+    this.pivot.add(this.headMesh);
 
     /* ---- eyes ---- */
     this.eyes = buildEyes(built.anchors.eyeL, built.anchors.eyeR, {
@@ -257,7 +327,7 @@ export class HeroHead {
       tired: cfg.tired,
       seed: opts.seed ?? 0,
     });
-    this.group.add(this.eyes.globe, this.eyes.cornea, this.eyes.meniscus);
+    this.pivot.add(this.eyes.globe, this.eyes.cornea, this.eyes.meniscus);
 
     /* ---- hair, brows, lashes, beard ---- */
     const addHair = (
@@ -286,7 +356,7 @@ export class HeroHead {
       mesh.castShadow = o.shadow === true;
       mesh.receiveShadow = false;
       mesh.frustumCulled = false;
-      this.group.add(mesh);
+      this.pivot.add(mesh);
       this.hairMats.push(mat);
       this.geometries.push(geo);
     };
@@ -303,7 +373,9 @@ export class HeroHead {
     addHair(buildBeard(built.anchors, cfg.beard, `beard|${cfg.id}|${seed}`), cfg.beardCardColor, 'beard',
       { gloss: 60, roughness: 0.74, alphaTest: 0.20, rootDark: 0.22, tint: cfg.beardCardColor, specular: 0.035 });
 
-    this.group.position.copy(opts.boneOrigin).negate();
+    this.pivot.position.copy(opts.boneOrigin).negate();
+    this.group.add(this.pivot);
+    this.group.rotation.set(HEAD_SET.pitch, HEAD_SET.yaw, HEAD_SET.roll);
     this.group.name = `heroHead:${cfg.id}`;
   }
 

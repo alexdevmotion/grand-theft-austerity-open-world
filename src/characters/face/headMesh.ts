@@ -854,9 +854,50 @@ function smooth(a: number, b: number, x: number): number {
   return t * t * (3 - 2 * t);
 }
 
+/**
+ * Smooth |x|, matching `anatomy.ts`. Any painted term centred off the midline
+ * has a corner there if it is written against `Math.abs`, which shows up as a
+ * hairline notch down the middle of the face in whatever it paints. See the
+ * midline note in `anatomy.ts`.
+ */
+const PAINT_MIDLINE_K = 0.012;
+function sabs(x: number): number {
+  return Math.sqrt(x * x + PAINT_MIDLINE_K * PAINT_MIDLINE_K) - PAINT_MIDLINE_K;
+}
+
 /* ------------------------------------------------------------------ */
 /* Curvature                                                           */
 /* ------------------------------------------------------------------ */
+
+/**
+ * The shortest neighbour separation the estimator will divide by twice, metres.
+ *
+ * `-(d.n) / len^2` is the right discrete mean curvature for a smooth surface and
+ * a catastrophe for anything else: for a surface with a CORNER of slope s it
+ * evaluates to s/len, which diverges as the grid gets finer, and for a smooth
+ * surface carrying e metres of numerical wobble it reports e/len^2. The columns
+ * straddling the midline are 1.45 mm apart — the tightest spacing anywhere on
+ * the head, because `azimuthCols` puts its largest density peak at azimuth 0 —
+ * so the midline is exactly where both failure modes are worst. That is how the
+ * nose-bridge stripe got drawn: see the long note in `anatomy.ts`.
+ *
+ * The sculpt is now C1 through the midline, so the corner is gone at the source.
+ * This is the second line of defence: below this separation the estimate is
+ * taken at this length scale instead of at the grid's, which is also the honest
+ * thing to report, since 2.5 mm is about the finest relief the scattering LUT
+ * can express anything about.
+ */
+const CURV_LEN_FLOOR = 0.0025;
+
+/**
+ * Curvature is clamped to this, 1/m.
+ *
+ * The LUT's v axis tops out at 0.5 /mm = 500 /m, a 2 mm radius, which is already
+ * tighter than anything on a face except a nostril rim. A vertex reporting more
+ * than this is reporting a discretisation artifact, and because the attribute
+ * indexes a texture row it turns that artifact into a hard colour boundary.
+ */
+const CURV_MAX = 400;
 
 /**
  * Mean curvature at every vertex, from the grid neighbourhood. Positive is
@@ -888,7 +929,8 @@ function computeCurvature(
         const dz = pos[j * 3 + 2] - pz;
         const len = Math.hypot(dx, dy, dz);
         if (len < 1e-7) continue;
-        acc += -(dx * nx + dy * ny + dz * nz) / (len * len);
+        const one = -(dx * nx + dy * ny + dz * nz) / (len * Math.max(len, CURV_LEN_FLOOR));
+        acc += one < -CURV_MAX ? -CURV_MAX : one > CURV_MAX ? CURV_MAX : one;
         count++;
       }
       out[i] = count > 0 ? acc / count : 0;
@@ -1058,9 +1100,23 @@ function paintVertices(
     const beardBand = smooth(beardTopY + 0.055, beardTopY - 0.040, y) *
       (1 - smooth(-0.60, -0.76, y)) *
       (1 - smooth(78 * DEG, 96 * DEG, Math.abs(beardAz)));
+    /* MOUSTACHE MASS.
+     *
+     * `beardLine` has to dip hard at the front — at zero azimuth that elevation
+     * band IS the mouth — so it leaves the moustache with no painted mass under
+     * it, and `styles.ts` emits its moustache cards up there regardless. Cards
+     * alone are alpha-tested strands with skin between them: sampled off the
+     * render the moustache came back at 193/255 against the reference
+     * photograph's 79, brighter than the cheek beside it. This is the same
+     * "cards break the silhouette, albedo carries the mass" contract as the
+     * beard proper, applied to the one patch the azimuth curve cannot reach.
+     * The band matches the card emission in `buildBeard`: above the upper
+     * vermilion, below the subnasale, fading out past the mouth corners. */
+    const stache = smooth(-0.374, -0.352, y) * (1 - smooth(-0.292, -0.260, y)) *
+      (1 - smooth(0.112, 0.172, sabs(x))) * front;
     const mBeard = Math.max(
       0,
-      beardBand * opts.beard * (1 - mLips * 0.98),
+      Math.min(1, beardBand + stache * 0.95) * opts.beard * (1 - mLips * 0.98),
     );
     // Ear region: the sides of the head at eye height, where the cloud stops.
     const mEar = smooth(0.30, 0.40, Math.abs(x)) * (1 - smooth(0.12, 0.34, Math.abs(y + 0.06)));
@@ -1086,21 +1142,35 @@ function paintVertices(
     cav -= mBrowUnder * 0.30;
     cav -= mNostril * 0.55;
     cav -= (1 - smooth(0.0, 0.045, dEye)) * 0.18 * (0.4 + opts.tired * 0.6);
-    cav -= Math.max(0, -k) * 0.010;
+    /* Concave skin self-shadows, but this coupling was unbounded: `k` is in 1/m
+     * and a single outlier vertex — the negative ring that flanks any curvature
+     * spike — took 0.4 out of cavity on its own and drew a one-vertex black line
+     * down the midline. Curvature is clamped at the source now; this is bounded
+     * as well, because a cavity term has no business being the widest-range
+     * quantity in the shader. 0.12 is a genuinely deep crease and the terms
+     * above already name every crease a face actually has. */
+    cav -= Math.min(0.12, Math.max(0, -k) * 0.0035);
     // Forehead lines and the permanent glabellar frown.
     const foreheadLines = Math.exp(-Math.pow((x) / 0.24, 2)) *
       Math.max(0, Math.sin((y - 0.14) * 62)) * smooth(0.16, 0.34, y) *
       smooth(0.3, 0.9, opts.age) * front;
     cav -= foreheadLines * 0.10;
+    /* Two furrows, one either side of the midline — and they have to STAY two.
+     * Written against `Math.abs(x)` this has a corner at the midline worth a
+     * tenth of its own depth, so the pair merged into a single band and read as
+     * one dark stripe rather than as a frown. `sabs` is the same smoothed
+     * absolute value the sculpt uses; the furrows are also pushed out from 0.030
+     * to 0.034 and narrowed, because a corrugator furrow sits over the medial
+     * brow, not on the midline. */
     const frown = Math.exp(-Math.pow((y - 0.10) / 0.045, 2)) *
-      Math.exp(-Math.pow((Math.abs(x) - 0.030) / 0.020, 2)) * front;
+      Math.exp(-Math.pow((sabs(x) - 0.034) / 0.016, 2)) * front;
     cav -= frown * 0.22 * opts.tired;
     // The alar crease: the groove that separates the wing of the nose from the
     // cheek. Front-on it is the only thing that says "nose" when the key light
     // is behind the camera, and it is the first casualty of a smooth fit.
-    const alarCrease = Math.exp(-Math.pow((Math.abs(x) - 0.072) / 0.020, 2)) *
-      Math.exp(-Math.pow((y + 0.255) / 0.050, 2)) * front;
-    cav -= alarCrease * 0.20;
+    const alarCrease = Math.exp(-Math.pow((sabs(x) - 0.062) / 0.016, 2)) *
+      Math.exp(-Math.pow((y + 0.252) / 0.046, 2)) * front;
+    cav -= alarCrease * 0.24;
     // Philtrum: two ridges with a groove between them, under the septum.
     const philtrum = Math.exp(-Math.pow(x / 0.014, 2)) *
       Math.exp(-Math.pow((y + 0.325) / 0.030, 2)) * front;
@@ -1149,18 +1219,26 @@ function paintVertices(
     // Vascular warmth: nose, ears, cheeks and eyelids run red; the forehead and
     // chin run a touch yellow. This is the low-frequency colour zoning that a
     // de-lit photo would have given us, authored instead.
+    /* Halved, and the blue is no longer pulled down with the green.
+     *
+     * The old weights added 0.085 of red while REMOVING 0.030 of blue over the
+     * nose, ears and most of the cheek, which is a saturation push dressed up as
+     * a vascular one — it drove B/R down to 0.42 against the reference's 0.50-58
+     * and put the last of the orange into exactly the features the eye lands on.
+     * Real subdermal blood reddens skin; it does not desaturate the blue out of
+     * it, and on an olive complexion the cool undertone survives the flush. */
     const redZone = Math.max(
       mAla * 0.9,
       Math.max(mEar * 0.7, Math.max(mEyeRim * 0.55, mNostril * 0.9)),
-    ) + cheekBloom(x, y) * 0.5;
-    r += redZone * 0.085;
-    g -= redZone * 0.030;
-    b -= redZone * 0.030;
+    ) + cheekBloom(x, y) * 0.38;
+    r += redZone * 0.046;
+    g -= redZone * 0.016;
+    b -= redZone * 0.006;
 
     const yellowZone = mTzone * 0.6 + Math.max(0, smooth(-0.50, -0.66, y)) * 0.4;
-    r += yellowZone * 0.020;
-    g += yellowZone * 0.016;
-    b -= yellowZone * 0.014;
+    r += yellowZone * 0.012;
+    g += yellowZone * 0.012;
+    b -= yellowZone * 0.006;
 
     // Lips: desaturated brick, darker at the line, never lipstick. Applied
     // AFTER nothing and before the beard, but at enough strength to survive it

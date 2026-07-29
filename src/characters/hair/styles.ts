@@ -352,6 +352,16 @@ export interface BrowSpec {
   hairs: number;
   /** Extra length past the fitted brow curve. */
   extend: number;
+  /**
+   * How much lower the character's right brow sits than the left, metres.
+   *
+   * A matched pair of brows is a symmetry the face cannot recover from: it is
+   * read as CG instantly, and on a face whose defining expression is a permanent
+   * frown it also throws away the expression, because a real furrow is
+   * lopsided — one corrugator pulls harder than the other. The reference's right
+   * brow is visibly lower and more knotted than his left.
+   */
+  asymmetry?: number;
 }
 
 /**
@@ -364,9 +374,9 @@ export interface BrowSpec {
  * washed out. This is the same shape, given the mass it needs to survive a key
  * light pointed straight at it.
  */
-export const HEAVY_BROW: BrowSpec = { thickness: 0.0046, angle: 0.0062, innerDrop: 0.0026, hairs: 300, extend: 0.11 };
-export const LEAN_BROW: BrowSpec = { thickness: 0.0021, angle: 0.0018, innerDrop: 0.0010, hairs: 68, extend: 0.06 };
-export const SOFT_BROW: BrowSpec = { thickness: 0.0019, angle: 0.000, innerDrop: 0.0008, hairs: 62, extend: 0.05 };
+export const HEAVY_BROW: BrowSpec = { thickness: 0.0046, angle: 0.0062, innerDrop: 0.0026, hairs: 300, extend: 0.11, asymmetry: 0.0022 };
+export const LEAN_BROW: BrowSpec = { thickness: 0.0021, angle: 0.0018, innerDrop: 0.0010, hairs: 68, extend: 0.06, asymmetry: 0.0008 };
+export const SOFT_BROW: BrowSpec = { thickness: 0.0019, angle: 0.000, innerDrop: 0.0008, hairs: 62, extend: 0.05, asymmetry: 0.0006 };
 
 function resample(curve: THREE.Vector3[], n: number, extend: number): THREE.Vector3[] {
   const out: THREE.Vector3[] = [];
@@ -404,6 +414,12 @@ export function buildBrows(anchors: HeadAnchors, spec: BrowSpec, seed: string): 
       const n = q.clone().sub(centre).normalize();
       q.addScaledVector(n, 0.0022);
       q.y -= spec.innerDrop * (1 - t) + spec.angle * t * t;
+      /* The lopsided set. `side` is +1 for the character's right, and the pull
+       * is weighted toward the inner end because that is where a corrugator
+       * acts — a brow lowered bodily reads as a droop, a brow knotted at its
+       * head reads as a frown. */
+      const asym = spec.asymmetry ?? 0;
+      if (asym !== 0) q.y -= (side > 0 ? asym : -asym * 0.35) * (0.45 + 0.55 * (1 - t));
       return q;
     });
 
@@ -521,7 +537,21 @@ export interface BeardSpec {
  */
 export function BEARD_TOP(az: number): number {
   const a = Math.abs(wrapAz(az)) / (78 * DEG);
-  return (-40 + 19 * smoothstep(0.18, 0.78, a)) * DEG;
+  /* The upper boundary on the cheek was -21 degrees of elevation at the side,
+   * which puts it level with the base of the nose — a FULL beard, and the
+   * reference's is trimmed: it sits well below the cheekbone, roughly level with
+   * the mouth corner, and the mass is carried on the chin and the moustache
+   * rather than up the face.
+   *
+   * -29 was too far. The beard's visible mass is mostly the albedo band painted
+   * under the cards, not the cards themselves, so lowering the boundary lowers
+   * the MASS with it, and at -29 the cheek went bare all the way down to the
+   * mouth corner and the beard stopped reading as a beard at all. -25 takes
+   * about 11 mm off the cheek and still meets the moustache at the corner, which
+   * is the shape the reference has. The moustache and the soul patch are emitted
+   * separately below and are unaffected either way; the chin keeps its weight
+   * because the curve near az = 0 is unchanged. */
+  return (-40 + 15 * smoothstep(0.18, 0.78, a)) * DEG;
 }
 
 /**

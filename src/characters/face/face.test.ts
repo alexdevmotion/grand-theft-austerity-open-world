@@ -9,7 +9,10 @@ import * as THREE from 'three';
 import { CAST } from './heroHead';
 import { buildHeadGeometry, HEAD_TO_BODY, type HeadResult } from './headMesh';
 import { eyeLayerGeometries } from './eyes';
-import { measureEyeSeating, measureHairClearance, measureOrientation, measureProportions } from './checks';
+import {
+  measureEyeSeating, measureHairClearance, measureMidlineSeam, measureNose,
+  measureOrientation, measureProportions,
+} from './checks';
 import { buildBeard, buildBrows, buildHairCards, buildHairShell, buildLashes } from '../hair/styles';
 import { BODY_TYPES, NOMINAL_HEIGHT, bodyMetrics } from '../rig';
 import type { CastId } from './fitData';
@@ -241,6 +244,89 @@ test.each(CAST_IDS)('%s: head reads against the shoulders, not over them', (id: 
   const heads = (M.shoulderHalf * 2) / p.width;
   expect(heads).toBeGreaterThan(2.5);
   expect(heads).toBeLessThan(3.2);
+});
+
+/* ------------------------------------------------------------------ */
+/* 2d. No seam down the middle of the face                             */
+/* ------------------------------------------------------------------ */
+
+test.each(CAST_IDS)('%s: the sculpt is differentiable across the midline', (id: CastId) => {
+  const cfg = CAST[id];
+  const { geometry, anchors } = head(id);
+  const s = measureMidlineSeam(geometry, anchors,
+    { age: cfg.age, browPush: cfg.browPush, jawPush: cfg.jawPush });
+
+  /* THE THIRD MIDLINE SEAM. The first was a hard sign step in the asymmetry, the
+   * second was triplanar blending without sign correction, and this one was
+   * every lateral term in `anatomy.ts` being written against `Math.abs(x)` — a
+   * corner rather than a step, which is why the two earlier fixes did not catch
+   * it. See the note at the top of `anatomy.ts` for the full mechanism.
+   *
+   * The measured slope jump across x = 0 was 107.94. It is now 0.0014, and it is
+   * bounded here rather than eyeballed because a corner is invisible in every
+   * other measurement in `checks.ts`: the proportions were right, the landmarks
+   * were right, the silhouette was right, and there was a black line down the
+   * nose in every frontal render. */
+  expect(s.sculptKink).toBeLessThan(0.05);
+
+  /* And the two things that corner turned into pixels. Peak curvature within
+   * 4 mm of the midline against the median of its own horizontal band: 40 (and
+   * 101 on Nicusor) before, about 5 now — the midline is an ordinary piece of
+   * surface again rather than a row of outliers pinned to the top of the
+   * scattering LUT. */
+  expect(s.curvatureRatio).toBeLessThan(12);
+
+  /* Cavity is what actually drew the stripe: the negative curvature ring
+   * flanking each spike took 0.78 out of cavity, which is the whole way to the
+   * 0.22 floor, one vertex wide, from the glabella to the philtrum. */
+  expect(s.cavityDrop).toBeLessThan(0.52);
+});
+
+/* ------------------------------------------------------------------ */
+/* 2e. The nose                                                        */
+/* ------------------------------------------------------------------ */
+
+test.each(CAST_IDS)('%s: the nose flares — wings wider than the bridge', (id: CastId) => {
+  const n = measureNose(head(id).geometry, head(id).anchors);
+
+  /* The one that was upside down: bridgeOverAlar was 1.33, so the nose was
+   * WIDER at the bridge than at the wings. A nose flares. The alar base is its
+   * widest point and the bridge runs about two thirds of that; the previous pass
+   * pulled the wings in by 9 mm a side while nothing narrowed the bridge, which
+   * is the geometry of a beak and is most of why the front view read as a broad
+   * soft mass with two dark pits rather than as a nose. */
+  expect(n.bridgeOverAlar).toBeGreaterThan(0.50);
+  expect(n.bridgeOverAlar).toBeLessThan(0.82);
+
+  // The frontal footprint against nasal length. The reference photo measures
+  // 0.52 for the true alare-to-alare ratio; this is the 40%-relief footprint,
+  // which reads about three quarters of that on the same shape.
+  expect(n.alarOverLength).toBeGreaterThan(0.34);
+  expect(n.alarOverLength).toBeLessThan(0.54);
+});
+
+test.each(CAST_IDS)('%s: the nose is long, straight and projects', (id: CastId) => {
+  const n = measureNose(head(id).geometry, head(id).anchors);
+
+  /* Goode's ratio. "The nose is too short" was never about its length — that is
+   * pinned by the landmarks at 56 mm and has been right all along — it was about
+   * projection, which was 0.44 against a normal 0.55-0.60. A nose that does not
+   * stand out of the face reads short however long it measures. */
+  expect(n.projectionRatio).toBeGreaterThan(0.48);
+  expect(n.projectionRatio).toBeLessThan(0.68);
+
+  /* And it has to project along its whole length, not just at the tip. The
+   * reference's dorsum starts between the brows. */
+  expect(n.lengthRatio).toBeGreaterThan(0.72);
+
+  /* Straight dorsum. Authored as a Gaussian centred mid-nose this was +0.084 —
+   * a hump by construction, at any magnitude — and is now a monotone ramp from
+   * the nasion to the tip. Bounded on both sides: a scoop is as wrong as a hump
+   * and is what over-correcting produces. The chord is measured rhinion-to-tip,
+   * because every nose has a radix depression and a chord anchored at the nasion
+   * reports 6 mm of false scoop on a dead-straight dorsum. */
+  expect(n.dorsalCamber).toBeGreaterThan(-0.05);
+  expect(n.dorsalCamber).toBeLessThan(0.06);
 });
 
 /* ------------------------------------------------------------------ */

@@ -73,9 +73,71 @@ export const A = {
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
-function g1(v: number, c: number, w: number): number {
-  const u = (v - c) / w;
-  return Math.exp(-u * u);
+/**
+ * THE MIDLINE, AND WHY IT NEEDS ITS OWN PAIR OF PRIMITIVES.
+ *
+ * Every lateral term in this file is authored once against `ax = |x|` and then
+ * mirrored, which is the only sane way to sculpt a symmetric face. But `|x|` has
+ * a CORNER at x = 0, and so does any function of it whose centre is not on the
+ * midline: `g2(|x|, 0.150, ...)` — the brow ridge — is a smooth hill in `ax` and
+ * a sharp V in `x`. Sum a dozen of those and the head's midline stops being a
+ * rounded dorsum and becomes a knife edge, from the crown to the chin.
+ *
+ * That is invisible in the geometry and lethal downstream. `computeCurvature` in
+ * `headMesh.ts` estimates curvature as -(d.n)/len^2, which for a corner of slope
+ * s evaluates to s/len — it DIVERGES as the grid gets finer. And `azimuthCols`
+ * puts its single largest density peak at azimuth 0, so the columns straddling
+ * the midline are 1.45 mm apart against up to 16 mm on the cheek. The finest
+ * sampling on the head lands exactly on the corner, the estimator reports 60-360
+ * 1/m against +/-10 on the neighbouring columns, and the two consumers of that
+ * attribute turn it into pixels: it is the SSS LUT's curvature axis, and
+ * `cav -= max(0, -k) * 0.010` reads the negative ring that flanks every spike.
+ * The result is a dark stripe one vertex wide running from between the brows,
+ * down the nose bridge, to the philtrum. That stripe is a rendering artifact of
+ * a C1 discontinuity; it is not anatomy, and no amount of tuning the nose fixes
+ * it, because the terms drawing it are the brow ridge and the frown crease.
+ *
+ * This is the THIRD midline seam found in this codebase and it is the same bug
+ * each time — a term written in |x| and re-signed without being made smooth
+ * through zero. The first was a hard `x >= 0 ? +a : -a` in the asymmetry (a C0
+ * step). The second was triplanar blending on abs(n.x) (a C0 step in the blend
+ * weight). This one is C1 — a corner, not a step — which is exactly why it
+ * survived both earlier fixes: nothing was discontinuous, only non-
+ * differentiable, and curvature is precisely the operator that turns
+ * non-differentiable into unbounded.
+ *
+ * So: `sabs` replaces `Math.abs` and `ssign` replaces the `x >= 0 ? 1 : -1`
+ * selector, everywhere in the sculpt.
+ */
+
+/**
+ * Smooth absolute value. Equals |x| to within 1% beyond about 3k, is exactly 0
+ * at x = 0 so midline-centred terms keep their value, and turns a rounded corner
+ * of radius ~k instead of a cusp.
+ *
+ * `MIDLINE_K` is 0.012 fitted units — 2.3 mm, so the crest is rounded over about
+ * 4.5 mm. That is not a fudge factor: a real nasal dorsum has a crest radius of
+ * two to three millimetres, and a real glabella more. The old code was asking
+ * for a radius of zero.
+ */
+const MIDLINE_K = 0.012;
+
+function sabs(x: number): number {
+  return Math.sqrt(x * x + MIDLINE_K * MIDLINE_K) - MIDLINE_K;
+}
+
+/**
+ * Smooth left/right selector: -1 and +1 away from the midline, passing through
+ * zero at it rather than stepping across it.
+ *
+ * A term of the form `dx -= side * A * f(ax)` is a statement about pulling both
+ * halves of the face toward the midline. Where f(0) is not zero — `alarNarrow`
+ * is 0.086 there, worth 0.72 mm of x each way — a hard `side` makes the two
+ * halves cross over, folding the surface along the midline. The pull has to
+ * vanish at the midline, and this is what makes it.
+ */
+function ssign(x: number): number {
+  return x / Math.sqrt(x * x + MIDLINE_K * MIDLINE_K);
 }
 
 function g2(x: number, cx: number, wx: number, y: number, cy: number, wy: number): number {
@@ -140,8 +202,10 @@ export function sculpt(
   x: number, y: number, z: number, front: number, opts: SculptOptions, out: Sculpt,
 ): Sculpt {
   const k = opts.strength ?? 1;
-  const ax = Math.abs(x);
-  const side = x >= 0 ? 1 : -1;
+  // Both smoothed through the midline — see the note above `sabs`. Using
+  // `Math.abs` and a hard sign here is what drew the nose-bridge stripe.
+  const ax = sabs(x);
+  const side = ssign(x);
   let dx = 0, dy = 0, dz = 0;
 
   /* ---------------------------------------------------------------- *
@@ -336,50 +400,105 @@ export function sculpt(
    * however good the profile looked. A nose reads frontally because of three
    * shadow lines: the alar crease down each side, the undercut beneath the
    * tip, and the nostrils. None of them were in the cloud.
+   *
+   * WHAT `measureNose` SAID ABOUT THE PREVIOUS PASS, and it said all of it at
+   * once, which is why tuning any single magnitude never fixed the nose:
+   *
+   *   bridgeOverAlar   1.38   the BRIDGE WAS WIDER THAN THE WINGS. Upside down.
+   *                           A nose flares; the alar base is the widest part of
+   *                           it and the bridge is about two thirds of that. The
+   *                           dorsal flank pull was 0.021 and `alarNarrow` was
+   *                           0.048, so the wings were tucked to a point under a
+   *                           bridge nothing had narrowed.
+   *   projectionRatio  0.44   under-projected against Goode's 0.55-0.60. This is
+   *                           the whole of "the nose is too short": its length
+   *                           is set by the landmarks and was never wrong, but a
+   *                           nose that does not stand out of the face reads
+   *                           short however long it measures.
+   *   dorsalCamber    +0.12   a hump. `nasalMass` was a Gaussian centred in the
+   *                           middle of the nose, which is a bulge by
+   *                           construction. A straight dorsum is a MONOTONE ramp
+   *                           from the nasion to the tip, and that is the single
+   *                           biggest change below.
+   *   alarOverLength   0.29   the frontal footprint was a third of what the
+   *                           reference's is (0.52 measured off the photo).
+   *
+   * So: the bridge is narrowed hard, the wings are let back out, projection is
+   * re-authored as a ramp instead of a bulge, and the tip gets the lobule, the
+   * supratip break and the paired tip-defining points that make a tip read as a
+   * tip rather than as the end of a ramp.
    * ---------------------------------------------------------------- */
 
-  // Dorsum: narrow the bridge and give it a defined ridge. The reference's is
-  // a strong straight nose and the fit's is a broad soft ramp, so the ridge is
-  // pushed and the flanks pulled in harder than the mean face wants.
-  const dorsum = g2(ax, 0, 0.068, y, -0.080, 0.150) * front;
-  dz += 0.015 * dorsum * (1 - smooth(0.030, 0.098, ax));
-  dx -= side * 0.021 * dorsum * smooth(0.022, 0.098, ax);
+  /* The dorsum's run: on over the whole bridge, from the nasion down to just
+   * above the alar base, and tapering off at both ends rather than being a
+   * Gaussian centred somewhere in the middle. Everything nasal rides this, so
+   * the nose starts high between the brows — which is most of why the reference
+   * reads long — and stops before it can drag the alar base around. */
+  const dorsalRun = smooth(-0.244, -0.188, y) * smooth(0.078, 0.012, y);
+  /** 0 at the nasion, 1 at the tip: how far down the dorsum we are. */
+  const nt = smooth(0.012, -0.212, y);
+
+  // The bridge. Narrow it: the flanks are pulled toward the midline over the
+  // band the nasal bones actually occupy, and released again before the cheek,
+  // so this narrows a nose rather than pinching a face.
+  const dorsalCore = 1 - smooth(0.026, 0.096, ax);
+  dx -= side * 0.030 * dorsalRun * front *
+    smooth(0.010, 0.062, ax) * (1 - smooth(0.070, 0.120, ax));
+
+  /* Projection, as a RAMP. This is what "straight dorsum" means: the profile
+   * climbs steadily from the nasion to the tip with no local maximum in
+   * between. The previous Gaussian could not be straight at any magnitude. */
+  dz += (0.009 + 0.078 * nt) * dorsalRun * dorsalCore * front;
 
   // Alar crease: the groove that separates the wing of the nose from the
   // cheek. This is THE line that says "nose" in flat frontal light, and it has
   // to sit OUTSIDE the wing — the fitted ala is at |x| ~ 0.11, so a crease
   // authored at 0.10 carves the nose in half instead of detaching it.
   const alarCrease = Math.exp(-Math.pow(
-    segDist(ax, y, 0.118, -0.155, A.alaX + 0.048, A.alaY - 0.008) / 0.024, 2)) * front;
-  dz -= 0.015 * alarCrease;
+    segDist(ax, y, 0.118, -0.172, A.alaX + 0.050, A.alaY - 0.004) / 0.020, 2)) * front;
+  dz -= 0.028 * alarCrease;
 
-  // Ala: the wing itself, a rounded lobe that has to sit proud of the crease.
-  const ala = g2(ax, A.alaX - 0.010, 0.048, y, A.alaY + 0.004, 0.038) * front;
-  dz += 0.013 * ala;
-  // Alar width is one of the five discriminative measures in the fit table and
-  // the clouds put this one at the broad end. Tuck the wings in: a wide flat
-  // nose is most of why the front view read as a blob with two dark pits.
-  const alarNarrow = g2(ax, A.alaX + 0.010, 0.078, y, A.alaY + 0.014, 0.070) * front;
-  dx -= side * 0.048 * alarNarrow;
+  /* Ala: the wing itself, a rounded lobe that has to sit proud of the crease,
+   * and stand out LATERALLY as well as forward — a wing that only projects is
+   * a bump on the dorsum, not a wing. It was 0.017 and `measureNose` could not
+   * see a wing at all: between the bridge's flank and the crease the surface was
+   * only 2-3 mm proud of the face's own low-frequency shape, so the alar
+   * footprint came out narrower than the bridge. */
+  const ala = g2(ax, A.alaX - 0.010, 0.048, y, A.alaY + 0.008, 0.040) * front;
+  dz += 0.027 * ala;
+  dx += side * 0.009 * ala;
+  /* Tuck, but only enough to keep the wings close. At 0.048 this took 9 mm a
+   * side out of the alar base and left the nose narrower at its widest point
+   * than at its bridge, which is the geometry of a beak. */
+  const alarNarrow = g2(ax, A.alaX + 0.016, 0.068, y, A.alaY + 0.014, 0.060) * front;
+  dx -= side * 0.014 * alarNarrow;
 
-  // Projection. The reference's nose is long, straight and prominent and the
-  // clouds give a short soft one; push the whole dorsum and tip forward, most
-  // at the tip, so it carries a shadow of its own in flat frontal light.
-  const nasalMass = g2(ax, 0, 0.078, y, -0.145, 0.130) * front;
-  dz += 0.022 * nasalMass;
-  const tip = g2(ax, 0, 0.065, y, A.noseTipY + 0.010, 0.048) * front;
-  dz += 0.016 * tip;
+  /* THE TIP. Three separate things, and a tip needs all of them.
+   *
+   * The lobule is the mass; the supratip break is the shallow notch just above
+   * it that stops the dorsum running straight into the tip; and the tip-defining
+   * points are the paired domes on the lobule whose highlights are what the eye
+   * actually reads as "a defined tip". The previous pass had only the mass, and
+   * a mass with no break and no points is the end of a ramp. */
+  const tip = g2(ax, 0, 0.056, y, A.noseTipY + 0.006, 0.040) * front;
+  dz += 0.032 * tip;
+  const supratip = g2(ax, 0, 0.044, y, A.noseTipY + 0.050, 0.015) * front;
+  dz -= 0.006 * supratip;
+  // Safe now, and only now: `ax` is smooth through the midline, so a pair of
+  // lobes centred off it no longer welds a crease down the nose.
+  const tdp = g2(ax, 0.024, 0.019, y, A.noseTipY + 0.012, 0.028) * front;
+  dz += 0.007 * tdp;
 
   // Undercut beneath the tip: the nose base angles back up toward the lip, so
   // the tip casts a shadow onto the philtrum. A nose without this is a lump.
   const base = g2(ax, 0, 0.092, y, A.subnasaleY - 0.004, 0.028) * front;
-  dz -= 0.020 * base;
+  dz -= 0.022 * base;
   dy -= 0.005 * base;
 
   // Nostrils: two dark pits inside the base, cut in as real geometry so they
   // survive any lighting.
-  const nostril = g2(ax, 0.056, 0.028, y, A.subnasaleY + 0.002, 0.020) * front;
-  dz -= 0.023 * nostril;
+  const nostril = g2(ax, 0.052, 0.026, y, A.subnasaleY + 0.002, 0.019) * front;
+  dz -= 0.024 * nostril;
 
   // Columella: the small ridge between them, so the base is not one hollow.
   const columella = g2(ax, 0, 0.020, y, A.subnasaleY + 0.006, 0.030) * front;

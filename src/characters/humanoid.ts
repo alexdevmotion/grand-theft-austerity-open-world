@@ -398,6 +398,30 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
         ],
         10, SLOT.TOP, {},
       );
+
+      /* COLLAR UP. The shirt neckline above tops out 25 mm below the chin, which
+       * on a bearded man leaves a bare column of neck as the brightest thing in
+       * a portrait — see `Appearance.collarUp`.
+       *
+       * A popped collar is not the same tube made taller. It rises to the jaw,
+       * it FLARES outward as it rises instead of tapering (that is the whole
+       * difference between a collar standing up and one lying down), and it is
+       * cut from the OUTER slot, because the thing standing up is the jacket and
+       * not the tee underneath it. It stops short of the chin at the front and
+       * carries its full height at the sides and back, which is how a real
+       * turned-up collar sits and also leaves the beard somewhere to end. */
+      if (a.collarUp) {
+        const chin = m.headY - 0.010;
+        const wl = spineWeights(m.neckY - 0.01, m);
+        b.tube(
+          [
+            { c: V(0, m.neckY - 0.010, 0.004), dir: UPV, rx: m.neckR * 1.62, rzF: m.neckR * 1.54, rzB: m.neckR * 1.66, n: 2.4, b0: wl[0], w0: wl[1], b1: wl[2], w1: wl[3], v: 0.03 },
+            { c: V(0, m.neckY + 0.036, -0.002), dir: UPV, rx: m.neckR * 1.50, rzF: m.neckR * 1.40, rzB: m.neckR * 1.60, n: 2.3, b0: BI.neck, w0: 0.85, b1: BI.upperChest, w1: 0.15, v: 0.02 },
+            { c: V(0, chin - 0.012, -0.008), dir: UPV, rx: m.neckR * 1.74, rzF: m.neckR * 1.44, rzB: m.neckR * 1.86, n: 2.2, b0: BI.neck, w0: 1, v: 0.008 },
+          ],
+          12, SLOT.OUTER, {},
+        );
+      }
     }
   }
 

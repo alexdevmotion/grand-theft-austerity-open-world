@@ -267,12 +267,30 @@ class Beam {
       this.group.add(this.spotTarget);
       this.spot.target = this.spotTarget;
     }
-    this.group.visible = false;
+    // NOTE: the group itself must stay permanently visible.
+    //
+    // `numSpotLights` is part of three's program cache key, and
+    // WebGLRenderer.projectObject skips invisible subtrees entirely — so
+    // hiding a group that contains a SpotLight changes the scene's spot count
+    // and re-links EVERY lit material in the frame. With beams popping on and
+    // off per vehicle per frame that is a continuous shader rebuild storm
+    // (observed as `programs` drifting 71-90 at runtime).
+    //
+    // Visibility is therefore expressed on the visual children only, and the
+    // spot is silenced with `intensity = 0`, which keeps the light in the
+    // scene's light list and the program cache stable. The same hazard is
+    // documented in ai/police/helicopter.ts and world/props/lights.ts.
+    this.setVisualsVisible(false);
     this.group.matrixAutoUpdate = true;
   }
 
+  private setVisualsVisible(v: boolean): void {
+    for (const c of this.cones) c.visible = v;
+    this.splat.visible = v;
+  }
+
   hide(): void {
-    if (this.group.visible) this.group.visible = false;
+    this.setVisualsVisible(false);
     if (this.spot) this.spot.intensity = 0;
   }
 
@@ -284,7 +302,6 @@ class Beam {
     intensity: number,
     groundY: number,
   ): void {
-    this.group.visible = true;
     this.group.position.copy(position);
     this.group.quaternion.copy(quaternion);
 

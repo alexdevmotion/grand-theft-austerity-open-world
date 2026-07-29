@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Serialising wrapper around `agent-browser`.
+#
+# WHY THIS EXISTS
+#   Each agent-browser session is a full Chrome for Testing instance — roughly a
+#   dozen processes and a GPU context each. Running six verification agents in
+#   parallel therefore meant six headless Chromes plus the developer's own
+#   browser, which ground the machine to a halt.
+#
+#   This caps CONCURRENT browser holders at GTA_BROWSER_SLOTS (default 2) using
+#   atomic mkdir as the lock. Agents may still run in parallel; they simply
+#   queue for a browser, which is fine because writing code dominates and
+#   browser use is bursty.
+#
+# USAGE — exactly as you would call agent-browser, minus the session flag:
+#   tools/gta-browser <session> open "http://127.0.0.1:5273/?q=high"
+#   tools/gta-browser <session> screenshot /tmp/x.png
+#   tools/gta-browser <session> eval "JSON.stringify(window.__GTA_DEBUG__.stats())"
+#
+#   `--args "--mute-audio"` is applied automatically: audio must never reach
+#   the machine's speakers.
+#
+# Release is automatic on exit, including on failure or interrupt.
+
+set -uo pipefail
+
+SLOTS="${GTA_BROWSER_SLOTS:-2}"
+LOCKDIR="${TMPDIR:-/tmp}/gta-browser-locks"
+WAIT_TIMEOUT="${GTA_BROWSER_WAIT:-600}"
+
+if [ $# -lt 2 ]; then
+  echo "usage: $0 <session> <agent-browser args...>" >&2
+  exit 2
+fi
+
+SESSION="$1"; shift
+mkdir -p "$LOCKDIR"
+
+held=""
+# `rm -rf`, not `rmdir` — the slot directory holds a pid file, so rmdir fails
+# and the slot leaks. That bug caps you at SLOTS browser calls per boot.
+cleanup() { [ -n "$held" ] && rm -rf "$held" 2>/dev/null; }
+trap cleanup EXIT INT TERM
+
+# Reap locks whose owning process is gone, so a killed agent cannot wedge a slot.
+for d in "$LOCKDIR"/slot-*; do
+  [ -d "$d" ] || continue
+  pid=$(cat "$d/pid" 2>/dev/null || echo "")
+  if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then rm -rf "$d" 2>/dev/null; fi
+done
+
+deadline=$(( $(date +%s) + WAIT_TIMEOUT ))
+while :; do
+  for i in $(seq 1 "$SLOTS"); do
+    if mkdir "$LOCKDIR/slot-$i" 2>/dev/null; then
+      held="$LOCKDIR/slot-$i"
+      echo "$$" > "$held/pid"
+      break
+    fi
+  done
+  [ -n "$held" ] && break
+  if [ "$(date +%s)" -ge "$deadline" ]; then
+    echo "gta-browser: timed out waiting for one of $SLOTS browser slots" >&2
+    exit 1
+  fi
+  sleep 2
+done
+
+agent-browser --session "$SESSION" --args "--mute-audio" "$@"
+status=$?
+exit $status

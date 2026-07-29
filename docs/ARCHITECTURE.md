@@ -120,3 +120,24 @@ Chrome still runs the full WebAudio graph under `--mute-audio`, so
 normally — only the output device is silenced. Verify audio by **measurement**
 (`window.__GTA_AUDIO__`) and by `OfflineAudioContext` unit tests, never by
 playing it aloud.
+
+## Browser verification is rate-limited
+
+Each `agent-browser` session is a full headless Chrome — about a dozen
+processes and a GPU context. Six verification agents in parallel meant six of
+them alongside the developer's own browser, which ground the machine to a halt.
+
+**Never call `agent-browser` directly.** Use the wrapper, which caps concurrent
+browser holders at two (atomic-mkdir lock, auto-released on exit, stale locks
+reaped by pid):
+
+```
+tools/gta-browser <session> open "http://127.0.0.1:5273/?q=high"
+tools/gta-browser <session> screenshot /tmp/x.png
+tools/gta-browser <session> eval "JSON.stringify(window.__GTA_DEBUG__.stats())"
+```
+
+It applies `--mute-audio` for you. Agents may still run in parallel — they
+queue for a browser, which is fine because writing code dominates and browser
+use is bursty. Raise the cap with `GTA_BROWSER_SLOTS` only if the machine can
+take it.

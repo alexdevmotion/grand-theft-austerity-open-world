@@ -148,16 +148,26 @@ void RE_Direct_Skin( const in IncidentLight directLight, const in vec3 geometryP
 /** Triplanar micro-normal, blended in object space so no UV layout is needed. */
 const MICRO = /* glsl */`
 	if ( uMicroStrength > 0.0001 ) {
-		vec3 an = abs( normalize( vSkinWorldNormal ) );
+		vec3 gn = normalize( vSkinWorldNormal );
+		vec3 an = abs( gn );
 		an /= ( an.x + an.y + an.z );
 		vec3 p = vSkinObjPos * uMicroScale;
 		vec3 nx = texture2D( uMicroMap, p.zy ).xyz * 2.0 - 1.0;
 		vec3 ny = texture2D( uMicroMap, p.xz ).xyz * 2.0 - 1.0;
 		vec3 nz = texture2D( uMicroMap, p.xy ).xyz * 2.0 - 1.0;
-		// Whiteout blend: perturb the shading normal in world space, then bring
-		// it back to view space the way the rest of the shader expects.
-		vec3 bump = nx.xyy * an.x + ny.yxy * an.y + nz.xyz * an.z;
-		vec3 wn = normalize( vSkinWorldNormal + bump * uMicroStrength );
+		// Whiteout blend with sign correction. Without the sign, the blend weight
+		// abs(n.x) has a kink where n.x crosses zero — which on a head is exactly
+		// the midline — and the pore normal flips there, drawing a hard seam
+		// straight down the forehead, nose and chin.
+		vec3 s = sign( gn );
+		vec3 bump =
+			vec3( 0.0, nx.y, nx.x ) * ( an.x * s.x ) +
+			vec3( ny.x, 0.0, ny.y ) * ( an.y * s.y ) +
+			vec3( nz.x, nz.y, 0.0 ) * ( an.z * s.z );
+		// The tangent-space z of each sample is the "no perturbation" axis; it
+		// belongs along the geometric normal, not along a world axis.
+		float along = nx.z * an.x + ny.z * an.y + nz.z * an.z;
+		vec3 wn = normalize( gn * along + bump * uMicroStrength );
 		normal = normalize( ( viewMatrix * vec4( wn, 0.0 ) ).xyz );
 	}
 `;

@@ -90,14 +90,16 @@ export function hairlineFn(front: number, temple: number, side: number, nape: nu
  * crown without stopping being the man in the target frame.
  */
 export const PLAYER_HAIR: HairSpec = {
-  hairline: hairlineFn(37 * DEG, 46 * DEG, 6 * DEG, -18 * DEG),
+  hairline: hairlineFn(33 * DEG, 43 * DEG, 5 * DEG, -18 * DEG),
   volume: (az, el) => {
     const a = Math.abs(wrapAz(az)) / Math.PI;
     // Close at the sides, a little more on top — a real short back and sides.
-    const top = smoothstep(30 * DEG, 70 * DEG, el);
-    return 0.016 + 0.030 * top * (1 - 0.45 * smoothstep(0.25, 0.6, a) * (1 - top));
+    // The first pass gave 3 mm of shell, which at head scale is a shaved scalp
+    // with a scribble on it rather than cropped hair.
+    const top = smoothstep(26 * DEG, 68 * DEG, el);
+    return 0.026 + 0.046 * top * (1 - 0.45 * smoothstep(0.25, 0.6, a) * (1 - top));
   },
-  cards: 240,
+  cards: 460,
   cardSpan: 26 * DEG,
   cardHalf: 0.0042,
   wander: 9 * DEG,
@@ -105,8 +107,8 @@ export const PLAYER_HAIR: HairSpec = {
   curlFreq: 2.2,
   lift: 0.008,
   flyaways: 46,
-  greyTemple: 0.40,
-  greyOverall: 0.07,
+  greyTemple: 0.26,
+  greyOverall: 0.05,
   sideburn: -16 * DEG,
 };
 
@@ -236,6 +238,32 @@ export function buildHairCards(anchors: HeadAnchors, spec: HairSpec, seed: strin
   const metres = anchors.frame.scale;
   const SEG = 6;
 
+  /**
+   * The hairline, as a hard floor on where any strand vertex may sit.
+   *
+   * Cards grow upward from their root, so in principle none of them can reach
+   * the forehead — but `wander` moves a card sideways as it grows, and the
+   * hairline is much higher at the temple than at the front, so a card rooted
+   * at the front centre and wandering outward ends up *below* the hairline it
+   * has moved into and lands on the temple as a scratch across skin. Flyaways,
+   * with two to four times the lift and up to twice the span, arc over the brow
+   * outright. Clamping per sample rather than per card is what makes it a
+   * guarantee instead of a tendency; `measureHairClearance` checks it.
+   */
+  const floor = (az: number, flyaway: boolean): number => {
+    const w = Math.abs(wrapAz(az));
+    // Past the temple we are in front of the ear, where a sideburn belongs and
+    // a low strand is not on the face at all. Release the floor there.
+    if (w > 58 * DEG) return -90 * DEG;
+    const line = spec.hairline(az);
+    const a = w / Math.PI;
+    // A fringe may hang a little into the upper forehead dead ahead, and none
+    // at all once we are round at the temple.
+    const fringe = (flyaway ? 3.5 : 6.0) * DEG * (1 - smoothstep(0.05, 0.20, a));
+    const release = smoothstep(48 * DEG, 58 * DEG, w);
+    return (line - fringe) * (1 - release) + -90 * DEG * release;
+  };
+
   const emit = (az0: number, el0: number, half: number, span: number, lift: number, curl: number, flyaway: boolean) => {
     const pts: THREE.Vector3[] = [];
     const halves: number[] = [];
@@ -245,7 +273,7 @@ export function buildHairCards(anchors: HeadAnchors, spec: HairSpec, seed: strin
     for (let s = 0; s <= SEG; s++) {
       const t = s / SEG;
       const az = az0 + wander * t;
-      const el = Math.min(89 * DEG, el0 + span * t);
+      const el = Math.max(floor(az, flyaway), Math.min(89 * DEG, el0 + span * t));
       const base = spec.volume(az, el);
       const grow = base * (0.55 + 0.55 * t) + lift * t * t +
         Math.sin(phase + t * spec.curlFreq * Math.PI) * curl * t;
@@ -479,24 +507,34 @@ export function buildBeard(anchors: HeadAnchors, spec: BeardSpec, seed: string):
     const mid = p.clone().lerp(tip, 0.5).addScaledVector(n, len * 0.16);
     rb.add({
       pts: [p.clone(), mid, tip],
-      half: [0.0016, 0.0012, 0.0004],
+      half: [0.00085, 0.00065, 0.00022],
       normal: [n, n, n],
       grey: Math.max(0, Math.min(1, grey)),
       repeat: 0.6,
     });
   };
 
-  const count = Math.round(340 * spec.density);
+  /* 340 cards spread over the whole jaw is one strand every few millimetres —
+   * which renders as a scatter of pale specks, not a beard. A trimmed beard is
+   * a CONTINUOUS mass with a hard edge along the jaw and the moustache line,
+   * so the count is an order of magnitude higher, the cards overlap, and the
+   * distribution is stratified rather than uniformly random so no patch is
+   * left bald by chance. */
+  const count = Math.round(2200 * spec.density);
+  const AZ_BANDS = 44;
   for (let i = 0; i < count; i++) {
-    const az = rng.range(-76 * DEG, 76 * DEG);
+    const band = i % AZ_BANDS;
+    const az = (-76 + (band + rng.next()) * (152 / AZ_BANDS)) * DEG;
     const top = beardTop(az);
     const bot = beardBottom(az);
-    const el = bot + (top - bot) * Math.pow(rng.next(), 0.75);
-    emit(az, el, spec.length * rng.range(0.55, 1.35), spec.grey + rng.range(-0.22, 0.30));
+    // Bias toward the top of the band so the mass is densest just under the
+    // jawline edge, which is where a trimmed beard actually is.
+    const el = bot + (top - bot) * Math.pow(rng.next(), 0.6);
+    emit(az, el, spec.length * rng.range(0.7, 1.25), spec.grey + rng.range(-0.16, 0.22));
   }
 
   /* Moustache: a separate patch above the lip, never on it. */
-  const stache = Math.round(90 * spec.density);
+  const stache = Math.round(520 * spec.density);
   for (let i = 0; i < stache; i++) {
     const az = rng.range(-22 * DEG, 22 * DEG);
     if (Math.abs(az) < 2.5 * DEG && rng.bool(0.6)) continue;   // the philtrum groove
@@ -506,7 +544,7 @@ export function buildBeard(anchors: HeadAnchors, spec: BeardSpec, seed: string):
 
   /* A soul patch under the lower lip, which is where a trimmed beard is
    * heaviest and what makes the chin read as bearded rather than shaded. */
-  const patch = Math.round(70 * spec.density);
+  const patch = Math.round(380 * spec.density);
   for (let i = 0; i < patch; i++) {
     const az = rng.range(-18 * DEG, 18 * DEG);
     const el = rng.range(-46 * DEG, -38 * DEG);

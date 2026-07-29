@@ -215,9 +215,11 @@ export function createHairMaterial(opts: HairMaterialOptions): THREE.MeshPhysica
     uHairShiftA: { value: 0.06 },
     uHairShiftB: { value: -0.10 },
     uHairRootDark: { value: opts.rootDark ?? 0.28 },
-    // Salt-and-pepper grey, authored in LINEAR space: mid grey is ~0.62 sRGB,
-    // which is 0.34 linear. Mixing toward 0.6 linear produces white hair.
-    uHairGrey: { value: opts.greyTarget ?? new THREE.Color(0.30, 0.295, 0.288) },
+    // Salt-and-pepper grey, authored in LINEAR space. 0.30 linear is 0.58 sRGB
+    // — light grey — and with a wide temple band that turned the sides of the
+    // head almost white against a low sun. Real greying hair on a man in his
+    // forties is a dark iron grey.
+    uHairGrey: { value: opts.greyTarget ?? new THREE.Color(0.115, 0.112, 0.108) },
     uHairSpec: { value: opts.specular ?? 0.16 },
   };
 

@@ -65,23 +65,27 @@ function eyeTexture(opts: EyeOptions): THREE.CanvasTexture {
   // A real sclera is nowhere near white: it is a mid grey-cream that sits in
   // the permanent shadow of the lids. Painting it white is what turns eyes into
   // ping-pong balls.
-  g.fillStyle = '#b3aaa0';
+  // Not white, but it must still be the lightest thing in the socket: the eye
+  // reads as an eye because of the value step between sclera and lid. Painted
+  // too dark, a correctly-seated globe renders as a black hollow, which is what
+  // the first pass at this did.
+  g.fillStyle = '#d6cec2';
   g.fillRect(0, 0, half, TEX);
   // The sclera is never white: it yellows toward the corners and greys in the
   // shadow of the lid.
   const wash = g.createLinearGradient(0, 0, half, TEX);
-  wash.addColorStop(0, 'rgba(150,132,110,0.65)');
-  wash.addColorStop(0.5, 'rgba(196,188,180,0)');
-  wash.addColorStop(1, 'rgba(140,120,100,0.6)');
+  wash.addColorStop(0, 'rgba(176,158,134,0.42)');
+  wash.addColorStop(0.5, 'rgba(214,206,196,0)');
+  wash.addColorStop(1, 'rgba(168,148,126,0.38)');
   g.fillStyle = wash;
   g.fillRect(0, 0, half, TEX);
   // Ambient occlusion from the upper lid: the sphere's pole faces up and the
   // lid sits on it, so the top of the globe is always the darkest part.
   const lid = g.createLinearGradient(0, 0, 0, TEX);
-  lid.addColorStop(0, 'rgba(46,32,26,0.58)');
-  lid.addColorStop(0.30, 'rgba(58,42,36,0.24)');
-  lid.addColorStop(0.62, 'rgba(70,52,44,0.20)');
-  lid.addColorStop(1, 'rgba(52,38,32,0.42)');
+  lid.addColorStop(0, 'rgba(46,32,26,0.34)');
+  lid.addColorStop(0.30, 'rgba(58,42,36,0.13)');
+  lid.addColorStop(0.62, 'rgba(70,52,44,0.10)');
+  lid.addColorStop(1, 'rgba(52,38,32,0.24)');
   g.fillStyle = lid;
   g.fillRect(0, 0, half, TEX);
 
@@ -197,10 +201,28 @@ function css(c: THREE.Color): string {
 /* Geometry                                                            */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Aim a sphere's +Y pole down the eye's optical axis, +Z, out of the face.
+ *
+ * This one line is load-bearing and was previously wrong. `SphereGeometry`'s
+ * `thetaStart` / `thetaLength` measure the polar angle from +Y, so the sclera's
+ * iris aperture, the iris dish and the corneal cap are all authored around +Y.
+ * Rotating by -PI/2 about X maps (x, y, z) -> (x, z, -y), which sends +Y to
+ * **-Z** — straight into the skull. The consequence is not subtle: the aperture
+ * and the cornea end up behind the globe, the iris disc is sealed inside an
+ * opaque sphere, and what faces the camera is the blank back of the sclera. A
+ * featureless ball with no pupil reads as a googly eye stuck on the face no
+ * matter how well the lids are seated, which is exactly the failure this was.
+ *
+ * +PI/2 maps (x, y, z) -> (x, -z, y), which sends +Y to +Z. That is the one we
+ * want, and `assertEyeSeating` below will not let it regress.
+ */
+const AIM_FORWARD = Math.PI / 2;
+
 /** Sclera sphere with the iris aperture cut out, UV'd into the atlas' left half. */
 function scleraGeometry(radius: number, apertureRad: number): THREE.BufferGeometry {
   const g = new THREE.SphereGeometry(radius, 28, 20, 0, Math.PI * 2, apertureRad, Math.PI - apertureRad);
-  g.rotateX(-Math.PI / 2);          // pole toward +Z (out of the face)
+  g.rotateX(AIM_FORWARD);           // pole toward +Z (out of the face)
   const uv = g.getAttribute('uv') as THREE.BufferAttribute;
   for (let i = 0; i < uv.count; i++) uv.setX(i, uv.getX(i) * 0.5);
   return g;
@@ -252,13 +274,14 @@ function irisGeometry(radius: number, apertureRad: number, dish: number): THREE.
 /** Corneal bulge: a shallow cap slightly proud of the sclera. */
 function corneaGeometry(radius: number, apertureRad: number): THREE.BufferGeometry {
   const g = new THREE.SphereGeometry(radius * 1.012, 26, 14, 0, Math.PI * 2, 0, apertureRad * 1.12);
-  g.rotateX(-Math.PI / 2);
+  g.rotateX(AIM_FORWARD);
   // Push the cap forward a touch so it reads as a bulge, not a coat of paint.
   const p = g.getAttribute('position') as THREE.BufferAttribute;
+  const rim = Math.cos(apertureRad * 1.12) * radius;
   for (let i = 0; i < p.count; i++) {
     const z = p.getZ(i);
-    const t = Math.max(0, (z - Math.cos(apertureRad * 1.12) * radius) / (radius - Math.cos(apertureRad * 1.12) * radius));
-    p.setZ(i, z + radius * 0.055 * t * t);
+    const t = Math.max(0, (z - rim) / (radius - rim));
+    p.setZ(i, z + radius * 0.045 * t * t);
   }
   g.computeVertexNormals();
   return g;
@@ -274,12 +297,19 @@ function meniscusGeometry(ring: THREE.Vector3[], centre: THREE.Vector3, radius: 
   const pos: number[] = [];
   const idx: number[] = [];
   const out = new THREE.Vector3();
+  // A fillet, not a web. The lid ring runs out to the canthi, which are further
+  // from the globe centre than the globe's own radius, so spanning all the way
+  // from the sphere to the ring builds a wide translucent sheet across the
+  // socket — which is what rendered as a red crescent beside each eye.
+  const FILLET = 0.0007;
   for (let i = 0; i < n; i++) {
     const p = ring[i];
-    // Inner edge sits on the eyeball, outer edge on the lid skin.
+    // Both edges hug the globe: inner on its surface, outer a fillet's width
+    // further along the same direction and pulled very slightly back.
     out.copy(p).sub(centre).normalize();
-    const inner = out.clone().multiplyScalar(radius * 1.004).add(centre);
-    const outer = p.clone().addScaledVector(out, 0.0009);
+    const inner = out.clone().multiplyScalar(radius * 1.002).add(centre);
+    const outer = out.clone().multiplyScalar(radius * 1.002 + FILLET).add(centre);
+    outer.z -= FILLET * 0.5;
     pos.push(inner.x, inner.y, inner.z, outer.x, outer.y, outer.z);
   }
   for (let i = 0; i < n; i++) {
@@ -327,26 +357,36 @@ function mergeTwo(a: THREE.BufferGeometry, b: THREE.BufferGeometry): THREE.Buffe
   return out;
 }
 
+/** Radians of the globe the iris occupies. */
+const IRIS_APERTURE = 0.50;
+
+/**
+ * The two solid layers of one eye, in character space. Hoisted out of
+ * `buildEyes` so the test can assert the optical axis points out of the face
+ * without needing a canvas for the iris atlas — the bug this guards against was
+ * a sign error that no amount of reading the source caught.
+ */
+export function eyeLayerGeometries(
+  a: EyeAnchor, yaw: number,
+): { globe: THREE.BufferGeometry; cornea: THREE.BufferGeometry } {
+  const sclera = scleraGeometry(a.radius, IRIS_APERTURE);
+  const iris = irisGeometry(a.radius, IRIS_APERTURE, a.radius * 0.30);
+  // The iris disc has no UV in the sclera's half of the atlas; it is already
+  // authored into the right half, so the two merge cleanly.
+  const globe = mergeTwo(sclera, iris);
+  return {
+    globe: orient(globe, a, yaw),
+    cornea: orient(corneaGeometry(a.radius, IRIS_APERTURE), a, yaw),
+  };
+}
+
 export function buildEyes(eyeL: EyeAnchor, eyeR: EyeAnchor, opts: EyeOptions): EyeBuild {
   const conv = opts.convergence ?? 0.035;
-  const aperture = 0.50;          // radians of the globe the iris occupies
   const tex = eyeTexture(opts);
 
   const geos: THREE.BufferGeometry[] = [];
-  const build = (a: EyeAnchor, yaw: number): { globe: THREE.BufferGeometry; cornea: THREE.BufferGeometry } => {
-    const sclera = scleraGeometry(a.radius, aperture);
-    const iris = irisGeometry(a.radius, aperture, a.radius * 0.30);
-    // The iris disc has no UV in the sclera's half of the atlas; it is already
-    // authored into the right half, so the two merge cleanly.
-    const globe = mergeTwo(sclera, iris);
-    return {
-      globe: orient(globe, a, yaw),
-      cornea: orient(corneaGeometry(a.radius, aperture), a, yaw),
-    };
-  };
-
-  const l = build(eyeL, conv);
-  const r = build(eyeR, -conv);
+  const l = eyeLayerGeometries(eyeL, conv);
+  const r = eyeLayerGeometries(eyeR, -conv);
   geos.push(l.globe, l.cornea, r.globe, r.cornea);
 
   const globeGeo = mergeTwo(l.globe, r.globe);
@@ -356,7 +396,7 @@ export function buildEyes(eyeL: EyeAnchor, eyeR: EyeAnchor, opts: EyeOptions): E
     map: tex,
     // The sclera lives in the permanent shade of the lids and the brow. Left at
     // full value it reads as two lamps in the face at any distance.
-    color: 0xcac3ba,
+    color: 0xf2ece2,
     roughness: 0.30,
     metalness: 0,
     // The sclera is faintly translucent — light bleeds through its rim.
@@ -369,9 +409,9 @@ export function buildEyes(eyeL: EyeAnchor, eyeR: EyeAnchor, opts: EyeOptions): E
   globeMat.name = 'eye-globe';
 
   const corneaMat = new THREE.MeshPhysicalMaterial({
-    color: 0x101014,
+    color: 0x080a0e,
     transparent: true,
-    opacity: 0.10,
+    opacity: 0.05,
     roughness: 0.02,
     metalness: 0,
     clearcoat: 1.0,

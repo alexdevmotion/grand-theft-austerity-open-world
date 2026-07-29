@@ -83,7 +83,7 @@ export const CAST: Record<CastId, CastConfig> = {
     cloud: playerCloud,
     // Olive/tanned, mid-forties to fifties. Authored, not sampled.
     skin: 0xcaa183,
-    skinOpts: { sss: 0.55, sssTint: 0xfff0e4, transScale: 2.1, microStrength: 0.34 },
+    skinOpts: { sss: 0.34, sssTint: 0xffeadc, transScale: 1.05, microScale: 820, microStrength: 0.26 },
     irisColor: 0x3d2c1d,
     tired: 0.95,
     age: 0.68,
@@ -103,7 +103,7 @@ export const CAST: Record<CastId, CastConfig> = {
     id: 'nicusor',
     cloud: () => cloud('nicusor'),
     skin: 0xdbb69a,
-    skinOpts: { sss: 0.55, sssTint: 0xfff2e8, transScale: 2.0, microStrength: 0.30 },
+    skinOpts: { sss: 0.32, sssTint: 0xffeee2, transScale: 1.00, microScale: 820, microStrength: 0.24 },
     irisColor: 0x4d5a4c,
     tired: 0.30,
     age: 0.62,
@@ -122,7 +122,7 @@ export const CAST: Record<CastId, CastConfig> = {
     id: 'ally',
     cloud: () => cloud('ally'),
     skin: 0xcda589,
-    skinOpts: { sss: 0.55, sssTint: 0xfff0e4, transScale: 1.9, microStrength: 0.30 },
+    skinOpts: { sss: 0.33, sssTint: 0xffeadc, transScale: 0.95, microScale: 820, microStrength: 0.24 },
     irisColor: 0x4a3826,
     tired: 0.42,
     age: 0.44,
@@ -212,6 +212,7 @@ export class HeroHead {
       skin: cfg.skin,
       beard: cfg.beardShade,
       beardColor: cfg.beardColor,
+      hairColor: cfg.hairColor,
       tired: cfg.tired,
       age: cfg.age,
       jawPush: cfg.jawPush,
@@ -275,9 +276,9 @@ export class HeroHead {
 
     const seed = String(opts.seed ?? 0);
     addHair(buildHairShell(built.anchors, cfg.hair), cfg.hairColor, 'hair-shell',
-      { gloss: 160, roughness: 0.52, alphaTest: 0.42, rootDark: 0.34, shell: true, shadow: true, specular: 0.075 });
+      { gloss: 130, roughness: 0.60, alphaTest: 0.42, rootDark: 0.34, shell: true, shadow: true, specular: 0.045 });
     addHair(buildHairCards(built.anchors, cfg.hair, `hair|${cfg.id}|${seed}`), cfg.hairColor, 'hair-cards',
-      { gloss: 220, roughness: 0.40, alphaTest: 0.30, rootDark: 0.30, specular: 0.10 });
+      { gloss: 180, roughness: 0.50, alphaTest: 0.30, rootDark: 0.30, specular: 0.058 });
     addHair(buildBrows(built.anchors, cfg.brow, `brow|${cfg.id}|${seed}`), cfg.browColor, 'brows',
       { gloss: 46, roughness: 0.72, alphaTest: 0.16, rootDark: 0.12, specular: 0.045 });
     addHair(buildLashes(built.anchors, `lash|${cfg.id}|${seed}`), 0x0d0a08, 'lashes',

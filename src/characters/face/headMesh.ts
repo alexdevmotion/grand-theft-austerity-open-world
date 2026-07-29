@@ -25,6 +25,7 @@
 
 import * as THREE from 'three';
 import { Rng, valueNoise2D } from '../../core/rng';
+import { sculpt, type Sculpt, type SculptOptions } from './anatomy';
 import { buildField, distToPolyline, nearestDist } from './deform';
 import { MEAN_CLOUD, type Cloud } from './fitData';
 import {
@@ -56,8 +57,20 @@ const FIT_SPAN = FIT_CROWN_Y - FIT_CHIN_Y;
 /** Midline x of the mean cloud; subtracted so the head is centred but not mirrored. */
 const FIT_MIDLINE_X = -0.005;
 
-/** Slight under-scale: a game head reads better a little smaller than the fit. */
-const HEAD_SCALE_TRIM = 0.94;
+/**
+ * Head size, as a fraction of the chin-to-crown span the rig hands us.
+ *
+ * CANONICAL PROPORTION: an adult male head is 1/7.5 of standing height. The rig
+ * puts the chin at `headY - 0.010` and the crown at full height, which spans
+ * 1/6.96 — a head 8% too tall for the body before anything else happens, and on
+ * a narrow pair of shoulders that reads as a bobblehead immediately. This trim
+ * lands it on 1/7.5 exactly; `assertHeadProportions` in `checks.ts` fails the
+ * build if it drifts.
+ */
+const HEAD_SCALE_TRIM = 0.928;
+
+/** Target head height as a fraction of body height, and the tolerance on it. */
+export const HEAD_TO_BODY = 1 / 7.5;
 
 export interface HeadFrame {
   /** Metres per fitted-face unit. */
@@ -189,6 +202,13 @@ export interface HeadAnchors {
   /** Half-width of the skull at the temples, metres. */
   templeHalf: number;
   headDepth: number;
+  /**
+   * How many vertices of the head geometry belong to the skull grid. The ears
+   * are welded into the same buffer after it and stand proud of the skull by
+   * design, so any measurement of skull width has to stop here or it measures
+   * the ears instead.
+   */
+  skullVertexCount: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -206,6 +226,15 @@ export interface HeadBuildOptions {
   beard: number;
   /** Beard colour, used only for the albedo shadow the stubble casts. */
   beardColor: number;
+  /**
+   * Hair colour, used only to darken the scalp underneath it.
+   *
+   * Hair cards and a shell never fully cover a scalp, and bright skin showing
+   * between the strands is most of why hair reads as a thin pale scribble
+   * instead of a mass. Painting the scalp dark costs nothing and does more for
+   * the silhouette than another two hundred cards.
+   */
+  hairColor?: number;
   /** 0..1 how sunken and shadowed the eyes read. */
   tired: number;
   /** 0..1 how deep the nasolabial folds and forehead lines are cut. */
@@ -287,7 +316,29 @@ export function buildHeadGeometry(opts: HeadBuildOptions): HeadResult {
   uv[southIdx * 2] = 0.5; uv[southIdx * 2 + 1] = 0;
   uv[northIdx * 2] = 0.5; uv[northIdx * 2 + 1] = 1;
 
-  /* ---- indices ------------------------------------------------------- */
+  /* ---- indices -------------------------------------------------------
+   *
+   * WINDING. This is the single most expensive line in the file to get wrong,
+   * and it was wrong.
+   *
+   * Rows run up in elevation (+Y at the front of the face) and columns run
+   * with azimuth (+X at the front). So at the front, edge a->d is +Y and edge
+   * a->b is +X, and the triangle (a, d, e) has normal (+Y) x (+X + Y) = -Z:
+   * pointing INTO the skull. With the material's default `FrontSide` culling,
+   * that means every triangle of the face is discarded and the renderer draws
+   * the inside of the back of the cranium instead — which is exactly why the
+   * head shipped as a smooth featureless egg with the eyeballs apparently
+   * floating outside it. The lids were there; they were being culled. The nose
+   * was there; a profile render "proved" it, because a silhouette is the same
+   * whichever way the triangles face, which is why it survived review.
+   *
+   * `computeVertexNormals` derives normals from this winding too, so every
+   * normal on the head pointed inward as well and no amount of shading work
+   * could have rescued it.
+   *
+   * `measureOrientation` in `checks.ts` now asserts the mesh's signed volume is
+   * positive, which is exactly the statement "the normals point outward".
+   */
   const idx: number[] = [];
   for (let r = 0; r < ringCount - 1; r++) {
     for (let c = 0; c < COLS; c++) {
@@ -295,13 +346,13 @@ export function buildHeadGeometry(opts: HeadBuildOptions): HeadResult {
       const b = r * vcols + c + 1;
       const d = (r + 1) * vcols + c;
       const e = (r + 1) * vcols + c + 1;
-      idx.push(a, d, e, a, e, b);
+      idx.push(a, e, d, a, b, e);
     }
   }
   for (let c = 0; c < COLS; c++) {
-    idx.push(southIdx, c + 1, c);
+    idx.push(southIdx, c, c + 1);
     const top = (ringCount - 1) * vcols;
-    idx.push(northIdx, top + c, top + c + 1);
+    idx.push(northIdx, top + c + 1, top + c);
   }
 
   /* ---- character space ----------------------------------------------- */
@@ -359,7 +410,7 @@ export function buildHeadGeometry(opts: HeadBuildOptions): HeadResult {
   geo.computeBoundingSphere();
   geo.computeBoundingBox();
 
-  const anchors = buildAnchors(frame, target, opts, field, seats);
+  const anchors = buildAnchors(frame, target, opts, field, seats, vertCount);
   return { geometry: geo, anchors };
 }
 
@@ -531,11 +582,28 @@ export interface EyeSeat {
 }
 
 /** An adult eyeball is ~12 mm in radius; in fitted units at head scale: */
-const EYE_R_FIT = 0.068;
+const EYE_R_FIT = 0.066;
+/**
+ * How far the globe's apex is allowed to stand proud of the lid-ring plane.
+ *
+ * A real cornea does sit slightly ahead of the lid margins — that is where the
+ * catchlight lands — but only by about a millimetre, and it must still be well
+ * behind the line from the brow ridge to the cheekbone. The old value put it
+ * 1.6 mm proud with no orbital recess behind it, which combined with the lid
+ * covering only a thin annulus left most of the sphere exposed.
+ */
+const APEX_PROUD = 0.004;
 /** How far the skin recedes behind the globe inside the aperture. */
-const LID_RECESS = 0.022;
+const LID_RECESS = 0.020;
 /** How proud of the globe the lid skin rides. */
-const LID_THICK = 0.016;
+const LID_THICK = 0.015;
+/**
+ * Where the lid's grip on the globe releases, as a fraction of the globe
+ * radius. It has to reach past 1.0: the lid skin must still be in front of the
+ * globe at its silhouette, or the sphere's edge pokes through the socket.
+ */
+const LID_RELEASE_IN = 1.00;
+const LID_RELEASE_OUT = 1.22;
 
 function eyeSeats(cloud: Cloud): EyeSeat[] {
   const of = (ring: readonly number[]): EyeSeat => {
@@ -552,9 +620,7 @@ function eyeSeats(cloud: Cloud): EyeSeat[] {
     return {
       cx: acx,
       cy: acy,
-      // Seat the globe so its apex stands just proud of the lid plane, which is
-      // where the key light's catchlight lands.
-      cz: cz / ring.length - EYE_R_FIT + 0.009,
+      cz: cz / ring.length - EYE_R_FIT + APEX_PROUD,
       r: EYE_R_FIT,
       ax: (maxX - minX) * 0.5,
       ay: Math.max((maxY - minY) * 0.5, 0.022),
@@ -563,6 +629,16 @@ function eyeSeats(cloud: Cloud): EyeSeat[] {
     };
   };
   return [of(EYE_L_RING), of(EYE_R_RING)];
+}
+
+const _sculpt: Sculpt = { dx: 0, dy: 0, dz: 0 };
+const _sculptOpts: SculptOptions = { age: 0, browPush: 0, jawPush: 0 };
+
+function sculptOpts(opts: HeadBuildOptions): SculptOptions {
+  _sculptOpts.age = opts.age;
+  _sculptOpts.browPush = opts.browPush;
+  _sculptOpts.jawPush = opts.jawPush;
+  return _sculptOpts;
 }
 
 const NECK_BLEND_START = -0.60;
@@ -590,6 +666,16 @@ function surfacePoint(
   y += disp[1];
   z += disp[2];
 
+  /* The landmark cloud says WHO this is; it does not say that a head is made of
+   * bone. `anatomy.ts` adds the relief the cloud has none of — brow shelf,
+   * cheekbone, sub-malar hollow, gonial angle, alar crease, nostrils, lip
+   * vermilion, temporal fossa — without which the fit renders as a smooth egg
+   * with a soft ridge down the middle. See that file's header. */
+  sculpt(x, y, z, Math.max(0, ct), sculptOpts(opts), _sculpt);
+  x += _sculpt.dx;
+  y += _sculpt.dy;
+  z += _sculpt.dz;
+
   /* Authored pushes on top of the fit: the player is a fusion, and a fusion
    * needs a heavier jaw and a heavier brow than either fit alone. */
   const side = x >= 0 ? 1 : -1;
@@ -605,14 +691,21 @@ function surfacePoint(
     y -= opts.browPush * 0.20 * w;
   }
 
-  /* Asymmetry — small, but it is what stops the face reading as mirrored. */
-  const lr = x >= 0 ? 1 : 0;
-  y += (lr ? asym.browY : -asym.browY) * 0.35 * Math.exp(-Math.pow((y - 0.09) / 0.10, 2));
-  y += (lr ? -asym.mouthY : asym.mouthY) * Math.exp(-Math.pow((y + 0.40) / 0.09, 2)) *
+  /* Asymmetry — small, but it is what stops the face reading as mirrored.
+   *
+   * The left/right selector has to be a SMOOTH ramp through the midline. A hard
+   * `x >= 0 ? +a : -a` steps the surface by up to two millimetres at x = 0, all
+   * the way from the crown to the chin, and that reads as a seam welded down the
+   * middle of the face — which is exactly what it was doing. It went unnoticed
+   * because the head was rendering inside out, and the inside of a skull has no
+   * midline to crease. */
+  const lr = Math.tanh(x / 0.055);
+  y += lr * asym.browY * 0.35 * Math.exp(-Math.pow((y - 0.09) / 0.10, 2));
+  y -= lr * asym.mouthY * Math.exp(-Math.pow((y + 0.40) / 0.09, 2)) *
     smooth(0.06, 0.14, Math.abs(x));
-  y += (lr ? asym.eyeY : -asym.eyeY) * 0.5 * Math.exp(-Math.pow((y - 0.01) / 0.06, 2));
+  y += lr * asym.eyeY * 0.5 * Math.exp(-Math.pow((y - 0.01) / 0.06, 2));
   x += asym.noseX * Math.exp(-Math.pow((y + 0.12) / 0.18, 2)) * Math.max(0, ct);
-  z += (lr ? asym.jawZ : -asym.jawZ) * 0.35 * smooth(-0.30, -0.60, y) * Math.max(0, ct);
+  z += lr * asym.jawZ * 0.35 * smooth(-0.30, -0.60, y) * Math.max(0, ct);
 
   /* Seat the eyeballs. Inside the lid aperture the skin drops behind the globe
    * so the eye shows through an almond, not a circle; everywhere else within
@@ -623,20 +716,34 @@ function surfacePoint(
     for (const s of seats) {
       const gx = x - s.cx;
       const gy = y - s.cy;
-      const rr = s.r * s.r - gx * gx - gy * gy;
-      if (rr <= 0) continue;
+      const g = Math.sqrt(gx * gx + gy * gy) / s.r;
+      // Reach past the globe's silhouette: the lid has to be in FRONT of the
+      // sphere all the way round its edge, otherwise the widest part of the
+      // ball is the last thing covered and it reads as a bead sitting on the
+      // face. Outside `LID_RELEASE_OUT` the socket takes over.
+      if (g >= LID_RELEASE_OUT) continue;
+      const rr = Math.max(0, s.r * s.r - gx * gx - gy * gy);
+      // Beyond the silhouette there is no sphere left to sit on, so continue
+      // the lid on the tangent plane through the globe's equator.
       const gz = s.cz + Math.sqrt(rr);
-      const u = (x - s.acx) / (s.ax * 0.94);
-      const v = (y - s.acy) / (s.ay * 0.86);
+      // The palpebral fissure: about 28 mm wide and 10 mm tall on an adult, so
+      // it is wider than the globe (24 mm) horizontally — the canthi sit beside
+      // the ball, not on it — and covers a third of it vertically.
+      const u = (x - s.acx) / (s.ax * 1.02);
+      const v = (y - s.acy) / (s.ay * 1.02);
       const d = Math.sqrt(u * u + v * v);
-      // Fade the whole effect out at the edge of the globe so the lids blend
-      // back into the orbital rim instead of ending in a ridge.
-      const edge = 1 - smooth(0.62, 1.0, Math.sqrt(gx * gx + gy * gy) / s.r);
+      const edge = 1 - smooth(LID_RELEASE_IN, LID_RELEASE_OUT, g);
       if (d < 1) {
+        // Inside the aperture the skin drops behind the globe, so the eye shows
+        // through an almond rather than a circle.
         const w = (1 - d) * (1 - d);
-        z = Math.min(z, gz - LID_RECESS * w - 0.001);
+        z = Math.min(z, gz - LID_RECESS * w - 0.0015);
       } else {
-        z = z + Math.max(0, gz + LID_THICK - z) * edge;
+        // Outside it the lid rides OVER the globe. The upper lid is thicker
+        // than the lower and carries the fold that a real eye has above it.
+        const upper = smooth(-0.10, 0.45, gy / s.r);
+        const thick = LID_THICK * (0.72 + 0.55 * upper);
+        z = z + Math.max(0, gz + thick - z) * edge;
       }
     }
   }
@@ -810,6 +917,7 @@ function paintVertices(
 ): void {
   const base = hexToRgb(opts.skin);
   const beardCol = hexToRgb(opts.beardColor);
+  const hairCol = hexToRgb(opts.hairColor ?? 0x2a211a);
   const noiseSeed = rng.fork('skin').int(0, 1 << 24);
 
   const lipsOuter = LIPS_OUTER as unknown as number[];
@@ -966,6 +1074,20 @@ function paintVertices(
     g *= 1 - orbital * 0.19;
     b *= 1 - orbital * 0.16;
 
+    // Scalp: dark under the hair, fading out over the upper forehead and down
+    // the back of the head. `scalpTop` is above the trichion (landmark 10 sits
+    // at y = 0.32 in fitted units); `scalpBack` catches the occiput, which no
+    // hairline function reaches.
+    const scalpTop = smooth(0.20, 0.34, y);
+    const scalpBack = smooth(-0.16, -0.42, z);
+    const mScalp = Math.min(1, Math.max(scalpTop, scalpBack));
+    if (mScalp > 0.004) {
+      const t = mScalp * 0.86;
+      r += (hairCol[0] - r) * t;
+      g += (hairCol[1] - g) * t;
+      b += (hairCol[2] - b) * t;
+    }
+
     // Stubble as albedo, not geometry: a cool grey-blue shadow under the skin.
     if (mBeard > 0.003) {
       const t = Math.min(0.92, mBeard);
@@ -1001,7 +1123,7 @@ function cheekBloom(x: number, y: number): number {
 
 function buildAnchors(
   frame: HeadFrame, cloud: Cloud, opts: HeadBuildOptions,
-  field: ReturnType<typeof buildField>, seats: EyeSeat[],
+  field: ReturnType<typeof buildField>, seats: EyeSeat[], skullVertexCount: number,
 ): HeadAnchors {
   const pts = (idx: readonly number[]): THREE.Vector3[] =>
     idx.map((i) => toChar(frame, cloud[i * 3], cloud[i * 3 + 1], cloud[i * 3 + 2], new THREE.Vector3()));
@@ -1030,6 +1152,10 @@ function buildAnchors(
     let z = SKULL.cz + rz * cp * ct;
     field.sample(x, y, z, disp);
     x += disp[0]; y += disp[1]; z += disp[2];
+    // The same sculpt the mesh gets, or every attachment — hair roots, brows,
+    // lashes, beard — would be seated on a surface that no longer exists.
+    sculpt(x, y, z, Math.max(0, ct), sculptOpts(opts), _sculpt);
+    x += _sculpt.dx; y += _sculpt.dy; z += _sculpt.dz;
     if (opts.browPush !== 0) {
       const w = Math.exp(-Math.pow((y - 0.085) / 0.075, 2)) * Math.max(0, ct);
       z += opts.browPush * w;
@@ -1059,5 +1185,6 @@ function buildAnchors(
     crownY: opts.crownY,
     templeHalf,
     headDepth: (SKULL.rzF + SKULL.rzB) * frame.scale,
+    skullVertexCount,
   };
 }

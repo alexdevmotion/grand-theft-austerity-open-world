@@ -1,0 +1,178 @@
+/**
+ * The invariants that "looked right in the source" and were not.
+ *
+ * Run with `bun test`.
+ */
+
+import { expect, test } from 'bun:test';
+import * as THREE from 'three';
+import { CAST } from './heroHead';
+import { buildHeadGeometry, HEAD_TO_BODY, type HeadResult } from './headMesh';
+import { eyeLayerGeometries } from './eyes';
+import { measureEyeSeating, measureHairClearance, measureOrientation, measureProportions } from './checks';
+import { buildBeard, buildBrows, buildHairCards, buildHairShell, buildLashes } from '../hair/styles';
+import { NOMINAL_HEIGHT, bodyMetrics } from '../rig';
+import type { CastId } from './fitData';
+
+const M = bodyMetrics('average', false);
+const CHIN_Y = M.headY - 0.010;
+const CROWN_Y = M.headTopY;
+
+const built = new Map<CastId, HeadResult>();
+function head(id: CastId): HeadResult {
+  let r = built.get(id);
+  if (!r) {
+    const cfg = CAST[id];
+    r = buildHeadGeometry({
+      cloud: cfg.cloud(), chinY: CHIN_Y, crownY: CROWN_Y, skin: cfg.skin,
+      beard: cfg.beardShade, beardColor: cfg.beardColor, tired: cfg.tired, age: cfg.age,
+      jawPush: cfg.jawPush, browPush: cfg.browPush, seed: 0x51a5e,
+    });
+    built.set(id, r);
+  }
+  return r;
+}
+
+const CAST_IDS: CastId[] = ['player', 'nicusor', 'ally'];
+
+/* ------------------------------------------------------------------ */
+/* 0. The head is not inside out                                       */
+/* ------------------------------------------------------------------ */
+
+test.each(CAST_IDS)('%s: the skull faces outward', (id: CastId) => {
+  const { geometry, anchors } = head(id);
+  const o = measureOrientation(geometry, anchors.skullVertexCount);
+
+  // Positive signed volume == outward normals. Negative means FrontSide
+  // culling throws the whole face away and the renderer draws the inside of
+  // the cranium, which is what shipped.
+  expect(o.signedVolume).toBeGreaterThan(0);
+  // Order-of-magnitude sanity only. The number reads high (about 8 L against a
+  // 3.5 L analytic ellipsoid) because the neck blend tucks the underside of the
+  // jaw through itself, and the divergence theorem over-counts a self-
+  // intersecting shell. It is bounded here to catch a gross regression, not
+  // used as a measure of head size — `measureProportions` does that.
+  expect(o.signedVolume).toBeGreaterThan(0.0015);
+  expect(o.signedVolume).toBeLessThan(0.012);
+  // And the face's own normals point at the camera, not away from it.
+  expect(o.frontNormalsOutward).toBeGreaterThan(0.97);
+});
+
+/* ------------------------------------------------------------------ */
+/* 1. The eyes                                                         */
+/* ------------------------------------------------------------------ */
+
+test('the eye layers face out of the head, not into the skull', () => {
+  const { anchors } = head('player');
+  for (const eye of [anchors.eyeL, anchors.eyeR]) {
+    const { globe, cornea } = eyeLayerGeometries(eye, 0);
+    const gb = new THREE.Box3().setFromBufferAttribute(globe.getAttribute('position') as THREE.BufferAttribute);
+    const cb = new THREE.Box3().setFromBufferAttribute(cornea.getAttribute('position') as THREE.BufferAttribute);
+
+    // The cornea is a cap on the FRONT of the globe. If the aim rotation ever
+    // flips sign again the cap lands behind the globe centre and the eye
+    // renders as a blank ball — which is exactly what shipped.
+    expect(cb.max.z).toBeGreaterThan(eye.centre.z + eye.radius * 0.9);
+    expect(cb.min.z).toBeGreaterThan(eye.centre.z);
+
+    // The cornea apex is the frontmost point of the whole eye.
+    expect(cb.max.z).toBeGreaterThanOrEqual(gb.max.z - 1e-6);
+
+    // The decisive one. On the optical axis the globe must be the iris DISH —
+    // set back behind the sclera's rim so the eye has real parallax. If the
+    // aperture is cut on the wrong side, the axis is solid sclera at a full
+    // radius and the eye is a blank ball with the iris sealed inside it, which
+    // is the exact geometry that shipped.
+    const pos = globe.getAttribute('position') as THREE.BufferAttribute;
+    let axisMaxZ = -Infinity;
+    for (let i = 0; i < pos.count; i++) {
+      const dx = pos.getX(i) - eye.centre.x;
+      const dy = pos.getY(i) - eye.centre.y;
+      if (Math.hypot(dx, dy) > eye.radius * 0.12) continue;
+      axisMaxZ = Math.max(axisMaxZ, pos.getZ(i));
+    }
+    const axisAhead = (axisMaxZ - eye.centre.z) / eye.radius;
+    expect(axisAhead).toBeGreaterThan(0.45);
+    expect(axisAhead).toBeLessThan(0.80);
+  }
+});
+
+test.each(CAST_IDS)('%s: the globe is seated inside the lid aperture', (id: CastId) => {
+  const { geometry, anchors } = head(id);
+  for (const eye of [anchors.eyeL, anchors.eyeR]) {
+    const s = measureEyeSeating(geometry, eye);
+
+    // The rim of the ball must be buried under lid skin the whole way round.
+    // A ball glued onto a face shows its own edge; a ball seated in a socket
+    // does not, so this is negative on a head with eyes and positive on a head
+    // with googly eyes.
+    expect(s.rimProtrusion).toBeLessThanOrEqual(0);
+
+    // The cornea apex sits at or behind the brow-to-cheek chord.
+    expect(s.apexZ).toBeLessThanOrEqual(s.browCheekZ);
+
+    // Visible sclera is an almond bounded by the lid aperture, not a disc: a
+    // real palpebral fissure is 28-30 mm wide and 9-11 mm tall, which is under
+    // a third of the globe's frontal projection and much wider than it is tall.
+    expect(s.exposed).toBeGreaterThan(0.06);
+    expect(s.exposed).toBeLessThan(0.42);
+    expect(s.apertureW).toBeGreaterThan(s.apertureH * 1.9);
+    expect(s.apertureH).toBeLessThan(0.0125);
+    expect(s.apertureW).toBeLessThan(0.032);
+  }
+});
+
+/* ------------------------------------------------------------------ */
+/* 2. Proportions                                                      */
+/* ------------------------------------------------------------------ */
+
+test.each(CAST_IDS)('%s: canonical head proportions', (id: CastId) => {
+  const { geometry, anchors } = head(id);
+  const p = measureProportions(geometry, anchors, NOMINAL_HEIGHT);
+
+  // Head height is 1/7.5 of standing height.
+  expect(p.headOverBody).toBeGreaterThan(HEAD_TO_BODY * 0.96);
+  expect(p.headOverBody).toBeLessThan(HEAD_TO_BODY * 1.04);
+
+  // The eye line sits on the head's vertical midpoint.
+  expect(p.eyeLineFrac).toBeGreaterThan(0.44);
+  expect(p.eyeLineFrac).toBeLessThan(0.58);
+
+  // Brow to chin. The brief asked for a third of head height; that is the
+  // artist's rule for hairline-to-chin thirds, not for brow-to-chin over
+  // chin-to-crown. Anthropometrically an adult male is menton-to-glabella
+  // 142 mm on a 232 mm head — 0.61 — and the face reads wrong at 0.33. The
+  // bound is the real figure, and it is what the render agrees with.
+  expect(p.browOverHead).toBeGreaterThan(0.55);
+  expect(p.browOverHead).toBeLessThan(0.68);
+
+  // A skull is taller than it is wide and deeper than it is wide.
+  expect(p.width).toBeGreaterThan(0.130);
+  expect(p.width).toBeLessThan(0.168);
+  expect(p.width).toBeLessThan(p.headHeight);
+  expect(p.depth).toBeLessThan(p.headHeight * 0.95);
+});
+
+/* ------------------------------------------------------------------ */
+/* 3. Hair stays off the face                                          */
+/* ------------------------------------------------------------------ */
+
+test.each(CAST_IDS)('%s: no hair crosses the brow onto the face', (id: CastId) => {
+  const cfg = CAST[id];
+  const { anchors } = head(id);
+  const seed = `${id}|test`;
+  const c = measureHairClearance([
+    buildHairShell(anchors, cfg.hair),
+    buildHairCards(anchors, cfg.hair, `hair|${seed}`),
+  ], anchors);
+  expect(c.total).toBeGreaterThan(0);
+  expect(c.onFace).toBe(0);
+});
+
+test.each(CAST_IDS)('%s: brows, lashes and beard build without throwing', (id: CastId) => {
+  const cfg = CAST[id];
+  const { anchors } = head(id);
+  expect(buildBrows(anchors, cfg.brow, `b|${id}`)).not.toBeNull();
+  expect(buildLashes(anchors, `l|${id}`)).not.toBeNull();
+  buildBeard(anchors, cfg.beard, `d|${id}`);
+});

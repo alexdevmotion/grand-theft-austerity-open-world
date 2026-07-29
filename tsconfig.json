@@ -20,5 +20,7 @@
     "baseUrl": ".",
     "paths": { "@/*": ["src/*"] }
   },
-  "include": ["src", "tools", "vite.config.ts"]
+  "include": ["src", "tools", "vite.config.ts"],
+  // `bun test` type-checks and runs these itself; tsc has no `bun:test` types.
+  "exclude": ["**/*.test.ts"]
 }

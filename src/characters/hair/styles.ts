@@ -90,25 +90,42 @@ export function hairlineFn(front: number, temple: number, side: number, nape: nu
  * crown without stopping being the man in the target frame.
  */
 export const PLAYER_HAIR: HairSpec = {
-  hairline: hairlineFn(33 * DEG, 43 * DEG, 5 * DEG, -18 * DEG),
+  // Higher and more receded at the temple than the target frame alone shows —
+  // the Bolojan half of the fusion, nodding at his bald crown. The front stays
+  // where the frame puts it, because pushing both back leaves a forehead with
+  // nothing on it, which is the failure the last pass had.
+  /* HAIRLINE. Bolojan's recession has to show, and the obvious way to author it
+   * — a low front and a high temple — is the wrong one. `hairlineFn` moves the
+   * whole front-to-temple difference between about 9 and 40 degrees of azimuth,
+   * so any large gap becomes a sharp central peak with a bright wedge of
+   * forehead either side of it: devil horns, not a receding hairline. Recession
+   * reads far better as a UNIFORMLY higher line with only a few degrees of
+   * temple lift, which is also what the reference frame actually shows. */
+  hairline: hairlineFn(33 * DEG, 37 * DEG, 4 * DEG, -18 * DEG),
   volume: (az, el) => {
     const a = Math.abs(wrapAz(az)) / Math.PI;
     // Close at the sides, a little more on top — a real short back and sides.
     // The first pass gave 3 mm of shell, which at head scale is a shaved scalp
     // with a scribble on it rather than cropped hair.
     const top = smoothstep(26 * DEG, 68 * DEG, el);
-    return 0.026 + 0.046 * top * (1 - 0.45 * smoothstep(0.25, 0.6, a) * (1 - top));
+    return 0.034 + 0.052 * top * (1 - 0.45 * smoothstep(0.25, 0.6, a) * (1 - top));
   },
-  cards: 460,
-  cardSpan: 26 * DEG,
-  cardHalf: 0.0042,
-  wander: 9 * DEG,
-  curl: 0.006,
+  /* 460 cards over a whole scalp is one strand every few millimetres, which is
+   * what "thin and wispy" measures: the shell shows through everywhere between
+   * them and the silhouette is a scribble rather than a mass. A dense short
+   * crop needs the cards to OVERLAP, so the count is tripled and each card is
+   * wider — and the flyaway count comes DOWN, because flyaways are what make
+   * sparse hair look sparse rather than what makes dense hair look real. */
+  cards: 1500,
+  cardSpan: 24 * DEG,
+  cardHalf: 0.0058,
+  wander: 8 * DEG,
+  curl: 0.005,
   curlFreq: 2.2,
-  lift: 0.008,
-  flyaways: 46,
-  greyTemple: 0.26,
-  greyOverall: 0.05,
+  lift: 0.006,
+  flyaways: 34,
+  greyTemple: 0.34,
+  greyOverall: 0.07,
   sideburn: -16 * DEG,
 };
 
@@ -126,9 +143,9 @@ export const NICUSOR_HAIR: HairSpec = {
     const lobe = Math.exp(-Math.pow((a - 0.33) / 0.24, 2));
     return 0.040 + 0.185 * top * (0.55 + 0.85 * lobe);
   },
-  cards: 420,
+  cards: 1250,
   cardSpan: 34 * DEG,
-  cardHalf: 0.0046,
+  cardHalf: 0.0056,
   wander: 22 * DEG,
   curl: 0.030,
   curlFreq: 4.6,
@@ -147,9 +164,9 @@ export const ALLY_HAIR: HairSpec = {
     const top = smoothstep(24 * DEG, 66 * DEG, el);
     return 0.020 + 0.062 * top * (1 - 0.30 * smoothstep(0.3, 0.7, a));
   },
-  cards: 300,
+  cards: 950,
   cardSpan: 32 * DEG,
-  cardHalf: 0.0044,
+  cardHalf: 0.0054,
   wander: 15 * DEG,
   curl: 0.016,
   curlFreq: 3.0,
@@ -337,7 +354,17 @@ export interface BrowSpec {
   extend: number;
 }
 
-export const HEAVY_BROW: BrowSpec = { thickness: 0.0031, angle: 0.0055, innerDrop: 0.0022, hairs: 96, extend: 0.10 };
+/**
+ * Bolojan's. Heavy, dark, angled — his single most recognisable feature, and
+ * the one the brief insists must be geometry rather than paint.
+ *
+ * At 0.0031 half-thickness the mass ribbons were 5 mm tall against a real
+ * brow's 9-11, and 96 scattered hairs over 40 mm of arc left daylight between
+ * them, so what rendered was a pencil line that the skin's own highlight then
+ * washed out. This is the same shape, given the mass it needs to survive a key
+ * light pointed straight at it.
+ */
+export const HEAVY_BROW: BrowSpec = { thickness: 0.0046, angle: 0.0062, innerDrop: 0.0026, hairs: 300, extend: 0.11 };
 export const LEAN_BROW: BrowSpec = { thickness: 0.0021, angle: 0.0018, innerDrop: 0.0010, hairs: 68, extend: 0.06 };
 export const SOFT_BROW: BrowSpec = { thickness: 0.0019, angle: 0.000, innerDrop: 0.0008, hairs: 62, extend: 0.05 };
 
@@ -380,10 +407,12 @@ export function buildBrows(anchors: HeadAnchors, spec: BrowSpec, seed: string): 
       return q;
     });
 
-    for (let layer = 0; layer < 2; layer++) {
+    // Three stacked ribbons rather than two: with two, the alpha test punched
+    // holes clean through the mass wherever the strand texture's gaps lined up.
+    for (let layer = 0; layer < 3; layer++) {
       const pts = shaped.map((p, i) => {
         const t = i / (shaped.length - 1);
-        return p.clone().add(new THREE.Vector3(0, -spec.thickness * (layer * 0.75 - 0.1) * (0.6 + t * 0.6), 0));
+        return p.clone().add(new THREE.Vector3(0, -spec.thickness * (layer * 0.62 - 0.28) * (0.6 + t * 0.6), 0));
       });
       rb.add({
         pts,
@@ -393,7 +422,13 @@ export function buildBrows(anchors: HeadAnchors, spec: BrowSpec, seed: string): 
         }),
         normal: pts.map((p) => p.clone().sub(centre).normalize()),
         grey: 0,
-        repeat: 3,
+        // The strand texture carries 22 columns per tile. At repeat 3 that is
+        // 66 strands across a 4.6 mm ribbon — 0.07 mm each, an order of
+        // magnitude under a pixel at this range — so the alpha test dissolved
+        // them into a uniform grey haze and the heaviest brows in the cast
+        // rendered as a pencil smudge. One strand has to be worth about half a
+        // millimetre for the mass to read as hair.
+        repeat: 0.5,
       });
     }
 
@@ -471,6 +506,25 @@ export interface BeardSpec {
 }
 
 /**
+ * The beard's upper boundary, elevation as a function of azimuth.
+ *
+ * Shared with the albedo layer in `headMesh.ts`, which paints the shadow the
+ * beard casts into the skin underneath it. When the two disagree the stubble
+ * tone and the cards land on different parts of the jaw and the beard reads as
+ * a smudge with hairs near it — which is what it was doing.
+ *
+ * The previous curve ran from -43 degrees at the chin to -16 at the ear, and
+ * -43 degrees is BELOW the lower lip: the "beard" was a patch on the point of
+ * the chin and nothing else, which is the whole of "patchy stubble". A trimmed
+ * beard reaches well up the cheek. It still has to dip hard at the front, since
+ * at zero azimuth this elevation band is the mouth.
+ */
+export function BEARD_TOP(az: number): number {
+  const a = Math.abs(wrapAz(az)) / (78 * DEG);
+  return (-40 + 19 * smoothstep(0.18, 0.78, a)) * DEG;
+}
+
+/**
  * A short, well-trimmed beard as geometry rather than paint. The albedo layer in
  * `headMesh.ts` already carries the stubble shadow; this is the part that
  * breaks the jaw's silhouette and catches the key light.
@@ -482,22 +536,13 @@ export function buildBeard(anchors: HeadAnchors, spec: BeardSpec, seed: string):
   const centre = new THREE.Vector3(0, (anchors.chinY + anchors.crownY) * 0.5, -anchors.headDepth * 0.12);
   const p = new THREE.Vector3();
 
-  /* The beard line is not a band of constant height: it runs low across the
-   * chin, climbs the jaw, and meets the sideburn in front of the ear. Spraying
-   * it evenly over an elevation range buries the mouth and the base of the nose,
-   * which is exactly what kills the middle of the face. */
-  const beardTop = (az: number): number => {
-    const a = Math.abs(az) / (72 * DEG);
-    // Trimmed, not a ruff: the cheeks stay bare well past the mouth corner and
-    // the line only climbs to meet the sideburn in front of the ear.
-    return (-43 + 27 * smoothstep(0.38, 1.0, a)) * DEG;
-  };
+  const beardTop = BEARD_TOP;
   const beardBottom = (az: number): number => {
-    const a = Math.abs(az) / (72 * DEG);
+    const a = Math.abs(az) / (78 * DEG);
     return (-60 + 14 * smoothstep(0.3, 1.0, a)) * DEG;
   };
 
-  const emit = (az: number, el: number, len: number, grey: number): void => {
+  const emit = (az: number, el: number, len: number, grey: number, half: number): void => {
     anchors.surface(az, el, 0.004, p);
     const n = p.clone().sub(centre).normalize();
     const dir = n.clone().multiplyScalar(0.5);
@@ -507,48 +552,67 @@ export function buildBeard(anchors: HeadAnchors, spec: BeardSpec, seed: string):
     const mid = p.clone().lerp(tip, 0.5).addScaledVector(n, len * 0.16);
     rb.add({
       pts: [p.clone(), mid, tip],
-      half: [0.00085, 0.00065, 0.00022],
+      half: [half, half * 0.78, half * 0.28],
       normal: [n, n, n],
       grey: Math.max(0, Math.min(1, grey)),
-      repeat: 0.6,
+      // Same sub-pixel-strand problem as the brows, at a smaller scale.
+      repeat: 0.25,
     });
   };
 
-  /* 340 cards spread over the whole jaw is one strand every few millimetres —
-   * which renders as a scatter of pale specks, not a beard. A trimmed beard is
-   * a CONTINUOUS mass with a hard edge along the jaw and the moustache line,
-   * so the count is an order of magnitude higher, the cards overlap, and the
-   * distribution is stratified rather than uniformly random so no patch is
-   * left bald by chance. */
-  const count = Math.round(2200 * spec.density);
-  const AZ_BANDS = 44;
+  /* WHY THE COUNTS ARE WHAT THEY ARE.
+   *
+   * A trimmed beard is a CONTINUOUS mass with a hard edge along its upper
+   * boundary. Cards that do not overlap render as a scatter of specks, and
+   * every previous pass at this — 340 cards, then 2200 — was still below the
+   * overlap threshold. At 0.85 mm half-width a card covers about 1.7 mm of
+   * jaw; the beard region is roughly 90 x 45 mm of surface, so continuous
+   * coverage at one layer needs order 1500 cards and a mass that survives the
+   * alpha test needs three layers of that. The cards are also wider now, which
+   * buys coverage far more cheaply than count does.
+   *
+   * The distribution is stratified in azimuth rather than uniformly random, so
+   * no band is left bald by chance — with 44 bands and uniform sampling the
+   * emptiest band routinely came out at half the mean. */
+  const count = Math.round(6200 * spec.density);
+  const AZ_BANDS = 56;
   for (let i = 0; i < count; i++) {
     const band = i % AZ_BANDS;
-    const az = (-76 + (band + rng.next()) * (152 / AZ_BANDS)) * DEG;
+    const az = (-80 + (band + rng.next()) * (160 / AZ_BANDS)) * DEG;
     const top = beardTop(az);
     const bot = beardBottom(az);
     // Bias toward the top of the band so the mass is densest just under the
     // jawline edge, which is where a trimmed beard actually is.
     const el = bot + (top - bot) * Math.pow(rng.next(), 0.6);
-    emit(az, el, spec.length * rng.range(0.7, 1.25), spec.grey + rng.range(-0.16, 0.22));
+    emit(az, el, spec.length * rng.range(0.7, 1.25), spec.grey + rng.range(-0.20, 0.26), 0.00125);
   }
 
-  /* Moustache: a separate patch above the lip, never on it. */
-  const stache = Math.round(520 * spec.density);
+  /* Moustache: a separate patch above the lip, never on it, and connected to
+   * the beard at the corners of the mouth — an unconnected moustache is the
+   * loudest thing wrong with a CG beard. */
+  const stache = Math.round(1700 * spec.density);
   for (let i = 0; i < stache; i++) {
-    const az = rng.range(-22 * DEG, 22 * DEG);
-    if (Math.abs(az) < 2.5 * DEG && rng.bool(0.6)) continue;   // the philtrum groove
-    const el = rng.range(-25.5 * DEG, -21.0 * DEG);
-    emit(az, el, spec.length * rng.range(0.5, 1.0), spec.grey + rng.range(-0.15, 0.25));
+    const az = rng.range(-27 * DEG, 27 * DEG);
+    if (Math.abs(az) < 2.0 * DEG && rng.bool(0.5)) continue;   // the philtrum groove
+    // The band drops away from the septum toward the mouth corners, following
+    // the lip, so the moustache meets the beard rather than floating over it.
+    const drop = Math.pow(Math.abs(az) / (27 * DEG), 1.6) * 5 * DEG;
+    const el = rng.range(-24.5 * DEG, -19.0 * DEG) - drop;
+    /* Cards hang DOWNWARD from their root, so a moustache rooted level with the
+     * upper vermilion drapes its full length straight over the mouth — which is
+     * why the front view had no mouth at all. The band is raised to clear the
+     * lip and the cards are shortened to two thirds, which is also what a
+     * trimmed moustache is: shorter than the beard, not the same length. */
+    emit(az, el, spec.length * rng.range(0.42, 0.72), spec.grey + rng.range(-0.18, 0.28), 0.00105);
   }
 
   /* A soul patch under the lower lip, which is where a trimmed beard is
    * heaviest and what makes the chin read as bearded rather than shaded. */
-  const patch = Math.round(380 * spec.density);
+  const patch = Math.round(1400 * spec.density);
   for (let i = 0; i < patch; i++) {
-    const az = rng.range(-18 * DEG, 18 * DEG);
-    const el = rng.range(-46 * DEG, -38 * DEG);
-    emit(az, el, spec.length * rng.range(0.7, 1.3), spec.grey + rng.range(-0.2, 0.3));
+    const az = rng.range(-21 * DEG, 21 * DEG);
+    const el = rng.range(-47 * DEG, -37 * DEG);
+    emit(az, el, spec.length * rng.range(0.7, 1.3), spec.grey + rng.range(-0.22, 0.32), 0.00125);
   }
 
   return rb.build();

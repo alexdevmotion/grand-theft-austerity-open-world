@@ -122,7 +122,23 @@ export function bodyMetrics(body: BodyType, female: boolean): BodyMetrics {
   const ts = (H - hipY) / (H - 0.530 * H);
   const up = (frac: number) => hipY + (frac - 0.530) * H * ts;
 
-  const shoulderHalf = 0.0975 * H * m.shoulder * (female ? 0.90 : 1);
+  /**
+   * BIACROMIAL BREADTH — joint centre to joint centre.
+   *
+   * This was `0.0975 * H`: 341 mm across at 1.75 m, when an adult male measures
+   * 400–460 mm. Numerically it is a 15% error; visually it is the difference
+   * between a man and a bobblehead, because the eye judges head size against
+   * shoulder span and nothing else. A correctly-proportioned head — and the head
+   * IS correctly proportioned, `measureProportions` pins it at 1/7.5 — still
+   * reads oversized when the frame under it is a coat hanger.
+   *
+   * 0.1143 * H puts it at 400 mm at nominal height, the bottom of the real
+   * range, which is where a lean-but-solid man in his forties sits. `bodyMetrics`
+   * is asserted against this in `face.test.ts`; the torso yoke and chest below
+   * were widened with it so the deltoid still lands on the shoulder seam instead
+   * of tearing away from a torso that stayed narrow.
+   */
+  const shoulderHalf = 0.1143 * H * m.shoulder * (female ? 0.90 : 1);
   const hipHalf = 0.048 * H * m.hip;
 
   return {
@@ -142,9 +158,22 @@ export function bodyMetrics(body: BodyType, female: boolean): BodyMetrics {
     pelvisD: 0.116 * g,
     waistW: 0.136 * g * (female ? 0.90 : 1),
     waistD: 0.101 * g,
-    chestW: 0.176 * g * m.chest,
+    // Chest and yoke track the wider shoulder joint. The yoke has to stay a
+    // little proud of `shoulderHalf` or the deltoid ring — which starts buried
+    // inside the torso by design, see `humanoid.ts` — surfaces outside it and
+    // the arm reads as a pauldron bolted onto a narrow chest.
+    // Chest and yoke track the wider shoulder joint. The yoke has to overlap
+    // the deltoid from both sides — `humanoid.ts` buries the first deltoid ring
+    // inside the torso on purpose, so the shoulder reads as a joint rather than
+    // a pauldron — and `face.test.ts` asserts exactly that for every build.
+    //
+    // The yoke takes only a fraction of `girth`. Girth is a fat term: on the
+    // 'heavy' build a full 1.36 pushed the yoke out past the deltoid entirely,
+    // which sank the arms into a torso 611 mm across. The width across the top
+    // of the shoulders is bone, and bone does not vary with waistline.
+    chestW: 0.194 * g * m.chest,
     chestD: 0.122 * g * m.chest,
-    yokeW: 0.187 * g * m.shoulder,
+    yokeW: 0.212 * (0.35 + 0.65 * g) * m.shoulder,
     yokeD: 0.113 * g,
     bellyPush: m.belly * (female ? 0.55 : 1),
     bustPush: female ? 0.035 * g : 0,

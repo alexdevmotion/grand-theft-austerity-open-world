@@ -25,7 +25,7 @@
 
 import * as THREE from 'three';
 import { Rng, valueNoise2D } from '../../core/rng';
-import { sculpt, type Sculpt, type SculptOptions } from './anatomy';
+import { SKULL_AXIS, sculpt, type Sculpt, type SculptOptions } from './anatomy';
 import { buildField, distToPolyline, nearestDist } from './deform';
 import { MEAN_CLOUD, type Cloud } from './fitData';
 import {
@@ -44,9 +44,14 @@ import {
  * features (nose, lips, sockets) rather than rebuild the skull.
  */
 const SKULL = {
-  cx: 0.006, cy: -0.055, cz: -0.290,
-  rx: 0.424, ry: 0.672,
-  rzF: 0.470, rzB: 0.545,
+  cx: SKULL_AXIS.x, cy: -0.055, cz: SKULL_AXIS.z,
+  // Breadth and depth were 0.424 and 0.470/0.545. Raising `HEAD_SCALE_TRIM` to
+  // absorb the vault cut scales both up with it, so they were brought down to
+  // hold the finished head at an adult male's 152 mm across and 196 deep —
+  // `measureProportions` bounds both. Depth needed a second trim after the
+  // nasal projection in `anatomy.ts` pushed the front of the head forward.
+  rx: 0.392, ry: 0.672,
+  rzF: 0.424, rzB: 0.482,
 };
 
 /** Mean chin and crown in fitted units — the span the head is scaled by. */
@@ -64,10 +69,17 @@ const FIT_MIDLINE_X = -0.005;
  * puts the chin at `headY - 0.010` and the crown at full height, which spans
  * 1/6.96 — a head 8% too tall for the body before anything else happens, and on
  * a narrow pair of shoulders that reads as a bobblehead immediately. This trim
- * lands it on 1/7.5 exactly; `assertHeadProportions` in `checks.ts` fails the
+ * lands it on 1/7.5 exactly; `measureProportions` in `checks.ts` fails the
  * build if it drifts.
+ *
+ * It was raised from 0.928 when `anatomy.ts` cut 0.105 fitted units off the
+ * cranial vault. The two changes together are deliberately height-neutral: the
+ * head still measures 1/7.5, but the height that used to be bare domed cranium
+ * above the brow is now face. That reallocation — not a smaller head — is what
+ * stops it reading oversized, and it is why the trim and the vault cut have to
+ * move as a pair.
  */
-const HEAD_SCALE_TRIM = 0.928;
+const HEAD_SCALE_TRIM = 0.978;
 
 /** Target head height as a fraction of body height, and the tolerance on it. */
 export const HEAD_TO_BODY = 1 / 7.5;
@@ -243,6 +255,26 @@ export interface HeadBuildOptions {
   jawPush: number;
   /** Extra brow ridge projection, fitted units. */
   browPush: number;
+  /**
+   * The hair style's hairline, elevation as a function of azimuth.
+   *
+   * The scalp under the hair has to go dark exactly where the hair starts, and
+   * "exactly" is the operative word: a single y threshold cannot follow a
+   * hairline that sits at 33 degrees dead ahead and 52 at the temple, so the
+   * previous approximation left a pale crescent of forehead skin showing
+   * through the hair at each temple and a soft fade instead of an edge. Handing
+   * the real curve over costs nothing and is most of what makes the hairline
+   * read as a boundary rather than a gradient.
+   */
+  hairline?: (az: number) => number;
+  /**
+   * The beard style's upper boundary, elevation as a function of azimuth.
+   *
+   * Same contract, same reason: the stubble tone painted here and the beard
+   * cards built in `hair/styles.ts` have to land on the same jaw, or the beard
+   * reads as a smudge with hairs somewhere near it.
+   */
+  beardLine?: (az: number) => number;
   /** Grid resolution. */
   cols?: number;
   rows?: number;
@@ -311,8 +343,11 @@ export function buildHeadGeometry(opts: HeadBuildOptions): HeadResult {
   // Poles: average the adjacent ring so the cap closes without a spike.
   const southIdx = ringCount * vcols;
   const northIdx = southIdx + 1;
-  poleFrom(fit, 0, vcols, southIdx * 3, SKULL.cy - SKULL.ry);
-  poleFrom(fit, (ringCount - 1) * vcols, vcols, northIdx * 3, SKULL.cy + SKULL.ry);
+  // The rings stop at +/-88 degrees, so the caps close over the last 2 degrees:
+  // ry * (1 - sin 88) = 0.0004 in fitted units. Anything larger is a spike.
+  const CAP_EXTEND = SKULL.ry * (1 - Math.sin(88 * DEG));
+  poleFrom(fit, 0, vcols, southIdx * 3, -CAP_EXTEND);
+  poleFrom(fit, (ringCount - 1) * vcols, vcols, northIdx * 3, CAP_EXTEND);
   uv[southIdx * 2] = 0.5; uv[southIdx * 2 + 1] = 0;
   uv[northIdx * 2] = 0.5; uv[northIdx * 2 + 1] = 1;
 
@@ -443,8 +478,10 @@ function appendEars(geo: THREE.BufferGeometry, frame: HeadFrame, opts: HeadBuild
   const base = hexToRgb(opts.skin);
   // Ears run hot: thin, well supplied with blood, always the reddest part of a
   // face, and the first place back-lighting shows.
+  // Warmer than the face, but the previous +0.06 lift on an already bright skin
+  // pushed the ears to a saturated orange that read as a lighting bug.
   const ear: [number, number, number] = [
-    Math.min(1, base[0] * 1.05 + 0.06), base[1] * 0.93, base[2] * 0.90,
+    Math.min(1, base[0] * 1.04 + 0.022), base[1] * 0.95, base[2] * 0.93,
   ];
 
   /** Skull half-width at a (y, z) on the head's side. */
@@ -456,11 +493,16 @@ function appendEars(geo: THREE.BufferGeometry, frame: HeadFrame, opts: HeadBuild
   };
 
   // attachment -> helix rim (proud) -> antihelix -> concha floor (recessed)
+  // `out` is how far each loop stands proud of the skull, in fitted units: the
+  // helix rim was 0.056, which is 10.6 mm of ear sticking out of the side of the
+  // head. A real helix stands 15-20 mm from the mastoid but the skull surface
+  // here is already at the temporal plane, so the visible protrusion has to be
+  // about half that or the ears read as handles.
   const LOOPS: Array<{ scale: number; out: number; thick: number; cav: number; rough: number }> = [
     { scale: 1.02, out: -0.004, thick: 0.35, cav: 0.68, rough: 0.50 },
-    { scale: 0.99, out: 0.056, thick: 0.95, cav: 1.00, rough: 0.44 },
-    { scale: 0.66, out: 0.038, thick: 0.90, cav: 0.60, rough: 0.48 },
-    { scale: 0.34, out: 0.006, thick: 0.60, cav: 0.36, rough: 0.52 },
+    { scale: 0.99, out: 0.036, thick: 0.95, cav: 1.00, rough: 0.44 },
+    { scale: 0.66, out: 0.024, thick: 0.90, cav: 0.60, rough: 0.48 },
+    { scale: 0.34, out: 0.004, thick: 0.60, cav: 0.36, rough: 0.52 },
   ];
 
   const EAR_Y = -0.030;
@@ -623,7 +665,12 @@ function eyeSeats(cloud: Cloud): EyeSeat[] {
       cz: cz / ring.length - EYE_R_FIT + APEX_PROUD,
       r: EYE_R_FIT,
       ax: (maxX - minX) * 0.5,
-      ay: Math.max((maxY - minY) * 0.5, 0.022),
+      // The fitted lid ring is the CLOSED-ish lid of whatever frame the photo
+      // caught, so taking it literally gives a squint. An adult palpebral
+      // fissure is 9-11 mm tall, which is 0.055 fitted units of full height;
+      // the floor is the half of that, and `measureEyeSeating` bounds the
+      // rendered result from both sides so it can neither squint nor stare.
+      ay: Math.max((maxY - minY) * 0.5, 0.0292),
       acx,
       acy,
     };
@@ -729,8 +776,21 @@ function surfacePoint(
       // The palpebral fissure: about 28 mm wide and 10 mm tall on an adult, so
       // it is wider than the globe (24 mm) horizontally — the canthi sit beside
       // the ball, not on it — and covers a third of it vertically.
-      const u = (x - s.acx) / (s.ax * 1.02);
-      const v = (y - s.acy) / (s.ay * 1.02);
+      const u = (x - s.acx) / (s.ax * 1.06);
+      /* HEAVY-LIDDED. The reference has a tired, hooded set to the eyes: the
+       * upper lid covers the top of the iris and the fold sits close to the
+       * lash line. A symmetric aperture gives an alert, wide-open eye, which is
+       * a different man's expression however correctly the fissure measures —
+       * and the fissure measured correctly throughout.
+       *
+       * The obvious version of this, dropping the aperture centre, does not
+       * work and `measureEyeSeating` says why: move the whole ellipse down and
+       * its lower edge crosses into the globe's lower cap, so the bottom of the
+       * ball comes out from under the lid and the eye is googly. The hooding
+       * has to come from the TOP edge alone, which is what the asymmetric half
+       * extents do. */
+      const dyLid = y - s.acy;
+      const v = dyLid / (s.ay * (dyLid > 0 ? 0.80 : 1.26));
       const d = Math.sqrt(u * u + v * v);
       const edge = 1 - smooth(LID_RELEASE_IN, LID_RELEASE_OUT, g);
       if (d < 1) {
@@ -766,15 +826,26 @@ function surfacePoint(
   out[o + 2] = z;
 }
 
-function poleFrom(fit: Float32Array, ringStart: number, vcols: number, o: number, fallbackY: number): void {
-  let x = 0, z = 0;
+/**
+ * Close a cap by averaging the ring below it and extending a little past it.
+ *
+ * The y used to come from the analytic ellipsoid, which was safe only while the
+ * sculpt left the crown where the ellipsoid put it. It no longer does — the
+ * vault is cut by 0.105 — and an analytic pole above a sculpted ring is a spike
+ * welded to the top of the skull. Averaging the ring instead is correct for any
+ * sculpt; `extend` is the small residual so the cap still closes convexly
+ * rather than as a flat lid.
+ */
+function poleFrom(fit: Float32Array, ringStart: number, vcols: number, o: number, extend: number): void {
+  let x = 0, y = 0, z = 0;
   for (let c = 0; c < vcols - 1; c++) {
     x += fit[(ringStart + c) * 3];
+    y += fit[(ringStart + c) * 3 + 1];
     z += fit[(ringStart + c) * 3 + 2];
   }
   const n = vcols - 1;
   fit[o] = x / n;
-  fit[o + 1] = fallbackY;
+  fit[o + 1] = y / n + extend;
   fit[o + 2] = z / n;
 }
 
@@ -918,6 +989,8 @@ function paintVertices(
   const base = hexToRgb(opts.skin);
   const beardCol = hexToRgb(opts.beardColor);
   const hairCol = hexToRgb(opts.hairColor ?? 0x2a211a);
+  const hairline = opts.hairline;
+  const beardLine = opts.beardLine;
   const noiseSeed = rng.fork('skin').int(0, 1 << 24);
 
   const lipsOuter = LIPS_OUTER as unknown as number[];
@@ -970,11 +1043,24 @@ function paintVertices(
     const mAla = 1 - smooth(0.0, 0.055, dAla);
     const mNostril = 1 - smooth(0.0, 0.030, dNostril);
 
-    // Beard: below the cheekbone line, widening to the jaw, cut out at the lips.
-    const beardBand = smooth(-0.16, -0.30, y) * (1 - smooth(-0.62, -0.74, y));
+    /* Beard: the same boundary the cards are grown from, cut with a real edge
+     * rather than a fade — a trimmed beard has a line you could draw, and a
+     * gradient here is most of why it read as a shadow. `front` is deliberately
+     * NOT a factor: a beard wraps round the jaw to the ear, and gating on the
+     * surface normal deleted it exactly where the sideburn meets it. */
+    const beardAz = Math.atan2(x - SKULL.cx, z - SKULL.cz);
+    const beardTopEl = beardLine ? beardLine(beardAz) : -0.70;
+    const beardTopY = SKULL.cy + SKULL.ry * Math.sin(beardTopEl);
+    // A trimmed beard has a line you could draw, but not one you could cut
+    // yourself on: above the boundary the hair thins out over about a
+    // centimetre rather than stopping dead. At 5 mm of ramp the edge rendered
+    // as a chinstrap moulded onto the face.
+    const beardBand = smooth(beardTopY + 0.055, beardTopY - 0.040, y) *
+      (1 - smooth(-0.60, -0.76, y)) *
+      (1 - smooth(78 * DEG, 96 * DEG, Math.abs(beardAz)));
     const mBeard = Math.max(
       0,
-      beardBand * opts.beard * (1 - mLips * 0.85) * front,
+      beardBand * opts.beard * (1 - mLips * 0.98),
     );
     // Ear region: the sides of the head at eye height, where the cloud stops.
     const mEar = smooth(0.30, 0.40, Math.abs(x)) * (1 - smooth(0.12, 0.34, Math.abs(y + 0.06)));
@@ -996,7 +1082,7 @@ function paintVertices(
     /* --- cavity: creases that should stay dark whatever the key light does --- */
     let cav = 1;
     cav -= mNaso * 0.52;
-    cav -= mLipLine * 0.62;
+    cav -= mLipLine * 0.78;
     cav -= mBrowUnder * 0.30;
     cav -= mNostril * 0.55;
     cav -= (1 - smooth(0.0, 0.045, dEye)) * 0.18 * (0.4 + opts.tired * 0.6);
@@ -1014,7 +1100,7 @@ function paintVertices(
     // is behind the camera, and it is the first casualty of a smooth fit.
     const alarCrease = Math.exp(-Math.pow((Math.abs(x) - 0.072) / 0.020, 2)) *
       Math.exp(-Math.pow((y + 0.255) / 0.050, 2)) * front;
-    cav -= alarCrease * 0.34;
+    cav -= alarCrease * 0.20;
     // Philtrum: two ridges with a groove between them, under the septum.
     const philtrum = Math.exp(-Math.pow(x / 0.014, 2)) *
       Math.exp(-Math.pow((y + 0.325) / 0.030, 2)) * front;
@@ -1023,14 +1109,17 @@ function paintVertices(
     cav = Math.max(0.22, cav);
 
     /* --- roughness: a real oily T-zone against matte cheeks --- */
-    let rough = 0.44;
-    rough -= mTzone * 0.20;
+    let rough = 0.47;
+    rough -= mTzone * 0.10;
     rough += (1 - front) * 0.06;
     rough -= mLips * 0.20;
     rough += mBeard * 0.16;
     rough += mNaso * 0.05;
     rough -= mEyeRim * 0.06;
+    // Roughness breakup at pore scale, not at cheek scale: a uniform roughness
+    // is a lacquered surface however good its normal map is.
     rough += (valueNoise2D(x * 44, y * 44, noiseSeed) - 0.5) * 0.05;
+    rough += (valueNoise2D(x * 170, y * 170, noiseSeed ^ 0x77) - 0.5) * 0.13;
     rough = Math.min(0.78, Math.max(0.16, rough));
 
     attr[i * 4] = k;
@@ -1040,9 +1129,22 @@ function paintVertices(
 
     /* --- albedo: authored, de-lit, never a photograph --- */
     let r = base[0], g = base[1], b = base[2];
-    const mottle = (valueNoise2D(x * 26 + 11, y * 26 + 7, noiseSeed) - 0.5) * 0.055 +
-      (valueNoise2D(x * 90, y * 90, noiseSeed ^ 0x5f) - 0.5) * 0.030;
-    r += mottle * 1.15; g += mottle * 0.85; b += mottle * 0.75;
+    /* Three octaves, and the amplitudes matter more than they look. The
+     * micro-NORMAL alone cannot rescue a waxy face: under a broad low key a
+     * perturbed normal barely changes the diffuse term, so the relief it adds
+     * is invisible while the surface is a single flat colour. What reads as
+     * skin at half a metre is high-frequency ALBEDO variation — blotch,
+     * capillary, sun damage — and it was running at a third of the amplitude
+     * real skin has. In fitted units the head spans about 1.0, so 26 / 90 / 230
+     * are roughly 6 mm, 1.7 mm and 0.7 mm features. */
+    const mottle = (valueNoise2D(x * 26 + 11, y * 26 + 7, noiseSeed) - 0.5) * 0.085 +
+      (valueNoise2D(x * 90, y * 90, noiseSeed ^ 0x5f) - 0.5) * 0.055 +
+      // Nothing finer than this: the grid spacing on the face is 2-3 mm, so an
+      // octave below about 6 mm aliases into per-vertex speckle instead of into
+      // skin. Detail past that point is the micro-NORMAL's job, which is
+      // evaluated per fragment.
+      0;
+    r += mottle * 1.20; g += mottle * 0.82; b += mottle * 0.70;
 
     // Vascular warmth: nose, ears, cheeks and eyelids run red; the forehead and
     // chin run a touch yellow. This is the low-frequency colour zoning that a
@@ -1060,12 +1162,15 @@ function paintVertices(
     g += yellowZone * 0.016;
     b -= yellowZone * 0.014;
 
-    // Lips: desaturated brick, darker at the line, never lipstick.
+    // Lips: desaturated brick, darker at the line, never lipstick. Applied
+    // AFTER nothing and before the beard, but at enough strength to survive it
+    // — a mouth that the moustache and the stubble tone between them erase is
+    // a face with no mouth, which is what the front view had.
     if (mLips > 0) {
-      const t = mLips * 0.85;
-      r += (0.42 - r) * t * 0.55;
-      g += (0.20 - g) * t * 0.55;
-      b += (0.18 - b) * t * 0.55;
+      const t = mLips * 0.95;
+      r += (0.47 - r) * t * 0.72;
+      g += (0.23 - g) * t * 0.72;
+      b += (0.21 - b) * t * 0.72;
     }
 
     // Tired, darker orbital skin — the hero's defining expression.
@@ -1074,26 +1179,43 @@ function paintVertices(
     g *= 1 - orbital * 0.19;
     b *= 1 - orbital * 0.16;
 
-    // Scalp: dark under the hair, fading out over the upper forehead and down
-    // the back of the head. `scalpTop` is above the trichion (landmark 10 sits
-    // at y = 0.32 in fitted units); `scalpBack` catches the occiput, which no
-    // hairline function reaches.
-    const scalpTop = smooth(0.20, 0.34, y);
+    // Scalp: dark under the hair, with a hard edge at the hairline. The mask
+    // follows the style's own hairline curve when one is supplied, which is the
+    // only way it can be right at the temple and at the front at once.
+    /* `el` is recovered from the SCULPTED y, and the vault cut in `anatomy.ts`
+     * lowers y most near the crown — so the recovered elevation runs a degree
+     * or two under the parametric elevation the hair was grown at, and by more
+     * at the temple than at the front. Comparing the two directly therefore
+     * left the scalp pale exactly where the temple recession is deepest, which
+     * rendered as two bright wedges of forehead poking up into the hair. The
+     * band is biased below the hairline to swallow that error, which also gives
+     * the shell's alpha dissolve something dark to fade into instead of bare
+     * forehead. */
+    const el = Math.asin(Math.max(-1, Math.min(1, (y - SKULL.cy) / SKULL.ry)));
+    const scalpTop = hairline
+      ? smooth(-0.075, -0.010, el - hairline(Math.atan2(x - SKULL.cx, z - SKULL.cz)))
+      : smooth(0.20, 0.34, y);
     const scalpBack = smooth(-0.16, -0.42, z);
     const mScalp = Math.min(1, Math.max(scalpTop, scalpBack));
     if (mScalp > 0.004) {
-      const t = mScalp * 0.86;
+      // Nearly opaque: hair cards and a shell never fully cover a scalp, and
+      // bright skin between the strands is most of why hair reads as a pale
+      // scribble. This is cheaper than another thousand cards and works better.
+      const t = mScalp * 0.95;
       r += (hairCol[0] - r) * t;
       g += (hairCol[1] - g) * t;
       b += (hairCol[2] - b) * t;
     }
 
-    // Stubble as albedo, not geometry: a cool grey-blue shadow under the skin.
+    // Stubble as albedo under the cards: the cards break the silhouette and
+    // catch the key, this is the mass they sit in. Nearly opaque, for the same
+    // reason the scalp is — pale skin between the strands is what makes hair of
+    // any kind read as a scatter of specks.
     if (mBeard > 0.003) {
-      const t = Math.min(0.92, mBeard);
-      r += (beardCol[0] - r) * t * 0.72;
-      g += (beardCol[1] - g) * t * 0.72;
-      b += (beardCol[2] - b) * t * 0.78;
+      const t = Math.min(0.96, mBeard);
+      r += (beardCol[0] - r) * t * 0.92;
+      g += (beardCol[1] - g) * t * 0.92;
+      b += (beardCol[2] - b) * t * 0.94;
     }
 
     // Cavity is a shading term, not albedo — but a shallow amount of it in the

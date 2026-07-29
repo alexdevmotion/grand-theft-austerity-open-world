@@ -22,7 +22,7 @@
 
 import * as THREE from 'three';
 import type { GameContext } from '../../core/engine';
-import { buildBeard, buildBrows, buildHairCards, buildHairShell, buildLashes, ALLY_HAIR, HEAVY_BROW, LEAN_BROW, NICUSOR_HAIR, PLAYER_HAIR, SOFT_BROW, type BeardSpec, type BrowSpec, type HairSpec } from '../hair/styles';
+import { BEARD_TOP, buildBeard, buildBrows, buildHairCards, buildHairShell, buildLashes, ALLY_HAIR, HEAVY_BROW, LEAN_BROW, NICUSOR_HAIR, PLAYER_HAIR, SOFT_BROW, type BeardSpec, type BrowSpec, type HairSpec } from '../hair/styles';
 import { createHairMaterial } from '../hair/hair';
 import { createFallbackSkinMaterial, createSkinMaterial, lodSkinMaterial, type SkinMaterial, type SkinMaterialOptions } from '../skin/skinMaterial';
 import { buildEyes, type EyeBuild } from './eyes';
@@ -81,29 +81,44 @@ export const CAST: Record<CastId, CastConfig> = {
   player: {
     id: 'player',
     cloud: playerCloud,
-    // Olive/tanned, mid-forties to fifties. Authored, not sampled.
-    skin: 0xcaa183,
-    skinOpts: { sss: 0.34, sssTint: 0xffeadc, transScale: 1.05, microScale: 820, microStrength: 0.26 },
-    irisColor: 0x3d2c1d,
+    /* Olive/tanned, mid-forties to fifties. Authored, not sampled.
+     *
+     * 0xcaa183 was authored against a neutral preview and blew out to bare
+     * white under the game's low sunset key, which is the whole of "waxy": a
+     * clipped highlight carries no pore detail, no scattering and no colour,
+     * however good the shader under it is. A weathered olive complexion is
+     * genuinely this dark in base albedo — the sun is what makes it read warm. */
+    skin: 0x9c7452,
+    /* `microScale` is tiles per metre of object space. At 820 one tile of the
+     * 256 px pore map covered 1.2 mm of skin, so a pore was seven microns
+     * across: it mipmapped to flat grey long before it reached a pixel, which
+     * is why no micro-detail survived to screen. At 0.6 m and a 32 degree fov
+     * one pixel subtends 0.21 mm, so detail has to be around half a millimetre
+     * to read at all. 34 tiles/metre puts a tile at 29 mm and the crease octave
+     * at 0.5-1.8 mm — visible, and still fine enough not to read as noise. */
+    skinOpts: { sss: 0.36, sssTint: 0xffe2d0, transScale: 1.05, microScale: 34, microStrength: 0.88 },
+    irisColor: 0x4a3520,
     tired: 0.95,
-    age: 0.68,
-    jawPush: 0.034,
-    browPush: 0.016,
-    beardShade: 0.85,
-    beardColor: 0x6d6058,
+    age: 0.82,
+    jawPush: 0.046,
+    browPush: 0.024,
+    beardShade: 1.0,
+    // The stubble tone under the cards: a salt-and-pepper beard is much greyer
+    // than the hair, so this is a warm iron grey, not the hair's near-black.
+    beardColor: 0x2f2821,
     hair: PLAYER_HAIR,
-    hairColor: 0x241c15,
+    hairColor: 0x1d1710,
     brow: HEAVY_BROW,
     // The signature: heavy, dark, and they stay dark as the hair greys.
-    browColor: 0x140f0a,
-    beard: { density: 0.9, length: 0.0048, grey: 0.24 },
-    beardCardColor: 0x241d18,
+    browColor: 0x0f0b07,
+    beard: { density: 1.0, length: 0.0056, grey: 0.33 },
+    beardCardColor: 0x2b241d,
   },
   nicusor: {
     id: 'nicusor',
     cloud: () => cloud('nicusor'),
-    skin: 0xdbb69a,
-    skinOpts: { sss: 0.32, sssTint: 0xffeee2, transScale: 1.00, microScale: 820, microStrength: 0.24 },
+    skin: 0xb8927a,
+    skinOpts: { sss: 0.32, sssTint: 0xffe8da, transScale: 1.00, microScale: 34, microStrength: 0.74 },
     irisColor: 0x4d5a4c,
     tired: 0.30,
     age: 0.62,
@@ -121,8 +136,8 @@ export const CAST: Record<CastId, CastConfig> = {
   ally: {
     id: 'ally',
     cloud: () => cloud('ally'),
-    skin: 0xcda589,
-    skinOpts: { sss: 0.33, sssTint: 0xffeadc, transScale: 0.95, microScale: 820, microStrength: 0.24 },
+    skin: 0xac8365,
+    skinOpts: { sss: 0.33, sssTint: 0xffe4d4, transScale: 0.95, microScale: 34, microStrength: 0.74 },
     irisColor: 0x4a3826,
     tired: 0.42,
     age: 0.44,
@@ -217,6 +232,8 @@ export class HeroHead {
       age: cfg.age,
       jawPush: cfg.jawPush,
       browPush: cfg.browPush,
+      hairline: cfg.hair.hairline,
+      beardLine: BEARD_TOP,
       cols: Math.round(108 * detail),
       rows: Math.round(84 * detail),
       seed: opts.seed ?? 0x51a5e,
@@ -280,7 +297,7 @@ export class HeroHead {
     addHair(buildHairCards(built.anchors, cfg.hair, `hair|${cfg.id}|${seed}`), cfg.hairColor, 'hair-cards',
       { gloss: 180, roughness: 0.50, alphaTest: 0.30, rootDark: 0.30, specular: 0.058 });
     addHair(buildBrows(built.anchors, cfg.brow, `brow|${cfg.id}|${seed}`), cfg.browColor, 'brows',
-      { gloss: 46, roughness: 0.72, alphaTest: 0.16, rootDark: 0.12, specular: 0.045 });
+      { gloss: 46, roughness: 0.80, alphaTest: 0.10, rootDark: 0.10, specular: 0.028 });
     addHair(buildLashes(built.anchors, `lash|${cfg.id}|${seed}`), 0x0d0a08, 'lashes',
       { gloss: 40, roughness: 0.8, alphaTest: 0.10, rootDark: 0, specular: 0.03 });
     addHair(buildBeard(built.anchors, cfg.beard, `beard|${cfg.id}|${seed}`), cfg.beardCardColor, 'beard',

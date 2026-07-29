@@ -69,7 +69,7 @@ function eyeTexture(opts: EyeOptions): THREE.CanvasTexture {
   // reads as an eye because of the value step between sclera and lid. Painted
   // too dark, a correctly-seated globe renders as a black hollow, which is what
   // the first pass at this did.
-  g.fillStyle = '#d6cec2';
+  g.fillStyle = '#c9c0b2';
   g.fillRect(0, 0, half, TEX);
   // The sclera is never white: it yellows toward the corners and greys in the
   // shadow of the lid.
@@ -116,7 +116,10 @@ function eyeTexture(opts: EyeOptions): THREE.CanvasTexture {
   const R = half * 0.47;
   const base = new THREE.Color(opts.irisColor);
   const dark = base.clone().multiplyScalar(0.30);
-  const light = base.clone().lerp(new THREE.Color(0xffffff), 0.40);
+  // Dark brown eyes. Lerping the highlight 40% toward white turned the outer
+  // stroma pale grey, which at this distance is the whole iris — the reference
+  // has deep-set dark eyes and pale ones read as somebody else entirely.
+  const light = base.clone().lerp(new THREE.Color(0xffffff), 0.22);
 
   g.fillStyle = '#000';
   g.fillRect(half, 0, half, TEX);
@@ -381,7 +384,11 @@ export function eyeLayerGeometries(
 }
 
 export function buildEyes(eyeL: EyeAnchor, eyeR: EyeAnchor, opts: EyeOptions): EyeBuild {
-  const conv = opts.convergence ?? 0.035;
+  // The lead is inspected head-on at 0.6 m, where an interpupillary half of
+  // 31 mm needs 0.050 rad of convergence for the gaze to land on the camera
+  // rather than a metre behind it. Under-converged eyes read as a thousand-yard
+  // stare, which is not the expression the reference has.
+  const conv = opts.convergence ?? 0.048;
   const tex = eyeTexture(opts);
 
   const geos: THREE.BufferGeometry[] = [];
@@ -396,7 +403,11 @@ export function buildEyes(eyeL: EyeAnchor, eyeR: EyeAnchor, opts: EyeOptions): E
     map: tex,
     // The sclera lives in the permanent shade of the lids and the brow. Left at
     // full value it reads as two lamps in the face at any distance.
-    color: 0xf2ece2,
+    // A sclera lives in the permanent shade of the lids and the brow, and this
+    // scene's key is a low sun aimed straight at it. At 0xf2ece2 the eyes
+    // rendered as two lamps set into the face — the opposite failure to the
+    // dead black hollow the first pass produced, and just as wrong.
+    color: 0xbdb2a2,
     roughness: 0.30,
     metalness: 0,
     // The sclera is faintly translucent — light bleeds through its rim.
@@ -408,14 +419,32 @@ export function buildEyes(eyeL: EyeAnchor, eyeR: EyeAnchor, opts: EyeOptions): E
   });
   globeMat.name = 'eye-globe';
 
+  /* THE CATCHLIGHT.
+   *
+   * This was authored as a near-transparent shell: `transparent` with
+   * `opacity: 0.05`, on the reasoning that a cornea is invisible except for its
+   * highlight. But three writes `gl_FragColor.a = diffuseColor.a`, so alpha
+   * blending scales the SPECULAR by the same 0.05 — the highlight was being
+   * multiplied down to nothing along with the surface it sits on, and what
+   * reached the screen was a 5% grey veil over the iris and no catchlight at
+   * all. Dead eyes are the single biggest tell there is (FACE_PIPELINE §6) and
+   * this was the cause.
+   *
+   * Additive blending over a black base is the fix and the standard one: the
+   * diffuse term contributes nothing because the base colour is black, the
+   * clearcoat specular adds at full strength, and the iris behind is left
+   * completely unveiled. The result is a hard, small, correctly-placed
+   * highlight from the key light and nothing else.
+   */
   const corneaMat = new THREE.MeshPhysicalMaterial({
-    color: 0x080a0e,
+    color: 0x000000,
     transparent: true,
-    opacity: 0.05,
-    roughness: 0.02,
+    opacity: 1,
+    blending: THREE.AdditiveBlending,
+    roughness: 0.025,
     metalness: 0,
     clearcoat: 1.0,
-    clearcoatRoughness: 0.015,
+    clearcoatRoughness: 0.02,
     ior: 1.376,                    // the actual index of refraction of cornea
     specularIntensity: 1.0,
     depthWrite: false,

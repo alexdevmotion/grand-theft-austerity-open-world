@@ -247,6 +247,30 @@ export interface HeadProportions {
   headOverBody: number;
   /** Brow-to-chin as a fraction of head height. */
   browOverHead: number;
+  /**
+   * Cranial vault above the brow ridge, as a fraction of head height.
+   *
+   * The complement of `browOverHead`, and worth naming separately because it is
+   * the number the render is actually judged on. A head can sit at exactly
+   * 1/7.5 of body height — this one always did — and still read as oversized,
+   * because what the eye measures is how much bare cranium stands above the
+   * face. An adult male carries about 90 mm of vault over a 232 mm head: 0.39.
+   * The domed ellipsoid this started from carried 0.41 with the mass in the
+   * wrong place, tapering to a point instead of turning a corner, which is why
+   * `crownFlatness` is measured alongside it.
+   */
+  vaultOverHead: number;
+  /**
+   * How flat the top of the skull is: the skull's width at 92% of head height,
+   * over its width at the widest point.
+   *
+   * A dome tapers to nothing at the crown and scores near zero; a real vault
+   * has near-vertical parietal walls turning a rounded corner into a broad flat
+   * top and scores well over half. This is the half of "the cranium is too
+   * domed" that a height ratio cannot see — you can lower a dome and still have
+   * a dome.
+   */
+  crownFlatness: number;
   /** Eye line's height above the chin, as a fraction of head height. */
   eyeLineFrac: number;
   /** Skull width and depth, metres (ears excluded from the width). */
@@ -286,11 +310,28 @@ export function measureProportions(
   }
   const chin = anchors.chinY;
   const headHeight = maxY - chin;
+
+  // Widest span across the vault, and the span near the crown. A second pass is
+  // needed because both bands are defined relative to `headHeight`, which is
+  // only known once the first pass has found `maxY`.
+  let vaultHalf = 0;
+  let crownHalf = 0;
+  const crownBand = chin + headHeight * 0.92;
+  for (let i = 0; i < skullEnd; i++) {
+    const y = pos.getY(i);
+    if (y < chin + headHeight * 0.55) continue;
+    const ax = Math.abs(pos.getX(i));
+    if (ax > vaultHalf) vaultHalf = ax;
+    if (Math.abs(y - crownBand) < headHeight * 0.012 && ax > crownHalf) crownHalf = ax;
+  }
+
   const brow = anchors.browL.reduce((a, p) => Math.max(a, p.y), -Infinity);
   return {
     headHeight,
     headOverBody: headHeight / bodyHeight,
     browOverHead: (brow - chin) / headHeight,
+    vaultOverHead: (maxY - brow) / headHeight,
+    crownFlatness: vaultHalf > 1e-6 ? crownHalf / vaultHalf : 0,
     eyeLineFrac: (anchors.eyeL.centre.y - chin) / headHeight,
     width: maxX - minX,
     depth: maxZ - minZ,

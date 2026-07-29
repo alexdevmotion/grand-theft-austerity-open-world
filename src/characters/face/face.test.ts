@@ -11,7 +11,7 @@ import { buildHeadGeometry, HEAD_TO_BODY, type HeadResult } from './headMesh';
 import { eyeLayerGeometries } from './eyes';
 import { measureEyeSeating, measureHairClearance, measureOrientation, measureProportions } from './checks';
 import { buildBeard, buildBrows, buildHairCards, buildHairShell, buildLashes } from '../hair/styles';
-import { NOMINAL_HEIGHT, bodyMetrics } from '../rig';
+import { BODY_TYPES, NOMINAL_HEIGHT, bodyMetrics } from '../rig';
 import type { CastId } from './fitData';
 
 const M = bodyMetrics('average', false);
@@ -112,12 +112,22 @@ test.each(CAST_IDS)('%s: the globe is seated inside the lid aperture', (id: Cast
     expect(s.apexZ).toBeLessThanOrEqual(s.browCheekZ);
 
     // Visible sclera is an almond bounded by the lid aperture, not a disc: a
-    // real palpebral fissure is 28-30 mm wide and 9-11 mm tall, which is under
-    // a third of the globe's frontal projection and much wider than it is tall.
+    // real palpebral fissure is 28-30 mm wide and 9-11 mm tall, and much wider
+    // than it is tall.
+    //
+    // The fissure is wider than the globe (29 mm against 24), so its full width
+    // is not measurable here — `measureEyeSeating` samples the globe's own disc
+    // and cannot report anything past 2r. The width bound is therefore against
+    // the globe, and the HEIGHT is the number that carries the squint: it was
+    // 8.7 mm, below the bottom of the real range, and the eyes read small
+    // because of it. Both sides are now bounded, so the aperture can neither
+    // squint back nor open into a stare.
     expect(s.exposed).toBeGreaterThan(0.06);
-    expect(s.exposed).toBeLessThan(0.42);
+    expect(s.exposed).toBeLessThan(0.48);
     expect(s.apertureW).toBeGreaterThan(s.apertureH * 1.9);
+    expect(s.apertureH).toBeGreaterThan(0.0095);
     expect(s.apertureH).toBeLessThan(0.0125);
+    expect(s.apertureW).toBeGreaterThan(0.022);
     expect(s.apertureW).toBeLessThan(0.032);
   }
 });
@@ -146,11 +156,91 @@ test.each(CAST_IDS)('%s: canonical head proportions', (id: CastId) => {
   expect(p.browOverHead).toBeGreaterThan(0.55);
   expect(p.browOverHead).toBeLessThan(0.68);
 
-  // A skull is taller than it is wide and deeper than it is wide.
-  expect(p.width).toBeGreaterThan(0.130);
-  expect(p.width).toBeLessThan(0.168);
+  // A skull is taller than it is wide and deeper than it is wide. An adult male
+  // measures 152 mm across and 196 deep; the bound was 168 and the heads were
+  // sitting at 165, which is a broad face pretending to be within tolerance.
+  expect(p.width).toBeGreaterThan(0.138);
+  expect(p.width).toBeLessThan(0.160);
   expect(p.width).toBeLessThan(p.headHeight);
   expect(p.depth).toBeLessThan(p.headHeight * 0.95);
+});
+
+/* ------------------------------------------------------------------ */
+/* 2b. The cranial vault                                               */
+/* ------------------------------------------------------------------ */
+
+test.each(CAST_IDS)('%s: the cranial vault is low and flat-topped', (id: CastId) => {
+  const { geometry, anchors } = head(id);
+  const p = measureProportions(geometry, anchors, NOMINAL_HEIGHT);
+
+  // Bare cranium above the brow, as a fraction of head height. This — not the
+  // head's total height, which has been pinned at 1/7.5 throughout — is what
+  // the eye reads as "the head is too big". An adult male carries about 90 mm
+  // of vault on a 232 mm head, and the reference frame measures the same 0.39.
+  // The ellipsoid this started from carried 0.41.
+  expect(p.vaultOverHead).toBeGreaterThan(0.26);
+  expect(p.vaultOverHead).toBeLessThan(0.40);
+
+  // And it has to be a VAULT, not a lower dome. Skull width at 92% of head
+  // height over the width at the widest point: a hemisphere scores about 0.39
+  // there and the ellipsoid scored 0.47, which is why lowering the crown alone
+  // did not fix the reading. A real vault holds its parietal walls near
+  // vertical and turns a corner into a broad flat top.
+  expect(p.crownFlatness).toBeGreaterThan(0.62);
+  // Not a cylinder either — a skull does still narrow toward the crown.
+  expect(p.crownFlatness).toBeLessThan(0.92);
+
+  // The two are complements of each other by construction, which is worth
+  // asserting: if they ever stop summing to one, one of them is measuring off
+  // a different brow or a different crown than the other.
+  expect(p.vaultOverHead + p.browOverHead).toBeCloseTo(1, 6);
+});
+
+/* ------------------------------------------------------------------ */
+/* 2c. The frame under the head                                        */
+/* ------------------------------------------------------------------ */
+
+test('the shoulders are an adult male\'s, not a coat hanger\'s', () => {
+  // Biacromial breadth, joint centre to joint centre. The rig shipped 341 mm at
+  // 1.75 m against a real 400-460, and a correctly-sized head on a frame that
+  // narrow reads as a bobblehead no matter what the head does — the eye judges
+  // head size against shoulder span and has no other reference in a portrait.
+  // 'average' is held to the middle of the real range; every other build is
+  // only held inside it, since the build modifiers exist precisely to spread
+  // the population across it.
+  expect(M.shoulderHalf * 2).toBeGreaterThan(0.395);
+  expect(M.shoulderHalf * 2).toBeLessThan(0.425);
+
+  for (const body of BODY_TYPES) {
+    for (const female of [false, true]) {
+      const m = bodyMetrics(body, female);
+      // Female builds carry a documented 0.90 on the joint span; divide it back
+      // out so the bound below is about the build modifier, not about sex.
+      const span = (m.shoulderHalf * 2) / (female ? 0.90 : 1);
+      expect(span).toBeGreaterThan(0.375);
+      expect(span).toBeLessThan(0.465);
+      // The deltoid has to OVERLAP the torso yoke and still stand outside it.
+      // `humanoid.ts` buries the first deltoid ring inside the torso on
+      // purpose, so the shoulder reads as a joint rather than a pauldron;
+      // widening the joint without widening the yoke to match pulls that ring
+      // out into the open and the arm tears away from the chest. Both halves
+      // are asserted because either one alone is satisfiable by a shape that
+      // looks wrong — a yoke wider than the whole arm sinks the arms into the
+      // torso, which is what the 'heavy' build did once the joints moved out.
+      expect(m.shoulderHalf - m.deltoidR).toBeLessThan(m.yokeW);
+      expect(m.shoulderHalf + m.deltoidR).toBeGreaterThan(m.yokeW);
+    }
+  }
+});
+
+test.each(CAST_IDS)('%s: head reads against the shoulders, not over them', (id: CastId) => {
+  const { geometry, anchors } = head(id);
+  const p = measureProportions(geometry, anchors, NOMINAL_HEIGHT);
+  // Shoulder span in head widths. Roughly 3 is the figure artists use; under
+  // 2.5 is where a figure starts to read as a caricature.
+  const heads = (M.shoulderHalf * 2) / p.width;
+  expect(heads).toBeGreaterThan(2.5);
+  expect(heads).toBeLessThan(3.2);
 });
 
 /* ------------------------------------------------------------------ */

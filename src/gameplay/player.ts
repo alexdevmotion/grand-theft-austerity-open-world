@@ -15,7 +15,7 @@
 import * as THREE from 'three';
 import type RAPIER from '@dimforge/rapier3d-compat';
 import type { GameContext, System } from '../core/engine';
-import { CG, GROUP, PhysicsWorld, groups } from '../physics/physics';
+import { CG, CHARACTER_SKIN, GROUP, PhysicsWorld, probeGroups } from '../physics/physics';
 import { CharacterFactory, HERO_APPEARANCE, type CharacterActor } from '../characters';
 import {
   Services,
@@ -40,6 +40,111 @@ const GRAVITY = -21;
 /** Camera/body yaw error that starts a turn on the spot, and that ends it. */
 const TURN_IN_PLACE_START = 0.95;
 const TURN_IN_PLACE_STOP = 0.10;
+
+/* ---- how travel direction is split between the body and the blend ----
+ *
+ * Two things have to be true at once and they pull in opposite directions:
+ *
+ *   W+D must RUN OFF AT 45 DEGREES — the body turns into the diagonal, the
+ *   way it does in every third-person open-world game, instead of standing
+ *   square to the camera doing a strafe blend that reads as "running forward
+ *   somehow";
+ *
+ *   S must still BACKPEDAL — the body stays square to the camera and the leg
+ *   cycle runs in reverse, instead of the character spinning to face away and
+ *   running "forwards" along it, which is what facing travel used to do.
+ *
+ * The resolution is that neither rule is global: which one applies is a
+ * function of how far off the camera the travel is. Inside a forward cone the
+ * body owns the direction; outside it the animation does; and between them the
+ * offset is shared, so a stick sweeping from ahead to abeam turns the body out
+ * and hands the remainder to the strafe axis without a switch anywhere.
+ */
+/** Travel within this of camera-forward turns the body ALL the way into it. */
+const TRAVEL_TURN_FULL = 1.00;
+/** Past this it is a side-step or a backpedal: the body stays on the camera. */
+const TRAVEL_TURN_NONE = 1.55;
+/** Beyond this off camera-forward, travel is not "forward" for speed purposes. */
+const TRAVEL_FORWARD_CONE = 1.21;
+
+/**
+ * The heading the body wants, given where the camera looks and where the
+ * character is travelling. Pure — `src/gameplay/player.test.ts` pins the three
+ * cases that matter (diagonal, backpedal, side-step) on it.
+ *
+ * `aiming` is the seam for an aim mode: sighting a weapon means the body must
+ * stay square to the camera at every travel direction, so the whole blend
+ * collapses to "face the camera" with one flag.
+ */
+export function travelBodyYaw(camYaw: number, travelYaw: number, aiming = false): number {
+  const rel = angleDelta(travelYaw, camYaw);
+  if (aiming) return camYaw;
+  const w = 1 - THREE.MathUtils.smoothstep(Math.abs(rel), TRAVEL_TURN_FULL, TRAVEL_TURN_NONE);
+  return camYaw + rel * w;
+}
+
+/**
+ * World travel expressed in the body's own frame, which is what the 2D gait
+ * blend consumes. Character space faces +Z with +X to the character's LEFT
+ * (see `src/characters/rig.ts`).
+ */
+export function bodyTravel(bodyYaw: number, vx: number, vz: number): { f: number; s: number } {
+  const sy = Math.sin(bodyYaw);
+  const cy = Math.cos(bodyYaw);
+  return { f: vx * sy + vz * cy, s: vx * cy - vz * sy };
+}
+
+/**
+ * Stick input in world space, relative to where the camera looks.
+ *
+ *   forward F = ( sin(yaw), 0,  cos(yaw) )   — matches CameraSystem's rig
+ *   right   R = F x up = (-cos(yaw), 0, sin(yaw))
+ *
+ * The strafe terms once used +R's negation, which is why A and D came out
+ * swapped on screen; the sign lives here now so it is pinned by a test.
+ */
+export function cameraTravel(camYaw: number, moveX: number, moveY: number): { x: number; z: number } {
+  return {
+    x: Math.sin(camYaw) * moveY - Math.cos(camYaw) * moveX,
+    z: Math.cos(camYaw) * moveY + Math.sin(camYaw) * moveX,
+  };
+}
+
+/**
+ * THE SURFACE THE SOLES BELONG ON, out of everything that has an opinion about
+ * it — and they disagree, which is the whole reason this exists.
+ *
+ *   `rayY`     a real ray down the middle of the capsule. Right nearly always,
+ *              and wrong at exactly the moment it matters: on a kerb edge it
+ *              can find the carriageway a few centimetres beside the footway
+ *              the man is standing on.
+ *   `restY`    what the capsule sweep touched. Catches the kerb nose, the step
+ *              tread and the crate lid, because it is the whole capsule
+ *              footprint rather than one line through it. Only trusted at or
+ *              below the capsule base — above it means the sweep found
+ *              something the capsule is beside, not on.
+ *   `analytic` the city's own footway height. Coarse, but it is what the crowd
+ *              is placed with, so agreeing with it is what makes the player's
+ *              soles agree with the pedestrians' standing next to him.
+ *
+ * The highest of them wins: a sole resting a centimetre high reads as standing,
+ * a sole a centimetre low reads as sunk, and that asymmetry is the bug report.
+ * Returns null when nothing has an opinion at all — over a hole, mid-fall — and
+ * the caller should fall back to the capsule.
+ */
+export function footSurface(
+  capsuleBase: number,
+  rayY: number | null,
+  restY: number | null,
+  analyticY: number | null,
+): number | null {
+  let best = Number.NEGATIVE_INFINITY;
+  if (rayY !== null) best = Math.max(best, rayY);
+  if (restY !== null && restY <= capsuleBase + CHARACTER_SKIN * 1.5) best = Math.max(best, restY);
+  // A footway height from half a metre away is about a different storey.
+  if (analyticY !== null && Math.abs(analyticY - capsuleBase) < 0.75) best = Math.max(best, analyticY);
+  return best > Number.NEGATIVE_INFINITY ? best : null;
+}
 
 /* ---- boarding sequence ---- */
 /** How far outboard of the seat the character stands to work the door. */
@@ -78,6 +183,8 @@ const _v0 = new THREE.Vector3();
 const _v1 = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
+/** Diagnostics only — kept separate so it can never alias the boarding scratch. */
+const _sole = new THREE.Vector3();
 
 /** Triangular 0 -> 1 -> 0 over [a, b]. */
 function pulse(x: number, a: number, b: number): number {
@@ -101,7 +208,9 @@ const HERO_HEIGHT = HERO_APPEARANCE.height;
  * FOOTING. The same collision layers the pedestrian foot IK probes against
  * (`src/characters/ik.ts`), so the player's soles agree with the crowd's.
  */
-const GROUND_MASK = groups(CG.SENSOR, CG.STATIC | CG.TERRAIN | CG.PROP);
+const GROUND_MASK = probeGroups(CG.STATIC | CG.TERRAIN | CG.PROP);
+/** The settle also stands on cars and crates — anything solid he can be on. */
+const SETTLE_MASK = probeGroups(CG.STATIC | CG.TERRAIN | CG.PROP | CG.VEHICLE);
 const DOWN = new THREE.Vector3(0, -1, 0);
 /** How far above the capsule base the ground probe starts. */
 const PROBE_RISE = 0.85;
@@ -109,6 +218,17 @@ const PROBE_RISE = 0.85;
 const PROBE_DROP = 2.2;
 /** Above this step the visual root snaps instead of easing (stairs, teleport). */
 const FOOTING_SNAP = 0.55;
+
+/* ---- capsule settle ----
+ * The sweep starts above the capsule so it can climb back out of anything it
+ * has been driven into, and reaches far enough below to find the floor after a
+ * step down. Both are bounded: the lift must clear a landing's worth of
+ * penetration without reaching a doorway lintel, and the correction itself is
+ * capped so the settle can never be mistaken for a lift onto a ledge. */
+const SETTLE_LIFT = 0.45;
+const SETTLE_DROP = 0.5;
+/** Most the settle will raise the capsule in one step. */
+const SETTLE_MAX_RISE = 0.45;
 
 /**
  * Seat anchors, per vehicle class: how far the driver's hip point sits above
@@ -195,6 +315,8 @@ export class PlayerSystem implements System, PlayerService {
   /** Travel in body space, -1..1. +F forward, +S toward the character's LEFT. */
   private moveF = 0;
   private moveS = 0;
+  /** World heading of travel this step; equals the camera yaw when standing. */
+  private travelYaw = 0;
   private turnInPlace = false;
   /**
    * BODY HEADING, radians. Stored here and nowhere else.
@@ -213,12 +335,24 @@ export class PlayerSystem implements System, PlayerService {
   /** Cosmetic enter/exit sequence. Never gates any state the contract exposes. */
   private board: BoardState | null = null;
 
+  /**
+   * AIM SEAM. While aiming the body must stay square to the camera whatever
+   * direction it travels — that is what makes a weapon point where you look —
+   * so the travel/camera blend collapses to "face the camera". Nothing sets it
+   * yet; `setAiming` is the whole integration surface for when something does.
+   */
+  private _aiming = false;
+
   /* ---- footing ---- */
   private city: CityService | null = null;
   /** Smoothed surface height the soles are placed on. */
   private footY = 0;
   /** Raw surface height under the capsule this step (diagnostics). */
   private surfaceY = 0;
+  /** Surface the capsule settled onto this step, or -inf if it is airborne. */
+  private restY = Number.NEGATIVE_INFINITY;
+  /** How far the settle had to lift the capsule this step (diagnostics). */
+  private sink = 0;
   private readonly _probe = new THREE.Vector3();
 
   private readonly radius = 0.32;
@@ -241,6 +375,13 @@ export class PlayerSystem implements System, PlayerService {
   }
   get lei(): number {
     return this._lei;
+  }
+  get aiming(): boolean {
+    return this._aiming;
+  }
+  /** See `_aiming`. Aiming pins the body to the camera; travel drives the gait. */
+  setAiming(on: boolean): void {
+    this._aiming = on;
   }
 
   init(ctx: GameContext): void {
@@ -281,21 +422,47 @@ export class PlayerSystem implements System, PlayerService {
         root: this.character.position.toArray(),
         capsuleBase: this.body.translation().y - this.halfHeight - this.radius,
         surfaceY: this.surfaceY,
+        restY: this.restY > -1e5 ? this.restY : null,
+        /** How far the settle had to lift him. Zero means nothing sank. */
+        sink: this.sink,
         analytic: this.city ? this.city.spatial.groundHeight(this.character.position.x, this.character.position.z) : null,
         grounded: this.grounded,
         state: this.character.state,
+        /** Where the soles ACTUALLY are, after animation and foot IK. */
+        soles: this.soleHeights(),
       }),
       locomotion: () => ({
         state: this.character.state,
         speed: this.planarSpeed,
         bodyYaw: this.bodyYaw,
         camYaw: this.desiredYaw,
+        /** Body heading minus camera heading. 0 = square on, +/-0.785 = a 45 run. */
+        bodyOffCam: angleDelta(this.bodyYaw, this.desiredYaw),
+        travelYaw: this.travelYaw,
         moveF: this.moveF,
         moveS: this.moveS,
         turnRate: this.turnRate,
+        aiming: this._aiming,
       }),
       boarding: () => (this.board ? { mode: this.board.mode, t: this.board.t, dur: this.board.dur } : null),
     };
+  }
+
+  /**
+   * World height of each sole, after the gait and the foot IK have had their
+   * say. This is the number the bug report is actually about — the root and the
+   * capsule are only ever means to it — so the playtests measure it directly
+   * rather than inferring it from the collider.
+   */
+  private soleHeights(): { left: number; right: number } | null {
+    const actor = this.actor;
+    if (!actor) return null;
+    const scale = actor.scale;
+    const sole = actor.rig.metrics.ankleY * scale;
+    _sole.setFromMatrixPosition(actor.rig.byName.footL.matrixWorld);
+    const left = _sole.y - sole;
+    _sole.setFromMatrixPosition(actor.rig.byName.footR.matrixWorld);
+    return { left, right: _sole.y - sole };
   }
 
   /** ILIE BOLOJAN-AGATINEI — dark practical kit, one loud purple harness. */
@@ -345,23 +512,17 @@ export class PlayerSystem implements System, PlayerService {
 
     // Movement is relative to the camera yaw.
     const yaw = this.desiredYaw;
-    // Camera-relative basis.
-    //   forward F = ( sin(yaw), 0,  cos(yaw) )   — matches CameraSystem's rig
-    //   right   R = F x up = (-cos(yaw), 0, sin(yaw))
-    // The strafe terms used +R's negation, so A and D were swapped on screen.
-    this._desired.set(
-      Math.sin(yaw) * ay - Math.cos(yaw) * ax,
-      0,
-      Math.cos(yaw) * ay + Math.sin(yaw) * ax,
-    );
+    const dir = cameraTravel(yaw, ax, ay);
+    this._desired.set(dir.x, 0, dir.z);
     const moving = mag > 0.01 && this._desired.lengthSq() > 1e-6;
 
     /* -------- how fast, given WHICH WAY --------
      * A man does not backpedal at 7.4 m/s and does not side-step at a sprint.
      * Capping by direction is also what keeps the 2D blend honest: the strafe
      * and back clips never have to carry a speed they were not authored for. */
-    const fwdInput = moving ? this._desired.x * Math.sin(yaw) + this._desired.z * Math.cos(yaw) : 0;
-    const forwardish = fwdInput > 0.35 * Math.max(1e-4, this._desired.length());
+    const travelYaw = moving ? Math.atan2(this._desired.x, this._desired.z) : yaw;
+    this.travelYaw = travelYaw;
+    const forwardish = Math.abs(angleDelta(travelYaw, yaw)) < TRAVEL_FORWARD_CONE;
     const sprint = !boarding && input.action('sprint') && !this.crouching && forwardish;
     let speed = !moving
       ? 0
@@ -373,19 +534,15 @@ export class PlayerSystem implements System, PlayerService {
     if (moving) this._desired.normalize().multiplyScalar(speed);
 
     /* -------- body orientation --------
-     * THIRD-PERSON DIRECTIONAL LOCOMOTION. The body is oriented to the CAMERA,
-     * never to the direction of travel. Facing travel is why S used to play a
-     * sideways-looking clip: the character spun to face backwards and then ran
-     * "forwards" along it, so the only way a backpedal could be expressed was
-     * as a body that never pointed where the player was looking.
-     *
-     * Because movement is already camera-relative, W is unaffected — travel
-     * direction and camera yaw coincide — and A/S/D now feed the strafe/back
-     * axes of the blend instead of the yaw. */
+     * THIRD-PERSON DIRECTIONAL LOCOMOTION, shared between the body and the
+     * blend by how far off the camera the travel is — see `travelBodyYaw`.
+     * Inside the forward cone the body turns into travel, so W+D genuinely
+     * runs off at 45 degrees; abeam and behind it stays square to the camera
+     * and A/S/D feed the strafe/back axes of the gait instead of the yaw. */
     const bodyYaw = this.bodyYaw;
     if (moving) {
       this.turnInPlace = false;
-      this.bodyYaw = dampAngle(bodyYaw, yaw, 13, dt);
+      this.bodyYaw = dampAngle(bodyYaw, travelBodyYaw(yaw, travelYaw, this._aiming), 13, dt);
     } else {
       // Idle: the body hangs where it is until the camera has swung far enough
       // to be worth a step, then turns on the spot and settles.
@@ -396,13 +553,11 @@ export class PlayerSystem implements System, PlayerService {
     }
     const yawNow = this.bodyYaw;
 
-    /* -------- movement in BODY space, which is what the blend wants --------
-     * Character space faces +Z with +X to the character's LEFT (see rig.ts). */
-    const sy = Math.sin(yawNow);
-    const cy = Math.cos(yawNow);
+    /* -------- movement in BODY space, which is what the blend wants -------- */
     const invSpeed = 1 / Math.max(WALK, speed);
-    const wantF = moving ? (this._desired.x * sy + this._desired.z * cy) * invSpeed : 0;
-    const wantS = moving ? (this._desired.x * cy - this._desired.z * sy) * invSpeed : 0;
+    const travel = bodyTravel(yawNow, this._desired.x * invSpeed, this._desired.z * invSpeed);
+    const wantF = moving ? travel.f : 0;
+    const wantS = moving ? travel.s : 0;
     const kd = 1 - Math.exp(-16 * dt);
     this.moveF += (THREE.MathUtils.clamp(wantF, -1, 1) - this.moveF) * kd;
     this.moveS += (THREE.MathUtils.clamp(wantS, -1, 1) - this.moveS) * kd;
@@ -430,8 +585,41 @@ export class PlayerSystem implements System, PlayerService {
 
     const t = this.body.translation();
     const nx = t.x + corrected.x;
-    const ny = t.y + corrected.y;
+    let ny = t.y + corrected.y;
     const nz = t.z + corrected.z;
+
+    /* -------- SETTLE: put the capsule back on top of the world --------
+     *
+     * This is the fix for feet that sank. Rapier's kinematic controller sweeps
+     * from wherever the collider already is and never pushes it back out of
+     * anything it is inside, so a landing that drives the capsule 0.1-0.3 m
+     * into the pavement is permanent — every later step just slides along at
+     * the wrong height, and `computedGrounded()` reports true the whole time,
+     * which is why it never looked like a bug in the controller. Measured on a
+     * pavement it settled anywhere from 0.06 m above the surface to 0.30 m
+     * below it depending only on how the last landing happened to land.
+     *
+     * `capsuleRest` re-derives the correct height from the capsule itself,
+     * swept down from above so it can climb back out. Only ever upward: if the
+     * capsule is high, gravity is already dealing with it, and hoisting the
+     * character to meet a surface he has walked off would be a step up he never
+     * took. Bounded, and only while grounded, so no ledge is ever climbed by
+     * standing next to it. */
+    this.sink = 0;
+    this.restY = Number.NEGATIVE_INFINITY;
+    if (this.grounded && this.velocityY <= 0) {
+      const rest = this.phys.capsuleRest(this.collider, nx, ny, nz, {
+        lift: SETTLE_LIFT,
+        drop: SETTLE_DROP,
+        filterGroups: SETTLE_MASK,
+      });
+      if (rest) {
+        const want = rest.centerY + CHARACTER_SKIN;
+        this.sink = want - ny;
+        if (this.sink > 1e-4 && this.sink <= SETTLE_MAX_RISE) ny = want;
+        this.restY = rest.surfaceY;
+      }
+    }
     this.body.setNextKinematicTranslation({ x: nx, y: ny, z: nz });
 
     this.character.position.set(nx, this.footingY(nx, ny, nz, dt), nz);
@@ -497,6 +685,12 @@ export class PlayerSystem implements System, PlayerService {
    * the city's analytic `groundHeight` as the fallback — and eases across steps
    * so a kerb is a step-up rather than a pop. Airborne, the capsule base is the
    * truth again, so jumps and falls are unaffected.
+   *
+   * Since the capsule now SETTLES (see `walkUpdate`) its base is honest again,
+   * so this is back to being a refinement rather than the only thing holding
+   * him up: it picks the highest of the ray, the capsule's own contact surface
+   * — which is what catches a kerb nose or the lid of a crate the ray down the
+   * middle misses — and the city's analytic footway height.
    */
   private footingY(x: number, capsuleY: number, z: number, dt: number): number {
     const base = capsuleY - this.halfHeight - this.radius;
@@ -511,12 +705,14 @@ export class PlayerSystem implements System, PlayerService {
     // beside cannot shadow the surface it is standing ON.
     this._probe.set(x, base + PROBE_RISE, z);
     const hit = this.phys.raycast(this._probe, DOWN, PROBE_RISE + PROBE_DROP, GROUND_MASK, this.collider);
-    let surface = hit ? hit.point.y : Number.NEGATIVE_INFINITY;
-
-    // Analytic fallback / floor: the city knows the footway height even where
-    // the collision world is a coarse trimesh.
     const analytic = this.city ? this.city.spatial.groundHeight(x, z) : Number.NEGATIVE_INFINITY;
-    if (analytic > -1e5 && Math.abs(analytic - base) < 0.75 && analytic > surface) surface = analytic;
+
+    let surface = footSurface(
+      base,
+      hit ? hit.point.y : null,
+      this.restY > -1e5 ? this.restY : null,
+      analytic > -1e5 ? analytic : null,
+    ) ?? Number.NEGATIVE_INFINITY;
 
     if (surface < -1e5) {
       this.footY = base;

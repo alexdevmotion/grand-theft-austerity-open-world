@@ -16,10 +16,10 @@
  */
 
 import * as THREE from 'three';
-import { CG, groups, type PhysicsWorld } from '../physics/physics';
+import { CG, probeGroups, type PhysicsWorld } from '../physics/physics';
 import { BI, type Rig } from './rig';
 
-const RAY_MASK = groups(CG.SENSOR, CG.STATIC | CG.TERRAIN | CG.PROP);
+const RAY_MASK = probeGroups(CG.STATIC | CG.TERRAIN | CG.PROP);
 const DOWN = new THREE.Vector3(0, -1, 0);
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -149,11 +149,31 @@ const _rayOrigin = new THREE.Vector3();
 const _pw = new THREE.Quaternion();
 
 /**
+ * How far the collision world is allowed to disagree with the mover about
+ * where this character's own ground is, and how far below that ground a planted
+ * sole may then be pulled. Both are sanity rails, not the mechanism — see the
+ * anchoring note in `solveFootIk`.
+ */
+const FOOT_ANCHOR_LIMIT = 0.45;
+const FOOT_DROP_LIMIT = 0.30;
+
+/**
  * Plant both feet on the collision world.
  *
  * `root` must already have an up-to-date matrixWorld, and the pose must have
  * been applied to the bones. Mutates the thigh/shin/foot bone rotations and the
  * hips bone position.
+ *
+ * ANCHORING. The rays are read RELATIVE to the ground under the character's own
+ * root, not as absolute heights, because the mover and the collision world do
+ * not always agree on where the ground is and where they differ it is the
+ * collision world that is wrong. București's landmark plazas and forecourts are
+ * DRAWN at footway height with no collider under them at all
+ * (`buildBuildersHouse`, `buildPlaza` in `src/world/city/landmarks.ts`), so an
+ * absolute reading buries everyone standing on one by exactly a kerb — while
+ * the ray still describes the SHAPE of the ground under him perfectly well.
+ * Anchoring keeps what the rays are good for (a kerb nose under one foot, a
+ * step, a crate lid, a camber) and discards the constant they are wrong by.
  */
 export function solveFootIk(
   rig: Rig,
@@ -165,6 +185,14 @@ export function solveFootIk(
   const scale = root.scale.x || 1;
   const m = rig.metrics;
   const ankleH = m.ankleY * scale;
+
+  const rootY = _rayOrigin.setFromMatrixPosition(root.matrixWorld).y;
+  _rayOrigin.y += 0.62 * scale;
+  const under = phys.raycast(_rayOrigin, DOWN, 1.9 * scale, RAY_MASK);
+  const anchor = under
+    ? THREE.MathUtils.clamp(rootY - under.point.y, -FOOT_ANCHOR_LIMIT, FOOT_ANCHOR_LIMIT)
+    : 0;
+  const floorY = rootY - FOOT_DROP_LIMIT;
 
   _fwd.set(0, 0, 1).applyQuaternion(root.getWorldQuaternion(_pw)).normalize();
 
@@ -190,7 +218,9 @@ export function solveFootIk(
       continue;
     }
     anyHit = true;
-    const want = hit.point.y + ankleH;
+    // Anchored (see above), then floored: a sole may be raised onto anything,
+    // and may only be lowered as far as a kerb's worth below the mover's ground.
+    const want = Math.max(hit.point.y + anchor, floorY) + ankleH;
     state.footY[s] = want;
     state.footNormal[s].copy(hit.normal);
     if (state.footNormal[s].y < 0.2) state.footNormal[s].set(0, 1, 0);

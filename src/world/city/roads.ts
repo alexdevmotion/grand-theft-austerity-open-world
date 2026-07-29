@@ -270,19 +270,24 @@ export function buildRoads(opt: RoadBuildOptions): void {
         const cx = jx + ux * dir * (jw / 2 + depth / 2 + 0.4);
         const cz = jz + uz * dir * (jw / 2 + depth / 2 + 0.4);
         const zs = sink.surf(cx, cz);
+        // The crossing runs kerb to kerb ACROSS the carriageway, so it has to
+        // ride the road's camber along its run or it is swallowed by the crown.
         zs.ribbon(
           cx - px * (width / 2), cz - pz * (width / 2),
           cx + px * (width / 2), cz + pz * (width / 2),
           depth, 0.012, 0,
-          { kind: Surf.zebra, a: 1.05, b: 0, seed: 1 }, 2,
+          { kind: Surf.zebra, a: 1.05, b: 0, seed: 1 }, 2, CAMBER,
         );
-        // Stop bar just behind the crossing.
+        // Stop bar just behind the crossing. It covers one direction of travel
+        // only, running from the centreline out to the kerb, so it rides the
+        // half of the crown between those two points.
         const sbx = cx + ux * dir * (depth / 2 + 0.55);
         const sbz = cz + uz * dir * (depth / 2 + 0.55);
         zs.ribbon(
           sbx, sbz, sbx - px * (width / 2 - 0.5), sbz - pz * (width / 2 - 0.5),
           0.45, 0.013, 0,
           { kind: Surf.zebra, a: 1e6, b: 0, seed: 1 }, 1,
+          CAMBER, 0, -(width / 2 - 0.5) / (width / 2),
         );
       }
     }

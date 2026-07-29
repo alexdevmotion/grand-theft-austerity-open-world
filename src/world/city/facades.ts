@@ -78,9 +78,17 @@ export const DetailColor = {
   barkPale: lin(0x5e4e40),
 } as const;
 
+/*
+ * ROUGHNESS FOR THE DETAIL PASS. Cornices, parapets, kerbstones, steps and
+ * bollards are weathered masonry sitting outdoors in a polluted city — they are
+ * dusty, chalky and matte. Authored at 0.72 the stone details picked up a
+ * specular sheen off a three-degree sun and every parapet in the city ran a
+ * bright hot line along its top edge, which is what made the concrete read as
+ * wet. Real weathered precast measures 0.85-0.95.
+ */
 const MR = {
-  stone: [0.0, 0.72] as [number, number],
-  concrete: [0.0, 0.88] as [number, number],
+  stone: [0.0, 0.86] as [number, number],
+  concrete: [0.0, 0.92] as [number, number],
   metal: [0.78, 0.38] as [number, number],
   paint: [0.1, 0.55] as [number, number],
   glass: [0.85, 0.09] as [number, number],
@@ -144,7 +152,10 @@ export function buildBuilding(
   const style = opts.forceStyle ?? spec.style;
 
   // Height snapped to whole storeys so the grammar's floor lines meet the roof.
-  const wanted = rng.range(spec.height[0], spec.height[1]) * (opts.heightScale ?? 1);
+  // Two populations, never one wide range — see TowerSpec in districts.ts.
+  const isTower = spec.tower !== null && rng.bool(spec.tower.chance);
+  const range = isTower ? spec.tower!.height : spec.height;
+  const wanted = rng.range(range[0], range[1]) * (opts.heightScale ?? 1);
   const floors = Math.max(1, Math.round((wanted - groundH) / floorH));
   const h = groundH + floors * floorH;
 
@@ -215,6 +226,30 @@ export function buildBuilding(
 
   if (tier === 2 && (style === FacadeStyle.bulevard || style === FacadeStyle.cartier)) {
     balconies(d, site, groundH, floorH, Math.min(floors, 12), topOfBase, rng);
+  }
+  if (tier === 2 && style === FacadeStyle.interbelic) {
+    continuousBalconies(d, site, groundH, floorH, Math.min(floors, 10), rng);
+  }
+
+  /* ---------------- facade signage ---------------- */
+
+  /*
+   * Signage is a huge part of what makes the reference photograph read as
+   * Bucharest and not as any other European capital: vertical neon down the
+   * facades, painted hoardings across every blank flank, and boards on the
+   * roofs. It is rationed by style so that the old town and the boulevards
+   * carry most of it, which is where it actually is.
+   */
+  if (tier >= 1 && h > groundH + floorH * 3) {
+    const vChance = style === FacadeStyle.centruVechi ? 0.15
+      : style === FacadeStyle.bulevard ? 0.13
+        : style === FacadeStyle.cartier ? 0.04 : 0.03;
+    if (rng.bool(vChance)) verticalSign(d, site, groundH, h, rng);
+
+    const wChance = style === FacadeStyle.bulevard ? 0.10
+      : style === FacadeStyle.cartier ? 0.07
+        : style === FacadeStyle.industrial ? 0.10 : 0.03;
+    if (rng.bool(wChance)) wallBillboard(d, site, groundH, h, rng);
   }
 
   /* ---------------- facade screens (the reference's political portraits) ---- */
@@ -317,6 +352,125 @@ function corniceAndParapet(
 /* Roofscape                                                           */
 /* ------------------------------------------------------------------ */
 
+/**
+ * A satellite dish on a short pole. ~16 triangles.
+ *
+ * These are not garnish. In the Magheru photograph the dishes are the single
+ * most repeated object in the whole frame — every parapet, every balcony, every
+ * roof, in profusion — and a Bucharest roof without them reads as any city's
+ * roof. Cheap enough to afford on every building in the city.
+ */
+function satelliteDish(d: DetailBuilder, x: number, y: number, z: number, rng: Rng): void {
+  const r = rng.range(0.28, 0.48);
+  d.cyl(x, y, z, 0.035, 0.035, rng.range(0.35, 0.75), 4,
+    { color: DetailColor.metal, mr: MR.metal }, false);
+  // The dish itself: a shallow cone, tilted by opening the cylinder's radii.
+  d.cyl(x, y + 0.5, z, 0.03, r, r * 0.55, 6,
+    { color: DetailColor.metalPale, mr: [0.2, 0.62] }, false);
+  void rng;
+}
+
+/** Brick or precast flue stack. ~12 triangles. */
+function chimneyStack(d: DetailBuilder, x: number, y: number, z: number, rng: Rng): void {
+  const h = rng.range(0.9, 2.4);
+  d.box(x, y + h / 2, z, rng.range(0.5, 1.1), h, rng.range(0.5, 0.9), 0, {
+    color: rng.bool(0.4) ? DetailColor.rust : DetailColor.concreteDark, mr: MR.concrete,
+  });
+}
+
+/**
+ * A rooftop advertising hoarding on an open steel scaffold.
+ *
+ * THE MAGHERU SIGNATURE. The reference photograph's strongest single element is
+ * the Coca-Cola hoarding standing clear of a parapet on an exposed steel frame,
+ * and there are four more like it in the same frame. It is what makes a
+ * Bucharest roofline read as Bucharest rather than as generic roof plant, and
+ * because it stands ABOVE the parapet it is the one rooftop object that is
+ * legible from street level and from the air alike.
+ *
+ * ~90 triangles, so it is rationed by tier and by chance.
+ */
+function rooftopHoarding(
+  d: DetailBuilder,
+  b: { cx: number; cz: number; hx: number; hz: number },
+  top: number,
+  rng: Rng,
+  tier: 0 | 1 | 2,
+): void {
+  // Face the long axis of the roof so the board presents to the street.
+  const alongX = b.hx >= b.hz;
+  const w = Math.min((alongX ? b.hx : b.hz) * 1.85, rng.range(7, 16));
+  const h = w * rng.range(0.28, 0.42);
+  const stand = rng.range(1.6, 3.4);      // clear height above the roof
+  const y = top + stand + h / 2;
+  // Sit it over one edge of the roof, as the real ones do.
+  const side = rng.bool(0.5) ? 1 : -1;
+  const px = b.cx + (alongX ? 0 : side * b.hx * 0.6);
+  const pz = b.cz + (alongX ? side * b.hz * 0.6 : 0);
+
+  const sx = alongX ? w : 0.28;
+  const sz = alongX ? 0.28 : w;
+
+  // Backing panel, then the printed face stepped forward so it is never
+  // z-fighting with its own backing.
+  d.box(px, y, pz, sx, h, sz, 0, { color: DetailColor.metal, mr: MR.metal });
+  /*
+   * Advertising is SATURATED and it is the only pure hue on a Bucharest
+   * roofline — everything else up there is grey, rust and bitumen. Held
+   * emissive so the boards still read after the sun has gone.
+   */
+  const ink = rng.weighted(
+    [lin(0xd8232a), lin(0x1a4fa0), lin(0x159a4c), lin(0xe8a013), lin(0xd0d4d8)],
+    [3, 2, 1.6, 2, 1.2],
+  );
+  const face = alongX ? [w * 0.94, h * 0.86, 0.1] : [0.1, h * 0.86, w * 0.94];
+  d.box(px + (alongX ? 0 : side * 0.2), y, pz + (alongX ? side * 0.2 : 0),
+    face[0], face[1], face[2], 0,
+    { color: ink, mr: [0, 0.62], emissive: emi(ink, 0.5) });
+
+  if (tier >= 1) {
+    // Lettering: three pale blocks across the board. At rooftop distance a word
+    // IS three light blocks, and that is all the eye asks of it.
+    for (let i = 0; i < 3; i++) {
+      const t = (i - 1) * w * 0.26;
+      const lw = w * 0.17;
+      d.box(
+        px + (alongX ? t : side * 0.28), y + h * 0.06, pz + (alongX ? side * 0.28 : t),
+        alongX ? lw : 0.06, h * 0.3, alongX ? 0.06 : lw, 0,
+        { color: lin(0xf2ece0), mr: [0, 0.5], emissive: emi(lin(0xf2ece0), 0.9) },
+      );
+    }
+  }
+
+  // The scaffold: raking legs down to the roof, left deliberately open.
+  const legs = tier === 0 ? 2 : 4;
+  for (let i = 0; i < legs; i++) {
+    const t = (i / Math.max(1, legs - 1) - 0.5) * w * 0.82;
+    const lx = px + (alongX ? t : 0);
+    const lz = pz + (alongX ? 0 : t);
+    d.tube(lx, top, lz, lx, y + h / 2, lz, 0.075, 3,
+      { color: DetailColor.metal, mr: MR.metal });
+    if (tier >= 1) {
+      // Back stay, which is what makes it read as a frame and not a wall.
+      d.tube(lx, top, lz,
+        lx - (alongX ? 0 : side * 2.2), y - h * 0.3, lz - (alongX ? side * 2.2 : 0),
+        0.05, 3, { color: DetailColor.metal, mr: MR.metal });
+    }
+  }
+}
+
+/**
+ * EVERY ROOF IN THIS CITY IS SEEN. The boulevards are wide, the buildings are
+ * now low, and the game has both an elevated camera and a street camera looking
+ * up — so a bare roof slab is visible from almost anywhere. The reference is
+ * emphatic on this: Bucharest's roofline is a mess of dishes, aerials, tanks,
+ * flues, AC boxes and advertising scaffolds, and that mess is a large part of
+ * what the city looks like.
+ *
+ * Clutter therefore runs at EVERY tier, including the far field, where it is
+ * the difference between a skyline of blank boxes and a skyline of buildings.
+ * The far tier is budgeted at roughly 50 triangles a roof.
+ */
 function roofscape(
   d: DetailBuilder,
   fp: ReadonlyArray<Vec2>,
@@ -326,51 +480,67 @@ function roofscape(
   spec: DistrictSpec,
   site: BuildingSite,
 ): void {
-  if (tier === 0) return;
   const b = footprintBounds(fp);
   const heavy = rng.bool(spec.roofPlant);
+  const rx = (k: number): number => b.cx + rng.range(-b.hx * k, b.hx * k);
+  const rz = (k: number): number => b.cz + rng.range(-b.hz * k, b.hz * k);
 
   // Lift shaft / stair head — the tallest thing on almost every roof.
-  if (heavy || rng.bool(0.5)) {
+  if (heavy || rng.bool(0.6)) {
     const sw = Math.min(b.hx * 1.0, rng.range(3.4, 6.2));
     const sd = Math.min(b.hz * 1.0, rng.range(3.0, 5.4));
     const sh = rng.range(2.6, 4.4);
-    const ox = rng.range(-b.hx * 0.4, b.hx * 0.4);
-    const oz = rng.range(-b.hz * 0.4, b.hz * 0.4);
-    d.box(b.cx + ox, top + sh / 2, b.cz + oz, sw, sh, sd, 0, {
+    d.box(rx(0.4), top + sh / 2, rz(0.4), sw, sh, sd, 0, {
       color: DetailColor.concrete, mr: MR.concrete,
     });
   }
 
-  if (!heavy && tier < 2) return;
+  // Advertising hoarding. Commonest on the boulevards, as in the reference.
+  const adChance = spec.style === FacadeStyle.bulevard ? 0.20
+    : spec.style === FacadeStyle.cartier ? 0.10
+      : spec.style === FacadeStyle.centruVechi ? 0.08
+        : spec.style === FacadeStyle.industrial ? 0.14 : 0.05;
+  if (b.hx > 6 && b.hz > 5 && rng.bool(adChance)) {
+    rooftopHoarding(d, b, top, rng, tier);
+  }
+
+  /*
+   * DISHES ON EVERYTHING. Not a cartier special case any more — the reference
+   * has them thick on interbelic boulevard blocks and old-town roofs too.
+   */
+  const dishes = spec.style === FacadeStyle.glassCorporate ? 0
+    : tier === 2 ? rng.int(2, 7) : tier === 1 ? rng.int(1, 5) : rng.int(0, 3);
+  for (let i = 0; i < dishes; i++) satelliteDish(d, rx(0.86), top, rz(0.86), rng);
+
+  // Flue stacks — masonry buildings all have them.
+  if (spec.style !== FacadeStyle.glassCorporate) {
+    const flues = tier === 0 ? rng.int(0, 2) : rng.int(1, 4);
+    for (let i = 0; i < flues; i++) chimneyStack(d, rx(0.8), top, rz(0.8), rng);
+  }
 
   // Plant boxes: chillers, AHUs, ducting.
-  const units = tier === 2 ? rng.int(2, 5) : rng.int(1, 3);
+  const units = tier === 2 ? rng.int(2, 6) : tier === 1 ? rng.int(1, 4) : rng.int(0, 2);
   for (let i = 0; i < units; i++) {
-    const uw = rng.range(1.6, 3.6);
-    const ud = rng.range(1.4, 3.0);
     const uh = rng.range(0.9, 2.1);
-    const ox = rng.range(-b.hx * 0.72, b.hx * 0.72);
-    const oz = rng.range(-b.hz * 0.72, b.hz * 0.72);
-    d.box(b.cx + ox, top + uh / 2, b.cz + oz, uw, uh, ud, 0, {
+    d.box(rx(0.72), top + uh / 2, rz(0.72), rng.range(1.6, 3.6), uh, rng.range(1.4, 3.0), 0, {
       color: rng.bool(0.5) ? DetailColor.metalPale : DetailColor.metal,
       mr: MR.metal,
     });
   }
 
   // Water tank on legs — a Bucharest rooftop signature.
-  if (tier === 2 && rng.bool(0.3)) {
-    const tx = b.cx + rng.range(-b.hx * 0.5, b.hx * 0.5);
-    const tz = b.cz + rng.range(-b.hz * 0.5, b.hz * 0.5);
+  if (tier >= 1 && rng.bool(0.34)) {
+    const tx = rx(0.5);
+    const tz = rz(0.5);
     d.cyl(tx, top + 1.5, tz, 1.15, 1.15, 2.1, 6, { color: DetailColor.rust, mr: [0.4, 0.72] });
     d.box(tx, top + 0.75, tz, 1.7, 1.5, 1.7, 0, { color: DetailColor.metal, mr: MR.metal });
   }
 
   // Aerials and masts — thin, dark, and they carve the skyline against the sky.
-  const masts = tier === 2 ? rng.int(1, 3) : 1;
+  const masts = tier === 2 ? rng.int(1, 4) : tier === 1 ? rng.int(1, 3) : rng.int(0, 2);
   for (let i = 0; i < masts; i++) {
-    const mx = b.cx + rng.range(-b.hx * 0.8, b.hx * 0.8);
-    const mz = b.cz + rng.range(-b.hz * 0.8, b.hz * 0.8);
+    const mx = rx(0.8);
+    const mz = rz(0.8);
     const mh = rng.range(2.5, 8.5);
     d.cyl(mx, top, mz, 0.09, 0.045, mh, 5, { color: DetailColor.metal, mr: MR.metal }, false);
     if (rng.bool(0.4)) {
@@ -384,17 +554,6 @@ function roofscape(
       d.box(mx, top + mh + 0.12, mz, 0.16, 0.16, 0.16, 0, {
         color: lin(0xff3040), mr: [0, 0.4], emissive: emi(lin(0xff3040), 5.0),
       });
-    }
-  }
-
-  // Satellite dish clusters on residential slabs.
-  if (spec.style === FacadeStyle.cartier && tier === 2 && rng.bool(0.5)) {
-    for (let i = 0; i < rng.int(2, 4); i++) {
-      d.cyl(
-        b.cx + rng.range(-b.hx * 0.8, b.hx * 0.8), top + 0.35,
-        b.cz + rng.range(-b.hz * 0.8, b.hz * 0.8),
-        0.02, 0.42, 0.5, 5, { color: DetailColor.metalPale, mr: [0.2, 0.6] }, false,
-      );
     }
   }
   void site;
@@ -513,6 +672,173 @@ function balconies(
       budget--;
     }
   }
+}
+
+/**
+ * CONTINUOUS BALCONY BANDS — the interbelic signature in silhouette.
+ *
+ * The shader draws the recess and the parapet as relief, which shades
+ * correctly but has no outline: seen along the elevation, or against the sky at
+ * a corner, a relief balcony is still a flat wall. These are the real
+ * projecting slabs, running the FULL width of the frontage rather than one per
+ * bay — that unbroken horizontal line, repeated up the building, is what makes
+ * Magheru's blocks read as 1930s modernism instead of as punched masonry.
+ *
+ * ~24 triangles per banded floor, hero-area buildings only.
+ */
+function continuousBalconies(
+  d: DetailBuilder,
+  site: BuildingSite,
+  groundH: number,
+  floorH: number,
+  floors: number,
+  rng: Rng,
+): void {
+  const facesX = Math.abs(site.fx) > 0.5;
+  const half = (facesX ? site.d : site.w) / 2;
+  const span = facesX ? site.d : site.w;
+  const proj = rng.range(0.95, 1.45);
+  // Balconies stop short of the vertical corner pier, as they really do.
+  const runLen = span * 0.88;
+
+  for (let fl = 1; fl < floors; fl++) {
+    // The shader picks banded floors from the same kind of hash; an exact
+    // match is not needed, only that roughly half the floors carry one and
+    // that the slab lines up with a floor line.
+    if (!rng.bool(0.55)) continue;
+    const y = groundH + fl * floorH + 0.30;
+    const cx = site.cx + site.fx * (half + proj / 2);
+    const cz = site.cz + site.fz * (half + proj / 2);
+    // Slab.
+    d.box(
+      cx, y, cz,
+      facesX ? proj : runLen, 0.20, facesX ? runLen : proj, 0,
+      { color: DetailColor.stone, mr: MR.stone },
+    );
+    // Solid rendered parapet closing its front — never an open rail on these.
+    d.box(
+      cx + site.fx * proj * 0.44, y + 0.52, cz + site.fz * proj * 0.44,
+      facesX ? 0.12 : runLen, 0.86, facesX ? runLen : 0.12, 0,
+      { color: DetailColor.stone, mr: MR.stone },
+    );
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Vertical facade signage                                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A VERTICAL NEON SIGN running down the face of a building.
+ *
+ * "TEATRUL NOTTARA" in the reference photograph — a tall narrow box standing
+ * proud of the facade with the name reading top-to-bottom, one letter per cell.
+ * Bucharest is full of them (theatres, cinemas, hotels, pharmacies) and they
+ * are one of the few things in the city that is bright, vertical and man-made
+ * against an otherwise horizontal weathered wall. They also read from a long
+ * way down a boulevard, which is exactly the shot this game keeps taking.
+ *
+ * The letters are not glyphs, they are lit cells with a dark bar across them —
+ * at the distance a sign like this is ever seen, that is indistinguishable from
+ * type, and it costs 12 triangles a letter instead of an atlas lookup.
+ */
+function verticalSign(
+  d: DetailBuilder,
+  site: BuildingSite,
+  groundH: number,
+  h: number,
+  rng: Rng,
+): void {
+  const along = { x: -site.fz, z: site.fx };
+  const half = (Math.abs(site.fx) > 0.5 ? site.d : site.w) / 2;
+  const span = Math.abs(site.fx) > 0.5 ? site.d : site.w;
+
+  // Hung near one end of the frontage, as they always are — they mark a
+  // doorway, not the middle of an elevation.
+  const t = (rng.bool(0.5) ? 1 : -1) * rng.range(0.28, 0.42);
+  const cells = rng.int(5, 10);
+  const cell = rng.range(0.78, 1.05);
+  const sh = cells * cell;
+  // Top of the sign sits below the cornice; bottom clears the shopfront.
+  const yTop = Math.min(h - 1.6, groundH + 1.2 + sh);
+  const yBot = yTop - sh;
+  if (yBot < groundH * 0.6) return;
+
+  const bx = site.cx + site.fx * (half + 0.30) + along.x * t * span;
+  const bz = site.cz + site.fz * (half + 0.30) + along.z * t * span;
+  const w = cell * 0.86;
+  const facesX = Math.abs(site.fx) > 0.5;
+  const sx = facesX ? 0.5 : w;
+  const sz = facesX ? w : 0.5;
+
+  // Dark carcass, standing off the wall on brackets.
+  d.box(bx, (yTop + yBot) / 2, bz, sx, sh, sz, 0, {
+    color: DetailColor.metal, mr: MR.metal,
+  });
+  for (const yy of [yBot + sh * 0.12, yTop - sh * 0.12]) {
+    d.tube(
+      site.cx + site.fx * half + along.x * t * span, yy,
+      site.cz + site.fz * half + along.z * t * span,
+      bx, yy, bz, 0.05, 3, { color: DetailColor.metal, mr: MR.metal },
+    );
+  }
+
+  // The lit face, one cell per letter.
+  const tube = rng.weighted(
+    [DetailColor.neon, DetailColor.sodium, lin(0xff3a2a), lin(0x46d0ff)],
+    [3, 2.2, 2, 1],
+  );
+  for (let i = 0; i < cells; i++) {
+    const cy = yBot + (i + 0.5) * cell;
+    d.box(bx + site.fx * 0.28, cy, bz + site.fz * 0.28,
+      facesX ? 0.06 : w * 0.9, cell * 0.82, facesX ? w * 0.9 : 0.06, 0,
+      { color: tube, mr: [0, 0.35], emissive: emi(tube, 2.6) });
+    // A dark bar through each cell so it reads as a letter, not a lamp.
+    d.box(bx + site.fx * 0.33, cy, bz + site.fz * 0.33,
+      facesX ? 0.05 : w * 0.5, cell * 0.16, facesX ? w * 0.5 : 0.05, 0,
+      { color: lin(0x120e18), mr: [0, 0.6] });
+  }
+}
+
+/**
+ * A large painted hoarding flat against a blank party wall — the "MedLife"
+ * board in the reference, which is close to twenty metres across and is the
+ * brightest thing on that side of the street. Bucharest hangs these on every
+ * exposed flank left over when its neighbour was demolished.
+ */
+function wallBillboard(
+  d: DetailBuilder,
+  site: BuildingSite,
+  groundH: number,
+  h: number,
+  rng: Rng,
+): void {
+  const along = { x: -site.fz, z: site.fx };
+  const half = (Math.abs(site.fx) > 0.5 ? site.d : site.w) / 2;
+  const span = Math.abs(site.fx) > 0.5 ? site.d : site.w;
+  const bw = span * rng.range(0.55, 0.86);
+  const bh = Math.min(bw * rng.range(0.3, 0.5), (h - groundH) * 0.7);
+  if (bh < 2.2) return;
+  const y = groundH + rng.range(1.0, Math.max(1.2, (h - groundH) - bh - 0.8)) + bh / 2;
+  const t = rng.range(-0.16, 0.16);
+  const bx = site.cx + site.fx * (half + 0.14) + along.x * t * span;
+  const bz = site.cz + site.fz * (half + 0.14) + along.z * t * span;
+  const facesX = Math.abs(site.fx) > 0.5;
+
+  const ink = rng.weighted(
+    [lin(0x1e3f96), lin(0xc41f2c), lin(0x0f7a4a), lin(0xe0a417), lin(0x2b2438)],
+    [3, 2.4, 1.6, 1.6, 1],
+  );
+  d.box(bx, y, bz, facesX ? 0.14 : bw, bh, facesX ? bw : 0.14, 0,
+    { color: ink, mr: [0, 0.7], emissive: emi(ink, 0.22) });
+  // A pale word block and a logo mark, which is all a board reads as at range.
+  d.box(bx + site.fx * 0.1, y, bz + site.fz * 0.1,
+    facesX ? 0.05 : bw * 0.6, bh * 0.26, facesX ? bw * 0.6 : 0.05, 0,
+    { color: lin(0xf4f0e6), mr: [0, 0.6], emissive: emi(lin(0xf4f0e6), 0.5) });
+  d.box(bx + site.fx * 0.1 - along.x * bw * 0.34, y + bh * 0.02,
+    bz + site.fz * 0.1 - along.z * bw * 0.34,
+    facesX ? 0.05 : bw * 0.14, bh * 0.42, facesX ? bw * 0.14 : 0.05, 0,
+    { color: lin(0xf4f0e6), mr: [0, 0.6], emissive: emi(lin(0xf4f0e6), 0.5) });
 }
 
 /* ------------------------------------------------------------------ */

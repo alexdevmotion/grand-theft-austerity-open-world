@@ -601,10 +601,21 @@ const FILL_GROUND = L(0x4a3050);
 /** How hard the sky's own ambient tint is pulled toward that blue. */
 const FILL_BLUE_PULL = 0.6;
 
-/** How much of the palette's chroma the direct sun keeps. See broadSpectrum. */
-const SUN_CHROMA = 0.9;
+/**
+ * How much of the palette's chroma the direct sun keeps. See broadSpectrum.
+ *
+ * EASING THE SUNSET. At 0.9 the key kept nearly all of a 2000K blackbody's
+ * chroma, so every sunlit surface in the city was rendered in near-pure amber
+ * and every shadow in near-pure blue; with a magenta sky and magenta fog on top
+ * of that, a street framing metered 0.73 mean saturation against the reference
+ * frame's own 0.37. The sunset was not wrong in HUE — the owner likes it — it
+ * was applied at twice the strength of the picture it copies. Backing the key's
+ * chroma off lets the travertine and render read as warm STONE lit by a low
+ * sun, instead of as white stone flooded with orange light.
+ */
+const SUN_CHROMA = 0.72;
 /** Chroma of the analytic sky the wet road mirrors. */
-const ROAD_CHROMA = 0.62;
+const ROAD_CHROMA = 0.56;
 
 /**
  * The key. `HeroSun.intensity` (4.6) times this lands at ~11 linear units,

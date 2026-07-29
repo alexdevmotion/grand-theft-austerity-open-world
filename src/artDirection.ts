@@ -82,7 +82,7 @@ export const HeroSun = {
 /** Post-processing grade constants. */
 export const Grade = {
   exposure: 1.0,
-  bloomIntensity: 0.62,
+  bloomIntensity: 0.54,
   bloomThreshold: 0.72,
   bloomSmoothing: 0.35,
   bloomRadius: 0.72,
@@ -90,7 +90,21 @@ export const Grade = {
   liftRGB: [0.020, 0.008, 0.042] as [number, number, number],
   gainRGB: [1.055, 0.985, 0.955] as [number, number, number],
   gammaRGB: [1.0, 1.01, 1.03] as [number, number, number],
-  saturation: 1.14,
+  /*
+   * SUNSET INTENSITY. The magenta-orange grade is the game's signature and is
+   * staying — but at 1.14 saturation on top of an already magenta key, an
+   * already violet ambient and a magenta fog, every surface in the city was
+   * being pushed to the same hue and the city read as one wash rather than as
+   * warm stone standing in violet shade.
+   *
+   * MEASURED, not guessed. Metering the reference frame through the game's own
+   * `__GTA_POST__.meter()` gives saturation 0.37; the city was metering 0.73 at
+   * a street framing, i.e. twice the chroma of the picture it is copying. That
+   * is precisely the "sunset is a bit too pronounced" note. Backed off to land
+   * nearer the reference while leaving the tonal distribution (p05 15 vs 13,
+   * p95 169 vs 164 — both already correct) untouched.
+   */
+  saturation: 0.92,
   contrast: 1.08,
   vignetteDarkness: 0.52,
   vignetteOffset: 0.28,

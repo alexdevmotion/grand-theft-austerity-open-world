@@ -224,11 +224,26 @@ export class SurfaceBuilder {
   /**
    * Road ribbon with camber. Runs from (x0,z0) to (x1,z1) with total width w.
    * uv.x is metres from the left edge, uv.y is metres along the run.
+   *
+   * `runCamber` cambers along the RUN axis instead of across the width, for
+   * ribbons laid at right angles to the traffic — zebra crossings and stop
+   * bars, which cross a cambered carriageway and must ride its crown. Without
+   * it a crossing is a flat plane at its own y while the road it sits on bulges
+   * 90 mm above it in the middle, so the markings are buried across the whole
+   * central span and no crossing is visible anywhere in the city. A flat run
+   * needs one row; a cambered one needs enough rows to resolve the parabola.
+   *
+   * `runFrom`/`runTo` say where the run's two ends sit on the host road, as a
+   * signed fraction of its half-width: a full kerb-to-kerb crossing is -1 to 1,
+   * a stop bar covering one direction of travel is 0 to -1.
    */
   ribbon(
     x0: number, z0: number, x1: number, z1: number,
     width: number, y: number, camber: number, p: SurfParams,
     segments = 4,
+    runCamber = 0,
+    runFrom = -1,
+    runTo = 1,
   ): void {
     const dx = x1 - x0;
     const dz = z1 - z0;
@@ -241,16 +256,20 @@ export class SurfaceBuilder {
     const pz = ux;
     const hw = width / 2;
     const cols = segments;
-    const rows = 1;
+    const rows = runCamber !== 0 ? 6 : 1;
     const baseIdx = this.pos.length / 3;
     for (let r = 0; r <= rows; r++) {
       const t = r / rows;
       const cx = x0 + dx * t;
       const cz = z0 + dz * t;
+      // Signed distance from the host road's centreline, normalised to its
+      // half-width — this is what the road's own camber is a function of.
+      const rn = runFrom + (runTo - runFrom) * t;
+      const runCrown = runCamber * (1 - rn * rn);
       for (let c = 0; c <= cols; c++) {
         const s = c / cols;
         const off = (s - 0.5) * width;
-        const crown = camber * (1 - (off / hw) * (off / hw));
+        const crown = camber * (1 - (off / hw) * (off / hw)) + runCrown;
         this.pos.push(cx + px * off, y + crown, cz + pz * off);
         this.nrm.push(0, 1, 0);
         this.uv.push(s * width, t * len);

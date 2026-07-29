@@ -44,8 +44,15 @@ const PLAN: Rect[] = [
   { x0: -700, z0: -1200, x1: 520, z1: -640, kind: 'guvern' },
   // The park.
   { x0: PARK.x0, z0: PARK.z0, x1: PARK.x1, z1: PARK.z1, kind: 'parc' },
-  // Corporate spine: glass towers flanking the axis around the crossroads.
-  { x0: -420, z0: -300, x1: 190, z1: 260, kind: 'glassCorporate' },
+  /*
+   * Corporate pocket. DELIBERATELY SMALL — see the height note below. In the
+   * Magheru photograph exactly one modern tower (the Coca-Cola-topped slab)
+   * stands over the whole boulevard, and it reads as an INTRUSION into a
+   * low-rise city. A 610x560 m corporate spine produced 137 towers and turned
+   * the game into Manhattan; this is a sixth of that area, wrapped tight
+   * around Builders House so the story landmark still has its quarter.
+   */
+  { x0: -175, z0: -70, x1: 70, z1: 165, kind: 'glassCorporate' },
   // Old town, immediately east of the corporate spine.
   { x0: 190, z0: -140, x1: 600, z1: 330, kind: 'centruVechi' },
   // Grand boulevards fill the inner ring.
@@ -78,14 +85,38 @@ export function planDistrictAt(x: number, z: number): DistrictKind {
 /* Grammar parameters per district                                     */
 /* ------------------------------------------------------------------ */
 
+/**
+ * A rare promotion to landmark height.
+ *
+ * BUCHAREST IS A LOW CITY. Every reference frame says the same thing: the
+ * University Square aerial is an unbroken carpet of 5-8 storey blocks running
+ * to the horizon, and Magheru — the grandest boulevard in the country — is
+ * overwhelmingly 6-10 storeys with ONE modern tower visible along its whole
+ * length. Encoding that as a single wide `height` range cannot work: a range
+ * broad enough to contain the occasional tower makes towers the median, which
+ * is exactly how this city ended up reading as Manhattan (median 10 storeys,
+ * 41% of all buildings above 11).
+ *
+ * So height is authored as two populations instead of one. `height` is the
+ * ordinary street wall and stays low; `tower` is a small chance of promotion
+ * to a genuinely tall mass. Rarity is what makes a tower read AS a tower.
+ */
+export interface TowerSpec {
+  /** 0..1 chance an individual plot is promoted. */
+  chance: number;
+  height: [number, number];
+}
+
 export interface DistrictSpec {
   style: number;
   /** Storey height range. */
   floorH: [number, number];
   /** Bay pitch range. */
   bayW: [number, number];
-  /** Building height range. */
+  /** ORDINARY building height range — the street wall, not the exceptions. */
   height: [number, number];
+  /** Rare landmark-height promotion, or null if the district never has one. */
+  tower: TowerSpec | null;
   /** Ground floor height range. */
   groundH: [number, number];
   /** Fraction of windows lit at dusk. */
@@ -109,7 +140,10 @@ export const DISTRICTS: Record<DistrictKind, DistrictSpec> = {
     style: FacadeStyle.glassCorporate,
     floorH: [3.7, 4.3],
     bayW: [1.55, 2.05],
-    height: [46, 150],
+    // Even inside the corporate pocket most plots are ordinary mid-rise infill;
+    // the towers are the minority that makes the quarter read as a quarter.
+    height: [20, 40],
+    tower: { chance: 0.30, height: [58, 112] },
     groundH: [7.5, 12.0],
     lit: [0.16, 0.34],
     gap: 0.16,
@@ -123,7 +157,9 @@ export const DISTRICTS: Record<DistrictKind, DistrictSpec> = {
     style: FacadeStyle.bulevard,
     floorH: [3.15, 3.6],
     bayW: [3.4, 4.6],
-    height: [24, 46],
+    // Magheru: overwhelmingly 6-10 storeys of interbelic and communist block.
+    height: [20, 31],
+    tower: { chance: 0.025, height: [36, 50] },
     groundH: [4.6, 6.2],
     lit: [0.14, 0.32],
     gap: 0.06,
@@ -137,7 +173,11 @@ export const DISTRICTS: Record<DistrictKind, DistrictSpec> = {
     style: FacadeStyle.cartier,
     floorH: [2.72, 2.95],
     bayW: [3.0, 3.6],
-    height: [24, 44],
+    // The cartiere are genuinely bimodal: streets of P+4 walk-ups with the
+    // occasional P+8/P+10 lift block standing over them. One wide range blurs
+    // the two into a uniform 12-storey wall, which no Romanian suburb is.
+    height: [12, 24],
+    tower: { chance: 0.12, height: [27, 33] },
     groundH: [3.0, 3.6],
     lit: [0.16, 0.38],
     gap: 0.18,
@@ -151,7 +191,9 @@ export const DISTRICTS: Record<DistrictKind, DistrictSpec> = {
     style: FacadeStyle.centruVechi,
     floorH: [3.3, 4.0],
     bayW: [3.0, 4.0],
-    height: [11, 26],
+    // Lipscani is 3-5 storeys of stucco. It was already the closest to right.
+    height: [11, 22],
+    tower: null,
     groundH: [4.2, 5.4],
     lit: [0.22, 0.46],
     gap: 0.05,
@@ -165,7 +207,9 @@ export const DISTRICTS: Record<DistrictKind, DistrictSpec> = {
     style: FacadeStyle.guvern,
     floorH: [4.6, 5.6],
     bayW: [4.6, 6.2],
-    height: [26, 58],
+    // Unirii's civic wall: ~8-10 storeys, but of very tall monumental floors.
+    height: [24, 42],
+    tower: { chance: 0.03, height: [46, 62] },
     groundH: [6.5, 9.0],
     lit: [0.10, 0.24],
     gap: 0.3,
@@ -180,6 +224,7 @@ export const DISTRICTS: Record<DistrictKind, DistrictSpec> = {
     floorH: [5.0, 7.0],
     bayW: [6.0, 9.0],
     height: [9, 21],
+    tower: null,
     groundH: [5.0, 6.5],
     lit: [0.08, 0.20],
     gap: 0.34,
@@ -194,6 +239,7 @@ export const DISTRICTS: Record<DistrictKind, DistrictSpec> = {
     floorH: [3.2, 3.6],
     bayW: [3.0, 4.0],
     height: [5, 9],
+    tower: null,
     groundH: [3.0, 3.6],
     lit: [0.3, 0.6],
     gap: 0.94,

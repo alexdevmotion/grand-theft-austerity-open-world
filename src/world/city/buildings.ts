@@ -194,16 +194,41 @@ function emit(
   const heroDist = Math.hypot(cx - (opt.heroX ?? HERO_X), cz - (opt.heroZ ?? HERO_Z));
   const site: BuildingSite = { cx, cz, w, d, rot: 0, fx, fz, heroDist };
 
-  // Material variety inside a district. The reference frame is precisely a
-  // dark glass tower standing against warm travertine — a corporate quarter
-  // that is 100% curtain wall has no such contrast anywhere in it.
+  /*
+   * STYLE MIXING — the eras jammed against each other.
+   *
+   * This is not variety for its own sake. The defining character of central
+   * Bucharest is COLLISION: a 1935 interbelic block abutting a 1975 concrete
+   * one abutting a nineteenth-century stucco survivor abutting a glass insert
+   * from 2008, all on the same fifty metres of frontage. A district rendered
+   * in one style reads as a masterplan, and Bucharest has never had one that
+   * survived contact with the next regime.
+   */
   let forceStyle: number | undefined;
   if (opt.district === 'glassCorporate') {
+    // The reference frame is precisely a dark glass tower standing against
+    // warm travertine — a quarter that is 100% curtain wall has no such
+    // contrast anywhere in it.
     const r = opt.rng.next();
-    if (r < 0.22) forceStyle = FacadeStyle.guvern;        // travertine slab
-    else if (r < 0.34) forceStyle = FacadeStyle.bulevard; // older stone infill
-  } else if (opt.district === 'bulevard' && opt.rng.bool(0.12)) {
-    forceStyle = FacadeStyle.glassCorporate;              // a newer intrusion
+    if (r < 0.22) forceStyle = FacadeStyle.guvern;          // travertine slab
+    else if (r < 0.40) forceStyle = FacadeStyle.interbelic; // older infill
+  } else if (opt.district === 'bulevard') {
+    // Magheru's actual composition: interbelic dominates, communist infill is
+    // common, and the other eras appear as interruptions.
+    forceStyle = opt.rng.weighted(
+      [
+        FacadeStyle.interbelic,
+        FacadeStyle.bulevard,
+        FacadeStyle.centruVechi,
+        FacadeStyle.guvern,
+        FacadeStyle.glassCorporate,
+      ],
+      [10, 5.5, 1.6, 1.0, 0.7],
+    );
+  } else if (opt.district === 'centruVechi' && opt.rng.bool(0.16)) {
+    forceStyle = FacadeStyle.interbelic;   // an interwar infill on a lost plot
+  } else if (opt.district === 'cartier' && opt.rng.bool(0.10)) {
+    forceStyle = FacadeStyle.interbelic;   // the pre-war fringe the blocs ate
   }
 
   const built = buildBuilding(

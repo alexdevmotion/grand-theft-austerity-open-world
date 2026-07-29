@@ -40,6 +40,15 @@ export const FacadeStyle = {
   industrial: 5,
   /** Plain rendered wall — podiums, blank party walls, park pavilions. */
   plain: 6,
+  /**
+   * INTERBELIC MODERNISM — the dominant architecture of central Bucharest and
+   * the thing that makes Magheru look like Magheru rather than like any
+   * mid-century European boulevard. Continuous horizontal balcony bands and
+   * string courses, wide horizontal windows, deep reveals, rounded corner
+   * expression, and weathered ochre-cream render that has been patched a dozen
+   * times in eighty years.
+   */
+  interbelic: 7,
 } as const;
 
 /* ------------------------------------------------------------------ */
@@ -307,7 +316,7 @@ Fac facadeGrammar() {
       float bed = fbm2(vec2(u * 0.75, v * 4.4));
       float pit = smoothstep(0.74, 0.96, fbm2(vec2(u * 7.0, v * 7.0)));
       f.albedo = uTravertine * (0.80 + bed * 0.46) * (1.0 - pit * 0.34);
-      f.rough = 0.54 + bed * 0.16 + pit * 0.2;
+      f.rough = 0.64 + bed * 0.16 + pit * 0.2;
       f.metal = 0.0;
       f.env = 0.85;
       // Coursing: 1.15 m courses, 1.55 m joints, both as real recesses.
@@ -434,7 +443,7 @@ Fac facadeGrammar() {
       float grain = fbm2(vec2(u * 2.2, v * 5.0));
       f.albedo = uTravertine * (0.86 + grain * 0.50);
       f.metal = 0.0;
-      f.rough = 0.58 - grain * 0.14;
+      f.rough = 0.68 - grain * 0.14;
       f.env = 0.85;
       f.tilt = vec2(0.0);
       float course = band(fract(v / 1.15) - 0.5, 0.022);
@@ -690,7 +699,8 @@ Fac facadeGrammar() {
     vec3 stone = uStone * (1.02 + tint * 0.16);
     float grain = fbm2(vec2(u * 3.0, v * 2.4));
     f.albedo = stone * (0.78 + grain * 0.34);
-    f.rough = 0.74;
+    // Weathered limestone, not a polished slab.
+    f.rough = 0.84;
 
     // Giant order: engaged pilasters running the full height above the base.
     float pilW = bayW * 0.19;
@@ -769,11 +779,153 @@ Fac facadeGrammar() {
   }
 
   /* ---------------- 6: plain rendered wall ---------------- */
-  float grain = fbm2(vec2(u * 1.6, v * 1.4));
-  f.albedo = mix(uStucco, uConcrete, tint) * (0.55 + grain * 0.55);
-  f.rough = 0.90;
-  f.albedo *= 1.0 - 0.22 * smoothstep(2.0, 0.0, v);
-  return f;
+  if (style < 6.5) {
+    float grain = fbm2(vec2(u * 1.6, v * 1.4));
+    f.albedo = mix(uStucco, uConcrete, tint) * (0.55 + grain * 0.55);
+    f.rough = 0.90;
+    f.albedo *= 1.0 - 0.22 * smoothstep(2.0, 0.0, v);
+    return f;
+  }
+
+  /* ---------------- 7: interbelic modernism ---------------- */
+  /*
+   * THE MAGHERU FACADE. What the reference photograph is actually made of, and
+   * what the city was missing: every block on that boulevard is banded
+   * HORIZONTALLY — a continuous balcony running the full width of the elevation
+   * at most floors, a projecting string course at every floor line, and windows
+   * that are WIDER than they are tall. The existing boulevard grammar had it
+   * backwards: tall narrow punched openings on a vertically-pilastered wall,
+   * which is a nineteenth-century apartment block, not a 1935 one.
+   *
+   * The other half of the look is the render. It is not one colour. Eighty
+   * years of patch repairs, water staining below every sill and balcony, and
+   * mismatched paint between one owner's bay and the next give a facade that
+   * is blotchy at three different scales at once — and that patina is most of
+   * what separates Bucharest from a clean modernist reconstruction.
+   */
+  {
+    /* ---- weathered render ---- */
+    // Three scales of colour variation: the base ochre/cream choice, metre-
+    // scale patch repairs, and fine render grain.
+    vec3 warm = mix(uStucco, uTravertine, 0.35 + tint * 0.5);
+    vec3 pale = mix(uStone, uTravertine, tint * 0.4);
+    vec3 base = mix(warm, pale, step(0.5, h11(seed * 1.31)));
+    float grain = fbm2(vec2(u * 2.1, v * 1.9));
+    // Patch repairs: broad blotches of slightly wrong colour, hard-edged where
+    // somebody rendered over a section and never matched it.
+    // NB: "patch" is a RESERVED WORD in GLSL ES 3.0 (tessellation). Declaring a
+    // float by that name fails the whole fragment shader to compile, which
+    // silently removes every wall in the city and leaves the roofs floating.
+    float patchId = h21(vec2(floor(u / 5.5 + h11(seed) * 3.0), floor(v / 4.5)) + seed * 3.0);
+    float patchAmt = step(0.62, patchId);
+    f.albedo = base * (0.62 + grain * 0.44);
+    f.albedo = mix(f.albedo, f.albedo * mix(0.80, 1.16, h11(patchId * 17.0)), patchAmt * 0.75);
+    f.rough = 0.90 - grain * 0.06;
+    f.env = 0.7;
+
+    /* ---- the horizontal banding ---- */
+    // A projecting string course at every floor line. This is the single
+    // strongest cue in the whole style: it is what turns a wall into a stack.
+    float courseT = band(vm, 0.13);
+    f.height += 0.075 * courseT;
+    f.albedo *= 1.0 - 0.16 * band(vm - 0.16, 0.05);   // shadow under it
+
+    /* ---- continuous balconies ---- */
+    // Whole floors carry a balcony that runs the FULL width of the elevation,
+    // not a balcony per bay. Alternating-ish, chosen per floor.
+    float hasBalc = step(0.42, h21(vec2(0.0, fi) + seed * 7.0));
+    // The recess sits above the floor line; the solid parapet closes its front.
+    float recessLo = 0.30;
+    float recessHi = floorH * 0.42;
+    float inRecess = hasBalc * step(recessLo, vm) * step(vm, recessHi) * (1.0 - isGround);
+    f.albedo = mix(f.albedo, base * 0.30, inRecess);
+    f.ao = mix(f.ao, 0.40, inRecess);
+    f.height -= 0.62 * inRecess;
+    // Parapet: a solid render band standing in front of the recess, with a
+    // coping line along its top. Rendered as relief so it self-shades.
+    float parapetT = hasBalc * band(vm - (recessLo + 0.02), 0.34) * (1.0 - isGround);
+    f.height += 0.50 * parapetT;
+    f.albedo = mix(f.albedo, base * (0.86 + grain * 0.3), parapetT);
+    f.albedo *= 1.0 - 0.22 * band(vm - (recessLo + 0.36), 0.035) * hasBalc;
+
+    /* ---- wide horizontal windows ---- */
+    // 1.5:1 landscape proportion, in a deep reveal, set back behind the
+    // balcony line. Grouped in pairs so the bay reads as a room, not a slot.
+    float wW = bayW * 0.72;
+    float wH = floorH * 0.34;
+    vec2 wc = vec2(um - bayW * 0.5, vm - floorH * 0.66);
+    float win = rectMask(wc, vec2(wW * 0.5, wH * 0.5)) * (1.0 - isGround);
+    float reveal = (rectMask(wc, vec2(wW * 0.5 + 0.09, wH * 0.5 + 0.09)) - win) * (1.0 - isGround);
+    // A central mullion: interbelic windows are wide, and always divided.
+    float mull = band(wc.x, 0.035) * win;
+    f.albedo = mix(f.albedo, vec3(0.013, 0.011, 0.023), win);
+    f.albedo = mix(f.albedo, base * 0.9, mull);
+    f.albedo *= 1.0 - 0.42 * reveal;
+    f.height += -0.17 * win - 0.07 * reveal + 0.03 * mull;
+    // Projecting sill, which is where the staining starts.
+    float sill = band(vm - (floorH * 0.66 - wH * 0.5 - 0.07), 0.055) * step(abs(wc.x), wW * 0.60);
+    f.height += 0.05 * sill;
+
+    float lit = step(1.0 - litBias, h21(cell * 3.1 + seed));
+    vec3 room = mix(uSodium, uOffice, h21(cell + 5.0) * 0.7);
+    vec2 pane = (wc / vec2(wW, wH)) + 0.5;
+    float inner = officeInterior(pane, ch * 61.0 + seed);
+    f.emissive += room * lit * win * (1.0 - inner * 0.88) * 0.07 * uLitGain;
+    f.rough = mix(f.rough, 0.42, win);
+
+    /* ---- staining ---- */
+    /*
+     * Water runs off every sill and every balcony and leaves a vertical streak
+     * down the render below it. In the reference these streaks are everywhere
+     * and they are what stops a cream facade reading as freshly painted.
+     */
+    float streak = smoothstep(0.35, 0.95, fbm2(vec2(u * 4.2, v * 0.13)));
+    float below = smoothstep(floorH * 0.34, 0.0, vm);
+    f.albedo *= 1.0 - 0.30 * streak * below;
+    // Grime gathering in the shade of the banding, and up from the pavement.
+    f.albedo *= 1.0 - 0.20 * smoothstep(2.4, 0.0, v);
+
+    /* ---- rounded corner expression ---- */
+    // A real interbelic corner block turns the corner in a curve. The massing
+    // is orthogonal here, so the corner is expressed instead: u restarts at 0
+    // on every face, so a band at low u lands exactly on the vertical arris,
+    // where these buildings run a smooth rendered pier with no banding on it.
+    float roundR = 1.7 + 1.4 * h11(seed * 5.9);
+    float corner = 1.0 - smoothstep(roundR, roundR + 0.7, u);
+    f.albedo = mix(f.albedo, base * (0.94 + grain * 0.24), corner * 0.85);
+    f.height = mix(f.height, 0.045, corner * 0.9);
+    f.ao = mix(f.ao, 1.0, corner);
+
+    /* ---- cornice ---- */
+    float toTop = bh - v;
+    f.albedo = mix(f.albedo, base * 1.24, band(toTop - 0.7, 0.34));
+    f.albedo *= 1.0 - 0.30 * band(toTop - 1.25, 0.06);
+
+    /* ---- ground floor retail ---- */
+    if (isGround > 0.5) {
+      float shopIdx = floor(u / (bayW * 1.6));
+      float sh = h11(shopIdx * 4.1 + seed);
+      float glassY = step(0.8, v) * step(v, groundH - 1.30);
+      float pier = step(0.10, bu) * step(bu, 0.90);
+      float shopGlass = glassY * pier;
+      f.albedo = mix(uStone * 0.36, vec3(0.02, 0.017, 0.03), shopGlass);
+      f.rough = mix(0.78, 0.30, shopGlass);
+      vec3 sign = mix(uNeon, uSodium, sh);
+      vec2 spq = vec2(clamp((bu - 0.10) / 0.80, 0.0, 1.0),
+                      clamp((v - 0.8) / max(groundH - 2.1, 0.8), 0.0, 1.0));
+      float shopInner = officeInterior(spq, sh * 67.0 + seed);
+      f.emissive += sign * shopGlass * (1.0 - shopInner * 0.82) * (0.07 + sh * 0.10) * uLitGain;
+      f.emissive += uOffice * shopGlass * smoothstep(0.72, 0.97, spq.y) * 0.09 * uLitGain;
+      f.height -= 0.18 * shopGlass;
+      // Fascia band over the shopfront.
+      float fascia = step(groundH - 1.20, v) * step(v, groundH - 0.30);
+      f.albedo = mix(f.albedo, mix(uRust, uNeon, sh) * 0.24, fascia);
+      float letters = step(0.55, fbm2(vec2(u * 7.0, v * 3.0)));
+      f.emissive += sign * fascia * letters * 0.10 * uLitGain;
+      f.albedo = mix(f.albedo, uStone * 0.24, step(v, 0.8));
+    }
+    return f;
+  }
 }
 `;
 
@@ -913,7 +1065,16 @@ Surf surfaceShade() {
     vec2 fj = abs(fract(g) - 0.5);
     float joint = max(band(fj.x - 0.5, 0.035), band(fj.y - 0.5, 0.035));
     s.albedo *= 1.0 - 0.42 * joint;
-    s.rough = 0.72 - tone * 0.10;
+    /*
+     * A PAVEMENT IS DRY, ROUGH, DUSTY STONE. 0.72 was glossy enough that the
+     * footway mirrored the sunset as hard as the carriageway did, and the whole
+     * city read as though it were cast in polished marble. Real precast paving
+     * is a sanded, worn, slightly dusty surface — it measures up around 0.9,
+     * and it is what the reference's kerbside actually looks like. The wet
+     * look belongs to the ROAD; it is the contrast between a mirror-wet
+     * carriageway and a matte footway that makes the road read as wet at all.
+     */
+    s.rough = 0.90 - tone * 0.07;
     // Slab joints are 8 mm recesses; sunken slabs hold water. Both are relief.
     float broken = step(0.955, h21(cellId * 1.7 + 4.0));
     s.albedo *= 1.0 - 0.35 * broken;
@@ -926,17 +1087,20 @@ Surf surfaceShade() {
     // renders as a glowing orange lattice of reflected sky. Water in a joint is
     // sub-pixel; water in a sunken slab is metres across, and only the second
     // one is something the eye can read as wet.
-    pooling = broken * 0.7 - 0.06;
-    wet *= 0.92;
+    // Only genuinely sunken slabs hold water; the rest of the footway drains
+    // and is dry. Pushed well below the damp threshold so puddles on a pavement
+    // are isolated events rather than a continuous sheet.
+    pooling = broken * 0.55 - 0.34;
+    wet *= 0.30;
   } else if (kind < 2.5) {
     /* ---- kerb face ---- */
     float grain = fbm2(wp * 3.0 + vWPosS.y * 4.0);
     s.albedo = uKerb * (0.7 + grain * 0.5);
-    s.rough = 0.70;
-    // A kerb face is vertical: water runs off it, but the top arris stays wet
-    // and is the brightest specular line on a night street.
-    pooling = -0.25;
-    wet *= 0.7;
+    // Sawn granite kerb, weathered and dusty — not a polished one.
+    s.rough = 0.88;
+    // A kerb face is vertical: water runs straight off it.
+    pooling = -0.42;
+    wet *= 0.30;
   } else if (kind < 3.5) {
     /* ---- plaza stone: large sawn slabs, radiating pattern ---- */
     vec2 g = wp / 1.85;
@@ -946,13 +1110,17 @@ Surf surfaceShade() {
     vec2 fj = abs(fract(g) - 0.5);
     float joint = max(band(fj.x - 0.5, 0.020), band(fj.y - 0.5, 0.020));
     s.albedo *= 1.0 - 0.30 * joint;
-    s.rough = 0.66;
-    // A civic plaza is dead flat and drains badly: after rain it is among the
-    // wettest walkable surfaces in the city, and it is what the reference's
-    // foreground actually is. Held just below the damp threshold so the sheet
-    // still breaks up into dry patches rather than becoming one mirror. The
-    // joints are deliberately NOT pooled — see the note on paving above.
-    pooling = -0.02;
+    /*
+     * Sawn plaza stone, dry. This surface used to sit at 0.66 roughness with
+     * pooling held just under the damp threshold, which made every civic plaza
+     * in the game a sheet of polished granite reflecting the whole sky — the
+     * single worst offender in the "concrete is too reflective" note. A real
+     * plaza after rain has damp patches in its hollows and is otherwise a matte
+     * dusty stone you cannot see your own reflection in.
+     */
+    s.rough = 0.87;
+    pooling = -0.36;
+    wet *= 0.34;
     s.height = -0.012 * joint;
   } else if (kind < 4.5) {
     /* ---- lawn ---- */
@@ -1272,7 +1440,11 @@ export function createCityMaterials(): CityMaterials {
     emissiveIntensity: 1.0,
     // Per-PIXEL weighted by Fac.env in the shader, so this is the reference
     // level for a matte surface and glass multiplies up from here.
-    envMapIntensity: 0.42,
+    // WEATHERED RENDER IS NOT REFLECTIVE. This is the reference level for a
+    // matte facade; glass multiplies up from here per-pixel via Fac.env. At
+    // 0.42 every rendered wall in the city picked up a sheen of sunset and the
+    // concrete read as polished. Real patinated render throws back very little.
+    envMapIntensity: 0.30,
     dithering: true,
   });
   facade.onBeforeCompile = (shader) => {

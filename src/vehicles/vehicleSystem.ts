@@ -292,7 +292,12 @@ class Vehicle implements VehicleHandle {
 
   setControls(throttle: number, steer: number, handbrake: boolean): void {
     this.throttle = THREE.MathUtils.clamp(throttle, -1, 1);
-    this.steerInput = THREE.MathUtils.clamp(steer, -1, 1);
+    // NEGATED. `wheelFwd.applyAxisAngle(up, steerAngle)` rotates the forward
+    // vector about +Y, and a positive rotation takes +Z toward +X — but the
+    // car's right is F x up = (-cos, 0, sin), i.e. -X. So a positive steer
+    // input turned the car LEFT. Negating here fixes the physics and the
+    // visual wheel rotation together, since both read `steerAngle`.
+    this.steerInput = -THREE.MathUtils.clamp(steer, -1, 1);
     this.handbrakeInput = handbrake;
   }
 

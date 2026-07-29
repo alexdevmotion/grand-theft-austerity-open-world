@@ -47,6 +47,7 @@ const KEY_ACTIONS: Record<string, ActionName> = {
   KeyR: 'radioNext',
   KeyP: 'photoMode',
   Escape: 'pause',
+  KeyX: 'pause',
   KeyB: 'lookBehind',
 };
 
@@ -107,12 +108,23 @@ export class Input {
     const onMouseDown = (e: MouseEvent) => {
       this.mouseButtons.add(e.button);
       this.mousePressed.add(e.button);
-      if (e.button === 0) this.actionsDown.add('fire');
+      // Left click is the attack button: it fires when armed and throws a
+      // punch when not, so both actions are raised and the player system
+      // picks whichever applies.
+      if (e.button === 0) {
+        this.actionsDown.add('fire');
+        this.actionsDown.add('punch');
+        this.actionsPressed.add('fire');
+        this.actionsPressed.add('punch');
+      }
       if (e.button === 2) this.actionsDown.add('aim');
     };
     const onMouseUp = (e: MouseEvent) => {
       this.mouseButtons.delete(e.button);
-      if (e.button === 0) this.actionsDown.delete('fire');
+      if (e.button === 0) {
+        this.actionsDown.delete('fire');
+        this.actionsDown.delete('punch');
+      }
       if (e.button === 2) this.actionsDown.delete('aim');
     };
     const onCtx = (e: Event) => e.preventDefault();

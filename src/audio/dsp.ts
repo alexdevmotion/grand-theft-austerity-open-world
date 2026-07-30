@@ -307,7 +307,23 @@ export function applyEnvelope(buf: Float32Array, sampleRate: number, e: Envelope
   return buf;
 }
 
-/** Additive sine bank; `partials` are [freqHz, amplitude, phase?]. */
+/**
+ * Additive sine bank; `partials` are [freqHz, amplitude, phase?].
+ *
+ * A pure sinusoid satisfies the two-term recurrence
+ * `s[n] = 2·cos(w)·s[n-1] − s[n-2]`, so each partial costs one multiply and two
+ * adds per sample instead of a `Math.sin` call. On the offline bank that is the
+ * difference between a boot that renders in two seconds and one that renders in
+ * four (this and `modes` were between them most of the cost).
+ *
+ * Unlike the decaying case in `modes`, this recurrence sits exactly on the unit
+ * circle, so rounding error in `cos(w)` accumulates as a slow amplitude drift
+ * over hundreds of thousands of samples. Re-seeding from `Math.sin` every 4096
+ * samples bounds the error at a level far below the 24-bit noise floor while
+ * still eliminating 99.95% of the transcendental calls.
+ */
+const RESYNC = 4096;
+
 export function additive(
   out: Float32Array,
   sampleRate: number,
@@ -317,7 +333,20 @@ export function additive(
   for (const [f, a, ph] of partials) {
     const w = (2 * Math.PI * f) / sampleRate;
     const p0 = ph ?? 0;
-    for (let i = 0; i < n; i++) out[i] += Math.sin(w * i + p0) * a;
+    const c = 2 * Math.cos(w);
+    let s2 = 0;
+    let s1 = 0;
+    for (let i = 0; i < n; i++) {
+      if ((i & (RESYNC - 1)) === 0) {
+        // Re-seed the pair from the closed form.
+        s2 = Math.sin(w * (i - 1) + p0);
+        s1 = Math.sin(w * i + p0);
+      }
+      out[i] += s1 * a;
+      const s0 = c * s1 - s2;
+      s2 = s1;
+      s1 = s0;
+    }
   }
   return out;
 }

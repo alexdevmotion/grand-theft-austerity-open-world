@@ -52,7 +52,10 @@ interface EqSpec {
 
 const EQ: Record<StreetEmitterKind, EqSpec> = {
   // A 20-lei transistor on top of the newspapers: no bass at all, all mids.
-  kiosk: { hp: 420, lp: 3400, presenceHz: 1600, presenceDb: 6, drive: 2.2, refDistance: 3.5, rolloff: 1.7, maxDistance: 42, bed: 0.55 },
+  // The kiosk carries the folk record in free roam, which is the whole reason
+  // the beds exist, so it is the one emitter tuned to actually reach you: a
+  // gentler rolloff and a hotter bed than a shop doorway gets.
+  kiosk: { hp: 420, lp: 3400, presenceHz: 1600, presenceDb: 6, drive: 2.2, refDistance: 4.5, rolloff: 1.15, maxDistance: 55, bed: 0.78 },
   // Through an open shop door: boxier, further back, quieter.
   doorway: { hp: 260, lp: 2600, presenceHz: 900, presenceDb: 3, drive: 1.5, refDistance: 3, rolloff: 1.9, maxDistance: 32, bed: 0.3 },
   // A Dacia with the window down — the same cheap cone as the player's own car.
@@ -236,10 +239,14 @@ export class StreetVoices {
    * Find a spot for an emitter: on the pavement (off the carriageway), not
    * inside a building, within earshot of where the player is walking.
    */
-  private sitePoint(city: CityService, listener: THREE.Vector3, out: THREE.Vector3): boolean {
+  private sitePoint(
+    city: CityService, listener: THREE.Vector3, out: THREE.Vector3, near = false,
+  ): boolean {
     for (let attempt = 0; attempt < 14; attempt++) {
       const a = this.rng.range(0, Math.PI * 2);
-      const r = this.rng.range(14, 46);
+      // The kiosk sits close enough that walking a street puts you inside its
+      // reach; the rest of the emitters can be further off.
+      const r = near ? this.rng.range(7, 20) : this.rng.range(14, 46);
       const x = listener.x + Math.cos(a) * r;
       const z = listener.z + Math.sin(a) * r;
       if (city.spatial.isBlocked(x, z)) continue;
@@ -274,8 +281,12 @@ export class StreetVoices {
     if (city && this.replaceTimer <= 0) {
       this.replaceTimer = 1.5;
       for (const e of this.emitters) {
-        if (e.placed && e.position.distanceTo(listener) < StreetVoices.KEEP_RADIUS) continue;
-        if (this.sitePoint(city, listener, _site)) e.moveTo(_site);
+        // The kiosk is re-sited far more eagerly than the others: it is the
+        // source the folk record actually reaches the player from, so it has to
+        // stay within earshot as you walk, not merely within 95 m.
+        const keep = e.kind === 'kiosk' ? 34 : StreetVoices.KEEP_RADIUS;
+        if (e.placed && e.position.distanceTo(listener) < keep) continue;
+        if (this.sitePoint(city, listener, _site, e.kind === 'kiosk')) e.moveTo(_site);
       }
     }
 

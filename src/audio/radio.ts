@@ -169,8 +169,14 @@ function buildSpeakerChain(ctx: AudioContext, destination: AudioNode): SpeakerCh
   presence.Q.value = 1.2;
   presence.gain.value = 4;
 
+  // The cone. This was at 1.35, which the offline harmonic measurement showed
+  // to be almost perfectly linear at normal signal levels — 67 dB down on the
+  // second harmonic, i.e. no cheap-speaker character at all, just a filtered
+  // clip. 1.9 puts real even-order distortion in without costing
+  // intelligibility, which is the whole point of routing the radio through a
+  // shaper rather than through an EQ.
   const cone = ctx.createWaveShaper();
-  cone.curve = speakerCurve(1024, 1.35) as Float32Array<ArrayBuffer>;
+  cone.curve = speakerCurve(1024, 1.9) as Float32Array<ArrayBuffer>;
 
   input.connect(hp);
   hp.connect(lp);

@@ -233,8 +233,23 @@ export class GeoBuilder {
    * Loft a chain of rounded-rect cross-sections along +Z. This is what gives
    * the cars a real body: wheel arches come from raising `yBottom` at the axle
    * stations, the bonnet/boot from dropping `yTop`, tumblehome from `hw`.
+   *
+   * `opts.route` is what makes opening doors possible. For every quad it is
+   * handed the quad centre; returning another builder moves that quad OUT of
+   * this one and into that one. The door skin is therefore not a panel stuck on
+   * top of the flank — it is literally the piece of pressed steel that is
+   * missing from the body, so when it swings there is a real hole behind it.
    */
-  loft(stations: Station[], s: Surf, opts?: { capFront?: boolean; capRear?: boolean; vScale?: number }): this {
+  loft(
+    stations: Station[],
+    s: Surf,
+    opts?: {
+      capFront?: boolean;
+      capRear?: boolean;
+      vScale?: number;
+      route?: (cx: number, cy: number, cz: number) => GeoBuilder | null;
+    },
+  ): this {
     const n = stations.length;
     if (n < 2) return this;
     const rings: number[][] = [];
@@ -274,7 +289,14 @@ export class GeoBuilder {
         D.set(rj[k * 2], rj[k * 2 + 1], zj);
         // Skip degenerate slivers.
         if (A.distanceToSquared(B) < 1e-9 && D.distanceToSquared(C) < 1e-9) continue;
-        this.smoothQuad(A, B, C, D, uCoord[k], uCoord[k + 1], vi, vj, s);
+        let target: GeoBuilder = this;
+        if (opts?.route) {
+          const cx = (A.x + B.x + C.x + D.x) * 0.25;
+          const cy = (A.y + B.y + C.y + D.y) * 0.25;
+          const cz = (A.z + B.z + C.z + D.z) * 0.25;
+          target = opts.route(cx, cy, cz) ?? this;
+        }
+        target.smoothQuad(A, B, C, D, uCoord[k], uCoord[k + 1], vi, vj, s);
       }
     }
     if (opts?.capFront !== false) this.cap(rings[n - 1], stations[n - 1].z, 1, s);
@@ -283,7 +305,7 @@ export class GeoBuilder {
   }
 
   /** Quad with normals averaged from the quad plane — keeps lofts smooth-ish. */
-  private smoothQuad(
+  smoothQuad(
     a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3, d: THREE.Vector3,
     u0: number, u1: number, v0: number, v1: number, s: Surf,
   ): void {

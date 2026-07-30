@@ -32,11 +32,13 @@ export type SfxId =
   | 'horn' | 'horn_low' | 'dacia_cough' | 'spikes'
   // vehicle foley — the mechanical untidiness of a car held together with wire
   | 'gear_clunk' | 'handbrake' | 'body_rattle' | 'brake_squeal' | 'kerb_thump'
-  | 'engine_stall'
+  | 'engine_stall' | 'exhaust_pop' | 'stone_ping'
+  // people — the half-second noises a crowd is actually made of
+  | 'ped_mutter' | 'ped_cough' | 'ped_laugh' | 'ped_whistle'
   // world
   | 'thunder' | 'tram_bell' | 'tram_screech' | 'crowd_gasp' | 'bird'
   | 'crowd_shout' | 'crowd_scream' | 'pigeon_flutter' | 'cloth_rustle'
-  | 'construction_hammer' | 'dog_bark' | 'shop_bell'
+  | 'construction_hammer' | 'dog_bark' | 'shop_bell' | 'church_bell'
   // ui / mission stings
   | 'star_up' | 'star_down' | 'mission_start' | 'mission_complete' | 'mission_failed'
   | 'activity_start' | 'activity_win' | 'radio_click' | 'radio_static';
@@ -50,10 +52,11 @@ export const SFX_IDS: SfxId[] = [
   'door_open', 'door_close', 'car_door', 'pickup', 'interact',
   'horn', 'horn_low', 'dacia_cough', 'spikes',
   'gear_clunk', 'handbrake', 'body_rattle', 'brake_squeal', 'kerb_thump',
-  'engine_stall',
+  'engine_stall', 'exhaust_pop', 'stone_ping',
+  'ped_mutter', 'ped_cough', 'ped_laugh', 'ped_whistle',
   'thunder', 'tram_bell', 'tram_screech', 'crowd_gasp', 'bird',
   'crowd_shout', 'crowd_scream', 'pigeon_flutter', 'cloth_rustle',
-  'construction_hammer', 'dog_bark', 'shop_bell',
+  'construction_hammer', 'dog_bark', 'shop_bell', 'church_bell',
   'star_up', 'star_down', 'mission_start', 'mission_complete', 'mission_failed',
   'activity_start', 'activity_win', 'radio_click', 'radio_static',
 ];
@@ -68,6 +71,11 @@ const VARIANTS: Partial<Record<SfxId, number>> = {
   gear_clunk: 3, body_rattle: 4, kerb_thump: 3, brake_squeal: 2,
   crowd_shout: 3, crowd_scream: 2, cloth_rustle: 4, construction_hammer: 2,
   dog_bark: 2, tram_screech: 2, pigeon_flutter: 2,
+  // A pop that repeats identically reads as a sample, not as an engine, and
+  // these fire in bursts of three or four.
+  exhaust_pop: 5, stone_ping: 3,
+  // People: the whole point of these is that no two are the same voice.
+  ped_mutter: 5, ped_cough: 4, ped_laugh: 4, ped_whistle: 3,
 };
 
 /* ------------------------------------------------------------------ */
@@ -91,17 +99,44 @@ function noiseBurst(
   return b;
 }
 
-/** Inharmonic modal ring — the sound of struck metal / glass / wood. */
+/**
+ * Inharmonic modal ring — the sound of struck metal / glass / wood.
+ *
+ * Every partial is an exponentially decaying sinusoid, and the obvious way to
+ * write that is `sin(w*i) * exp(-t/tau)` per sample. That is also how this
+ * started, and it made the bank the most expensive thing in the whole boot
+ * sequence: `tram_bell` alone took 683 ms, because a 3-second bell with seven
+ * partials is two million transcendental calls.
+ *
+ * A decaying sinusoid is the impulse response of a two-pole resonator, so it
+ * satisfies an exact recurrence:
+ *
+ *     s[n] = 2·r·cos(w)·s[n-1] − r²·s[n-2],   s[0] = 0,  s[1] = r·sin(w)
+ *
+ * with r = exp(−1/(tau·sr)). Two multiplies and an add per sample, no `sin`, no
+ * `exp`, and — because it is the closed form rather than an approximation of it
+ * — sample-for-sample identical output. Since r < 1 the recurrence is strictly
+ * decaying and cannot drift.
+ */
 function modes(
   sr: number, seconds: number, freqs: number[], taus: number[], amps: number[],
 ): Float32Array {
   const b = buf(sr, seconds);
+  const n = b.length;
   for (let m = 0; m < freqs.length; m++) {
     const w = (2 * Math.PI * freqs[m]) / sr;
-    const tau = taus[m];
+    const r = Math.exp(-1 / (taus[m] * sr));
     const a = amps[m];
-    for (let i = 0; i < b.length; i++) {
-      b[i] += Math.sin(w * i) * a * Math.exp(-(i / sr) / tau);
+    const c1 = 2 * r * Math.cos(w);
+    const c2 = r * r;
+    let s2 = 0;               // s[n-2]
+    let s1 = r * Math.sin(w); // s[n-1]
+    // s[0] is zero, so the loop starts at 1.
+    for (let i = 1; i < n; i++) {
+      b[i] += s1 * a;
+      const s0 = c1 * s1 - c2 * s2;
+      s2 = s1;
+      s1 = s0;
     }
   }
   return b;
@@ -419,6 +454,189 @@ function renderHorn(sr: number, rng: Rng, low: boolean): Float32Array {
   biquad(out, 'peaking', 1900, 2, sr, 7);
   applyEnvelope(out, sr, { attack: 0.012, decay: 0.05, sustain: 0.92, duration: seconds, release: 0.05 });
   return normalise(out, 0.7);
+}
+
+/**
+ * AN EXHAUST POP — unburnt fuel going off in a hot pipe on the overrun.
+ *
+ * Three ingredients, and getting the balance right is the difference between a
+ * bang and a click:
+ *  1. a very fast pressure step — a few milliseconds of low-frequency thump,
+ *     which is the actual explosion;
+ *  2. the pipe ringing at its own length (a Dacia's silencer is a metre of thin
+ *     steel, so ~180 Hz with a short tail);
+ *  3. a spit of broadband noise on top, which is what makes it read as coming
+ *     out of a hole rather than from inside a box.
+ */
+function renderExhaustPop(sr: number, rng: Rng): Float32Array {
+  const seconds = 0.26;
+  const out = buf(sr, seconds);
+
+  // 1. the bang.
+  const thump = buf(sr, 0.09);
+  sweep(thump, sr, rng.range(230, 340), 62, 1, true);
+  applyEnvelope(thump, sr, {
+    attack: 0.0008, decay: 0.012, sustain: 0, duration: 0.09, release: 0.03,
+  });
+  mixInto(out, thump, 0, 0.9);
+
+  // 2. the pipe.
+  const d = 1 + rng.range(-0.1, 0.1);
+  mixInto(
+    out,
+    modes(sr, 0.2, [178 * d, 372 * d, 611 * d], [0.045, 0.03, 0.018], [0.5, 0.28, 0.15]),
+    Math.round(sr * 0.003),
+    0.55,
+  );
+
+  // 3. the spit.
+  mixInto(out, noiseBurst(sr, rng, 0.06, rng.range(1400, 2600), 0.7, 0.009), 0, 0.5);
+  return normalise(out, 0.72);
+}
+
+/** A chipping flicked up into a wheel arch. One millisecond of steel. */
+function renderStonePing(sr: number, rng: Rng): Float32Array {
+  const out = buf(sr, 0.13);
+  const f = rng.range(1700, 3400);
+  mixInto(
+    out,
+    modes(sr, 0.12, [f, f * 2.41, f * 3.87], [0.014, 0.009, 0.006], [0.6, 0.3, 0.16]),
+    0,
+    1,
+  );
+  mixInto(out, noiseBurst(sr, rng, 0.02, 4200, 1.2, 0.003), 0, 0.45);
+  return normalise(out, 0.5);
+}
+
+/* ---- people ---- */
+
+/**
+ * The half-second noises a pavement is actually made of. Nobody in this game
+ * says words to the player at close range — the *Ce Ne Enervează* clips do the
+ * talking — but a crowd that only makes footsteps is a crowd of mannequins.
+ *
+ * All four are the same glottal-plus-formant machinery as `renderVocal`,
+ * differing in pitch contour and formant set, because that is genuinely what
+ * separates a laugh from a cough in a human throat.
+ */
+function renderPedVocal(
+  sr: number, rng: Rng, kind: 'mutter' | 'cough' | 'laugh' | 'whistle',
+): Float32Array {
+  // Half the population is pitched an octave down. The formants move with it,
+  // otherwise a low voice sounds like a tall man's helium impression.
+  const male = rng.bool(0.5);
+  const f0 = male ? rng.range(88, 135) : rng.range(165, 235);
+  const fScale = male ? 0.86 : 1.14;
+
+  if (kind === 'whistle') {
+    // Two notes of a wolf whistle, or a bored one-note summons. Almost pure
+    // tone with a breath of noise, and a wide interval — that is the whole
+    // gesture.
+    const seconds = rng.range(0.4, 0.75);
+    const out = buf(sr, seconds);
+    const up = rng.bool(0.6);
+    const base = rng.range(1150, 1900);
+    let ph = 0;
+    for (let i = 0; i < out.length; i++) {
+      const t = i / out.length;
+      // A whistle bends, holds, then falls away — a straight ramp sounds like a
+      // synthesiser sweep and nothing like a mouth.
+      const bend = up
+        ? Math.pow(t, 0.55) * 0.62
+        : t < 0.45 ? t * 0.9 : 0.4 - (t - 0.45) * 0.75;
+      const f = base * (1 + bend);
+      ph += (2 * Math.PI * f) / sr;
+      out[i] = Math.sin(ph) * 0.8 + Math.sin(ph * 2) * 0.06;
+      out[i] += (rng.next() * 2 - 1) * 0.03;
+    }
+    applyEnvelope(out, sr, {
+      attack: 0.03, decay: 0.2, sustain: 0.85, duration: seconds, release: seconds * 0.3,
+    });
+    return normalise(out, 0.5);
+  }
+
+  if (kind === 'cough') {
+    // A cough is a plosive: glottis slams shut, pressure builds, it lets go.
+    const seconds = rng.range(0.22, 0.36);
+    const out = buf(sr, seconds);
+    const body = renderVocal(
+      sr, rng, seconds * 0.75, f0 * 1.25, -0.5,
+      [520 * fScale, 1180 * fScale, 2500 * fScale], 1,
+    );
+    // A hard front edge — that is the bark.
+    for (let i = 0; i < body.length; i++) {
+      body[i] *= Math.exp(-(i / sr) / 0.055);
+    }
+    mixInto(out, body, 0, 1);
+    mixInto(out, noiseBurst(sr, rng, 0.09, rng.range(900, 1700), 0.6, 0.02), 0, 0.55);
+    // The rasp on the tail.
+    mixInto(out, noiseBurst(sr, rng, 0.12, 2600, 0.5, 0.05), Math.round(sr * 0.07), 0.16);
+    return normalise(out, 0.62);
+  }
+
+  if (kind === 'laugh') {
+    // Three to five glottal pulses on a falling pitch. The falling pitch is the
+    // tell: a laugh that does not descend sounds like an alarm.
+    const bursts = rng.int(3, 6);
+    const seconds = 0.16 * bursts + 0.2;
+    const out = buf(sr, seconds);
+    for (let b = 0; b < bursts; b++) {
+      const at = Math.round(sr * (0.03 + b * rng.range(0.13, 0.19)));
+      const len = rng.range(0.07, 0.12);
+      const blob = renderVocal(
+        sr, rng, len, f0 * (1.35 - b * 0.09), -0.25,
+        [700 * fScale, 1150 * fScale, 2700 * fScale], 1,
+      );
+      mixInto(out, blob, at, (1 - b * 0.13) * rng.range(0.7, 1));
+    }
+    return normalise(out, 0.6);
+  }
+
+  // Mutter: two or three unstressed syllables, low and going nowhere. This is
+  // the "cine mai e ăsta" under the breath that a Bucharest pavement runs on.
+  const syllables = rng.int(2, 4);
+  const seconds = 0.19 * syllables + 0.12;
+  const out = buf(sr, seconds);
+  for (let s = 0; s < syllables; s++) {
+    const at = Math.round(sr * (0.02 + s * rng.range(0.15, 0.22)));
+    const blob = renderVocal(
+      sr, rng, rng.range(0.1, 0.17), f0 * rng.range(0.9, 1.08), rng.range(-0.18, 0.1),
+      [rng.range(430, 700) * fScale, rng.range(1000, 1450) * fScale, rng.range(2200, 2800) * fScale],
+      1,
+    );
+    mixInto(out, blob, at, rng.range(0.55, 1));
+  }
+  // Mumbling is mumbling because the top is missing.
+  biquad(out, 'lowpass', 2200, 0.7, sr);
+  return normalise(out, 0.4);
+}
+
+/**
+ * A church bell across the rooftops. Bucharest is full of them and they are the
+ * one sound in the whole ambience that is unmistakably NOT traffic.
+ *
+ * A real bell is aggressively inharmonic — hum, prime, tierce (a minor third
+ * above, which is why bells sound melancholy), quint and nominal — and the
+ * partials decay at wildly different rates, the hum outlasting everything.
+ */
+function renderChurchBell(sr: number, rng: Rng): Float32Array {
+  const seconds = 4.2;
+  const f = 262 * rng.range(0.94, 1.06);
+  const out = modes(
+    sr, seconds,
+    // hum (f/2), prime (f), tierce (1.19f — the minor third), quint, nominal, and two upper partials
+    [f * 0.5, f, f * 1.19, f * 1.5, f * 2, f * 2.5, f * 3.36],
+    [3.4, 1.9, 1.3, 0.85, 0.55, 0.3, 0.16],
+    [0.5, 0.62, 0.4, 0.26, 0.3, 0.16, 0.1],
+  );
+  // The strike: a millisecond of the clapper on the bronze.
+  mixInto(out, noiseBurst(sr, rng, 0.05, 3200, 0.8, 0.006), 0, 0.28);
+  // Beating — no two sides of a cast bell are the same thickness, so every
+  // partial is really a pair a fraction of a hertz apart.
+  for (let i = 0; i < out.length; i++) {
+    out[i] *= 0.88 + 0.12 * Math.sin((2 * Math.PI * 0.7 * i) / sr);
+  }
+  return normalise(out, 0.68);
 }
 
 /**
@@ -879,6 +1097,13 @@ export function renderSfx(id: SfxId, sr: number, rng: Rng): Float32Array {
     case 'brake_squeal': return renderBrakeSqueal(sr, rng);
     case 'kerb_thump': return renderKerbThump(sr, rng);
     case 'engine_stall': return renderEngineStall(sr, rng);
+    case 'exhaust_pop': return renderExhaustPop(sr, rng);
+    case 'stone_ping': return renderStonePing(sr, rng);
+    case 'ped_mutter': return renderPedVocal(sr, rng, 'mutter');
+    case 'ped_cough': return renderPedVocal(sr, rng, 'cough');
+    case 'ped_laugh': return renderPedVocal(sr, rng, 'laugh');
+    case 'ped_whistle': return renderPedVocal(sr, rng, 'whistle');
+    case 'church_bell': return renderChurchBell(sr, rng);
     case 'thunder': return renderThunder(sr, rng);
     case 'tram_bell': return renderTramBell(sr);
     case 'tram_screech': return renderTramScreech(sr, rng);
@@ -1047,6 +1272,62 @@ export function renderRainLoop(sr: number, seconds: number, rng: Rng): Float32Ar
     }
   }
   return normalise(b, 0.8);
+}
+
+/**
+ * RAIN ON A TIN ROOF — the cabin's own rain layer.
+ *
+ * Rain outside and rain heard from inside a car are two completely different
+ * sounds, and using the outdoor bed muffled by the cabin lowpass gets it
+ * wrong in a way anybody who has sat out a downpour in a Dacia will notice.
+ * Outside, rain is a dense high hiss. Inside, the hiss is gone (the glass
+ * stops it) and what is left is individual drops striking a large, thin,
+ * badly damped steel panel forty centimetres above your head: discrete
+ * mid-frequency taps, each one ringing the roof pan.
+ *
+ * So this is built the opposite way round from `renderRainLoop`: mostly
+ * transients, band-limited to the roof's own resonance, over almost no bed.
+ */
+export function renderRoofRainLoop(sr: number, seconds: number, rng: Rng): Float32Array {
+  const b = new Float32Array(Math.round(sr * seconds));
+
+  // The panel. Every drop excites the same modes, which is why rain on a roof
+  // has a pitch and rain on a pavement does not.
+  const roof = [absorbFreq(rng, 320), absorbFreq(rng, 540), absorbFreq(rng, 880)];
+
+  const drops = Math.round(seconds * 900);
+  for (let d = 0; d < drops; d++) {
+    const at = Math.round(rng.range(0, b.length - 600));
+    const amp = rng.range(0.05, 0.5);
+    // A drop is an impulse; the panel does the rest. Rendering the modes
+    // inline (rather than calling `modes` 5400 times) keeps this under a few
+    // milliseconds, which matters because it runs during boot.
+    for (let m = 0; m < 3; m++) {
+      const w = (2 * Math.PI * roof[m]) / sr;
+      const tau = [0.013, 0.009, 0.005][m];
+      const g = amp * [1, 0.6, 0.32][m];
+      const n = Math.round(sr * tau * 4);
+      for (let i = 0; i < n && at + i < b.length; i++) {
+        b[at + i] += Math.sin(w * i) * g * Math.exp(-(i / sr) / tau);
+      }
+    }
+  }
+
+  // A whisper of bed under it — water running down the glass.
+  const bed = renderNoiseLoop(sr, seconds, 'pink', rng);
+  biquad(bed, 'bandpass', 1400, 0.6, sr);
+  mixInto(b, bed, 0, 0.1);
+
+  const xf = Math.round(sr * 0.3);
+  for (let i = 0; i < xf; i++) {
+    const t = i / xf;
+    b[i] = b[i] * t + b[b.length - xf + i] * (1 - t);
+  }
+  return normalise(b, 0.8);
+}
+
+function absorbFreq(rng: Rng, base: number): number {
+  return base * rng.range(0.93, 1.07);
 }
 
 /** Wind: brown noise through a wandering bandpass. */

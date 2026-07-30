@@ -44,6 +44,8 @@ import type { EngineClass } from './engineModel';
 import { VoiceDirector } from './voiceDirector';
 import { EMITTER_SPEAKER, StreetVoices } from './streetVoices';
 import { VOICE_CONTEXTS, type VoiceContext } from './clipContexts';
+import { HornVoice, hornBaseHz } from './horn';
+import { runOfflineTests, type OfflineReport } from './offlineTests';
 
 /** Maximum simultaneously synthesised engines. */
 const MAX_ENGINE_VOICES = 6;
@@ -80,6 +82,8 @@ interface Tracked {
   rattleTimer: number;
   /** Set once the car is braking hard, so the stop gets one squeal, not fifty. */
   brakeArmed: boolean;
+  /** Seconds until the next chipping is allowed to ping the wheel arch. */
+  stoneTimer: number;
   prevSpeed: number;
   /** Yaw last frame, for the tram flange screech. */
   prevYaw: number;
@@ -127,6 +131,12 @@ export interface AudioDebugApi {
   placeStreetAt(x: number, y: number, z: number): void;
   /** Live per-vehicle model readout: rpm, gear, load, tyre, brake. */
   vehicles(): Array<Record<string, unknown>>;
+  /**
+   * Render the synthesis primitives through a real OfflineAudioContext and
+   * measure them. This is the half of the audio layer `bun test` cannot reach:
+   * the graph, rather than the numbers fed to it. See offlineTests.ts.
+   */
+  selfTest(): Promise<OfflineReport>;
 }
 
 const _v = new THREE.Vector3();
@@ -157,6 +167,9 @@ export class AudioSystem implements System, AudioService {
   private radio: Radio | null = null;
   private director: VoiceDirector | null = null;
   private street: StreetVoices | null = null;
+  /** The player's horn — one live voice, because a horn is held, not triggered. */
+  private horn: HornVoice | null = null;
+  private hornHeldFor = 0;
 
   private engineVoices: VehicleVoice[] = [];
   private voiceByVehicle = new Map<string, VehicleVoice>();
@@ -186,11 +199,29 @@ export class AudioSystem implements System, AudioService {
   /** Peds whose footfalls we are currently faking, and when the next one is. */
   private pedStepAt = new Map<string, number>();
   private pedStepScan = 0;
+  /** Seconds until the next pedestrian vocalisation is allowed. */
+  private pedVoiceTimer = 3;
+  /** Seconds until the nearest church is allowed to ring again. */
+  private bellTimer = 30;
   /** Crowd headcount near the listener, drives the murmur. */
   private crowdNear = 0;
   private lastDistrict: DistrictKind | null = null;
   private kerbEventCooldown = 0;
   private nearMissCooldown = 0;
+
+  /**
+   * Event tallies. These exist purely so the verification harness can prove
+   * causality by counting rather than by inference — "the exhaust popped four
+   * times on that lift" is a measurement; "the SFX bus got louder" is a guess,
+   * because a dozen other things also land on that bus.
+   */
+  private counts: Record<string, number> = {
+    pop: 0, stone: 0, pedVoice: 0, bell: 0, horn: 0, knock: 0, kerb: 0, squeal: 0, stall: 0,
+  };
+
+  private tally(k: string): void {
+    this.counts[k] = (this.counts[k] ?? 0) + 1;
+  }
 
   masterVolume = 0.8;
 
@@ -284,12 +315,19 @@ export class AudioSystem implements System, AudioService {
         this.g.bus('music').input,
       );
 
+      // Your own horn goes on the vehicles bus, not sfx: it is part of the car,
+      // and it should duck with the car when the commentator is talking.
+      this.horn = new HornVoice(ac, this.g.bus('vehicles').input);
+
       this._ready = true;
 
       // Bank + folk track continue in the background; the game is already
       // making noise (ambience, engines) before they land.
       this.bank = new SfxBank(ac);
-      void this.bank.build();
+      const bankT0 = performance.now();
+      void this.bank.build().then(() => {
+        this._bankMs = Math.round(performance.now() - bankT0);
+      });
       void this.radio.preload();
     } catch (err) {
       console.error('[audio] unlock failed', err);
@@ -541,6 +579,8 @@ export class AudioSystem implements System, AudioService {
   /** Smoothed cost of this system's own update, ms/frame. */
   private _updateMs = 0;
   private _updateMsPeak = 0;
+  /** Wall-clock cost of synthesising the whole one-shot bank at boot. */
+  private _bankMs = 0;
 
   update(dt: number, ctx: GameContext): void {
     if (!this._ready || !this.g || !this.spatial || !this.radio || !this.ambience) return;
@@ -591,6 +631,7 @@ export class AudioSystem implements System, AudioService {
     // --- vehicles ---
     this.updateVehicles(dt, ctx, listenerPos, listenerVel, weather?.wetness ?? 0, player?.inVehicle?.id ?? null);
     this.updateSirens(dt, ctx, listenerPos, listenerVel);
+    this.updateHorn(dt, ctx);
     this.driverMoments(dt, ctx, listenerPos);
 
     // --- people ---
@@ -612,6 +653,7 @@ export class AudioSystem implements System, AudioService {
       crowd: this.crowdNear,
     }, dt);
     this.ambienceFlavour(dt, district, listenerPos);
+    this.churchBells(dt, district, listenerPos, ov ? ov.hours : weather?.timeOfDay ?? 12);
     this.districtVoice(district, listenerPos, city);
 
     // --- the jokes ---
@@ -725,12 +767,20 @@ export class AudioSystem implements System, AudioService {
         slip,
         grounded,
         wrecked: h.isWrecked,
-        airborne: (internals.airTime ?? 0) > 0.25,
+        // A vehicle standing still is not airborne, whatever its wheel raycasts
+        // say. Trams have no suspension to report contact from and accumulate
+        // airTime while parked, and an "airborne" engine flares to the redline —
+        // which is how a stationary tram ended up revving to 2300 rpm.
+        airborne: (internals.airTime ?? 0) > 0.25 && Math.abs(h.speed) > 1.5,
         isPlayer,
         distance: suppressed ? 999 : t.distance,
         roughness: t.roughness,
         damage: clamp(1 - h.health / Math.max(1, h.maxHealth), 0, 1),
         suspensionActivity: t.suspensionActivity,
+        // While the starter is turning or the car has just stalled there is no
+        // engine to hear. The `distance: 999` above handles this for other
+        // people's cars; only this handles it for your own.
+        engineOff: suppressed,
       };
 
       if (voice.kind !== probe.kind) voice.setKind(probe.kind);
@@ -751,6 +801,7 @@ export class AudioSystem implements System, AudioService {
             // Off the carriageway the same spike is a kerb, not a pothole:
             // rubber slapping a hard edge rather than a damper bottoming out.
             const id: SfxId = t.roughness > 0.45 ? 'kerb_thump' : 'suspension_knock';
+            this.tally(t.roughness > 0.45 ? 'kerb' : 'knock');
             this.playSfx(id, h.position, clamp(d * 1.4, 0.15, 0.7));
             t.knockCooldown = 0.14;
             break;
@@ -760,6 +811,50 @@ export class AudioSystem implements System, AudioService {
       } else if (comp) {
         for (let i = 0; i < comp.length; i++) t.prevCompression[i] = comp[i];
       }
+    }
+  }
+
+  /**
+   * THE HORN (H). Held, not triggered — see horn.ts for why that matters.
+   *
+   * Two things react to it, because a horn in this city is a social act:
+   * pedestrians in front of the car get out of the way, and if you lean on it
+   * for long enough somebody has an opinion about you.
+   */
+  private updateHorn(dt: number, ctx: GameContext): void {
+    if (!this.horn) return;
+    const player = ctx.tryGet(Services.Player);
+    const pv = player?.inVehicle ?? null;
+    const pressed = !!pv && ctx.input.action('horn');
+    if (pv && pressed) this.horn.setBase(hornBaseHz(pv.kind));
+    this.horn.set(pressed ? 1 : 0, dt);
+
+    if (!pressed) {
+      this.hornHeldFor = 0;
+      return;
+    }
+    this.hornHeldFor += dt;
+
+    // A blast scatters the pavement in front of you — but only once per press,
+    // and only people who could actually hear it.
+    if (this.hornHeldFor > 0.18 && this.cool('hornScatter', 2.2) && pv) {
+      this.tally('horn');
+      const peds = ctx.tryGet(Services.Peds);
+      let heard = 0;
+      for (const c of peds?.all ?? []) {
+        if (c.position.distanceTo(pv.position) < 12) heard++;
+        if (heard >= 2) break;
+      }
+      if (heard >= 1) {
+        peds?.scatter(pv.position, 9);
+        if (this.rng.bool(0.45)) this.playSfx('ped_yell', pv.position, 0.4);
+      }
+    }
+
+    // Three solid seconds of horn is not communication, it is a statement, and
+    // the commentator has material for exactly that register.
+    if (this.hornHeldFor > 3 && this.cool('hornVo', 50)) {
+      if (!this.say('carHardAccel', 1.2)) this.say('collisionMinor', 1.1);
     }
   }
 
@@ -793,6 +888,19 @@ export class AudioSystem implements System, AudioService {
     }
     t.prevHandbrake = hb;
 
+    // --- the exhaust ---
+    // The voice model decides WHETHER the pipe bangs (it owns the revs, the
+    // overrun and the rate limit); this only turns that decision into a sound.
+    if (voice.popNow) {
+      this.tally('pop');
+      this.playSfx(
+        'exhaust_pop', h.position,
+        clamp(voice.popLevel * (dacia ? 0.55 : 0.34), 0.08, 0.6),
+        // A smaller pipe pops higher.
+        (dacia ? 0.92 : 1.05) + this.rng.range(-0.08, 0.12),
+      );
+    }
+
     // --- the body ---
     // Rattle bursts on top of the continuous rattle bank, rate-limited by how
     // hard the shell is actually being shaken.
@@ -800,6 +908,17 @@ export class AudioSystem implements System, AudioService {
     if (voice.lod === 0 && t.rattleTimer <= 0 && voice.rattleActivity > 0.42) {
       t.rattleTimer = this.rng.range(0.35, 1.4) / Math.max(0.4, voice.rattleActivity);
       this.playSfx('body_rattle', h.position, clamp(voice.rattleActivity * 0.34, 0.08, 0.4));
+    }
+
+    // --- chippings ---
+    // Off the tarmac the tyres flick grit up into the arches. It is a tiny
+    // sound and it is the single clearest signal that you are no longer on the
+    // road — clearer than the roll noise, because it is transient.
+    t.stoneTimer -= dt;
+    if (voice.lod === 0 && t.stoneTimer <= 0 && t.roughness > 0.3 && speed > 3) {
+      t.stoneTimer = this.rng.range(0.06, 0.4) / Math.max(0.3, t.roughness * clamp(speed / 12, 0.3, 1.6));
+      this.tally('stone');
+      this.playSfx('stone_ping', h.position, this.rng.range(0.08, 0.24), this.rng.range(0.8, 1.3));
     }
 
     // --- the brakes ---
@@ -810,9 +929,11 @@ export class AudioSystem implements System, AudioService {
       if (braking && speed > 9) t.brakeArmed = true;
       if (t.brakeArmed && speed < 1.2 && t.prevSpeed >= 1.2) {
         t.brakeArmed = false;
+        this.tally('squeal');
         this.playSfx('brake_squeal', h.position, 0.34);
+        // And sometimes, if it is a Dacia, that is the last thing it does.
+        if (dacia && p.isPlayer) this.maybeStall(t, h.position);
       }
-      if (speed > 12) t.brakeArmed = t.brakeArmed && true;
     }
     t.prevSpeed = speed;
 
@@ -832,6 +953,48 @@ export class AudioSystem implements System, AudioService {
         this.playSfx('tram_screech', h.position, clamp(yawRate * 1.6, 0.2, 0.6), 0.9 + this.rng.range(0, 0.3));
       }
     }
+  }
+
+  /**
+   * IT STALLED.
+   *
+   * A carburettor Dacia hauled to a dead stop with the clutch still out simply
+   * dies, and then you sit there in the middle of the road turning it over while
+   * the city queues up behind you. It is the single most Bucharest thing a car
+   * can do, `engine_stall` has been sitting unused in the bank since the bank
+   * was written, and the whole sequence is already available: silence the engine
+   * voice with `suppressEngineUntil`, and the existing first-start machinery
+   * gives you the starter and the cough for free.
+   *
+   * One in five stops, at most once a minute, and never twice in a row — a car
+   * that stalls every time is not a joke, it is a broken control scheme.
+   */
+  private maybeStall(t: Tracked, position: THREE.Vector3): void {
+    if (!this._ctx) return;
+    if (!this.cool('stall', 55)) return;
+    if (!this.rng.bool(0.2)) return;
+
+    const id = t.handle.id;
+    this.playSfx('engine_stall', position, 0.55);
+    // The engine is gone for a beat and a half, which is how long it takes to
+    // realise what has happened and reach for the key.
+    this.suppressEngineUntil.set(id, this._ctx.currentTime + 1.5);
+    this.tally('stall');
+
+    window.setTimeout(() => {
+      const v = this.ctx.tryGet(Services.Vehicles)?.get(id);
+      if (!v) return;
+      this.playSfx('dacia_cough', v.position, 0.8);
+      // Restarting takes as long as the cough does; extend the silence to cover
+      // the starter rather than fading the live engine in underneath it.
+      if (this._ctx) this.suppressEngineUntil.set(id, this._ctx.currentTime + 1.3);
+      this.playSfx('body_rattle', v.position, 0.3);
+    }, 1500);
+
+    // "Nu ne lansăm niciunde. Pare că ne vom târî și atât."
+    window.setTimeout(() => {
+      if (!this.say('carFirstStart', 2)) this.say('collisionMinor', 1.6);
+    }, 3200);
   }
 
   /**
@@ -928,6 +1091,7 @@ export class AudioSystem implements System, AudioService {
         prevHandbrake: false,
         rattleTimer: 0,
         brakeArmed: false,
+        stoneTimer: 0,
         prevSpeed: 0,
         prevYaw: 0,
         screechCooldown: 0,
@@ -1119,6 +1283,11 @@ export class AudioSystem implements System, AudioService {
     if (!peds) return;
     const now = this._ctx!.currentTime;
 
+    // Before the 5 Hz gate below, because this one counts in real seconds. Put
+    // behind the gate it decremented on one frame in twelve and a three-second
+    // timer took thirty-six seconds to expire, which is why nobody ever spoke.
+    this.pedVoices(dt, ctx, listenerPos, onFoot);
+
     // Headcount at 5 Hz — it only feeds a crossfade.
     this.pedStepScan -= dt;
     if (this.pedStepScan > 0) return;
@@ -1149,6 +1318,61 @@ export class AudioSystem implements System, AudioService {
       if (this.rng.bool(0.5)) this.playSfx('cloth_rustle', w.pos, vol * 0.5);
     }
     if (this.pedStepAt.size > 64) this.pedStepAt.clear();
+  }
+
+  /**
+   * People making people noises. Not words — the *Ce Ne Enervează* clips and the
+   * street emitters do the talking. This is the layer underneath that: somebody
+   * muttering about the price of something, a cough, a laugh two doors down, a
+   * whistle at a girl. Half a second each, from a real position, and it is the
+   * cheapest immersion in the whole audio budget.
+   *
+   * Deliberately sparse — one voice every few seconds, never two at once, and
+   * never at all if there is nobody within earshot. A pavement where everybody
+   * is constantly vocalising sounds like a zoo, not a city.
+   */
+  private pedVoices(dt: number, ctx: GameContext, listenerPos: THREE.Vector3, onFoot: boolean): void {
+    this.pedVoiceTimer -= dt;
+    if (this.pedVoiceTimer > 0) return;
+    // Faster on a crowded pavement, and much slower when the player is in a car
+    // with the windows up and an engine in the way.
+    const density = clamp(this.crowdNear, 0, 1.4);
+    this.pedVoiceTimer = this.rng.range(1.6, 5.5) / Math.max(0.25, density) * (onFoot ? 1 : 3.2);
+
+    const peds = ctx.tryGet(Services.Peds);
+    if (!peds) return;
+
+    // Pick from the ones close enough to be heard as an individual rather than
+    // as part of the crowd bed.
+    const reach = onFoot ? 15 : 9;
+    const cands: THREE.Vector3[] = [];
+    for (const c of peds.all) {
+      if (!c.isAlive) continue;
+      const d = c.position.distanceTo(listenerPos);
+      if (d > reach || d < 1.2) continue;
+      cands.push(c.position);
+      if (cands.length >= 8) break;
+    }
+    if (!cands.length) return;
+    const pos = cands[this.rng.int(0, cands.length)];
+
+    // Weighting is editorial. Muttering is the default state of this city;
+    // whistling is rare enough to be a moment when it happens.
+    const roll = this.rng.next();
+    const id: SfxId = roll < 0.46 ? 'ped_mutter'
+      : roll < 0.68 ? 'ped_cough'
+      : roll < 0.9 ? 'ped_laugh'
+      : 'ped_whistle';
+    // Louder when the crowd around is thin, because then it is clearly a
+    // person; quieter in a crush, where it is texture.
+    this.tally('pedVoice');
+    this.playSfx(id, pos, this.rng.range(0.22, 0.4) * (1 - density * 0.28));
+
+    // Somebody laughing sets somebody else off. Two is a joke; three is a mob.
+    if (id === 'ped_laugh' && cands.length > 2 && this.rng.bool(0.35)) {
+      const other = cands[this.rng.int(0, cands.length)];
+      window.setTimeout(() => this.playSfx('ped_laugh', other, 0.2), this.rng.int(180, 460));
+    }
   }
 
   /**
@@ -1204,6 +1428,49 @@ export class AudioSystem implements System, AudioService {
   }
 
   /**
+   * Church bells. Bucharest has one on nearly every other corner and they are
+   * the only sound in the whole bed that is unambiguously not traffic, which
+   * makes them worth more to the sense of place than their airtime suggests.
+   *
+   * They ring on the hour and they ring the hour — three strikes at three
+   * o'clock — from a fixed bearing well above the rooftops, so they arrive from
+   * a direction and a height rather than from everywhere.
+   */
+  private churchBells(dt: number, district: DistrictKind, listenerPos: THREE.Vector3, hours: number): void {
+    this.bellTimer -= dt;
+    if (this.bellTimer > 0) return;
+    // Only where there would actually be a church tower in earshot, and not in
+    // the middle of the night.
+    const plausible = district === 'centruVechi' || district === 'cartier' || district === 'parc';
+    const h = ((hours % 24) + 24) % 24;
+    if (!plausible || h < 7 || h > 21) {
+      this.bellTimer = 20;
+      return;
+    }
+    // Roughly one peal every few minutes of play, not one per game hour: the
+    // clock runs fast and hourly chimes would be relentless.
+    this.bellTimer = this.rng.range(150, 320);
+
+    const a = this.rng.range(0, Math.PI * 2);
+    const r = this.rng.range(55, 110);
+    _v2.set(
+      listenerPos.x + Math.cos(a) * r,
+      listenerPos.y + this.rng.range(14, 26),
+      listenerPos.z + Math.sin(a) * r,
+    );
+    // Ring the hour, capped at four so it does not go on for half a minute.
+    this.tally('bell');
+    const strikes = Math.max(1, Math.min(4, Math.round(h) % 12 || 12));
+    for (let i = 0; i < strikes; i++) {
+      const at = _v2.clone();
+      window.setTimeout(
+        () => this.playSfx('church_bell', at, 0.5 - i * 0.04, 1 + this.rng.range(-0.02, 0.02)),
+        i * 2300,
+      );
+    }
+  }
+
+  /**
    * Keep the mix legible.
    *  - voice ducks music and ambience (broadcast-style, fast in / slow out)
    *  - sirens duck music and ambience
@@ -1218,7 +1485,15 @@ export class AudioSystem implements System, AudioService {
     sirenLoad = clamp(sirenLoad / MAX_SIREN_VOICES, 0, 1);
     const starLoad = clamp(this.stars / 5, 0, 1);
 
-    const ambienceDb = -8 * voiceDuck - 4 * sirenLoad - 3 * starLoad;
+    // Sirens and stars duck the city's DETAIL, inside the ambience bed, so the
+    // rain and wind keep their level — see WEATHER in ambience.ts. Only the
+    // commentator's voice ducks the whole ambience bus, because a spoken line
+    // has to sit above everything including the weather.
+    if (this.ambience) {
+      this.ambience.duck = clamp(sirenLoad * 0.55 + starLoad * 0.45, 0, 1);
+    }
+
+    const ambienceDb = -8 * voiceDuck;
     const musicDb = -4 * voiceDuck - 5 * sirenLoad;
     const vehiclesDb = -2.5 * voiceDuck - 2.5 * sirenLoad * starLoad;
     const sfxDb = -1.5 * voiceDuck;
@@ -1358,6 +1633,7 @@ export class AudioSystem implements System, AudioService {
         sampleRate: this._ctx?.sampleRate ?? 0,
         bankBuffers: this.bank?.size ?? 0,
         bankComplete: !!this.bank?.complete,
+        bankMs: this._bankMs,
         clipsLoaded: this.radio?.loadedClips ?? 0,
         clipsWarmed: this.radio?.warmed ?? 0,
         boundVehicles: this.bound.size,
@@ -1392,6 +1668,9 @@ export class AudioSystem implements System, AudioService {
         houseSpeaker: !!this.radio?.houseSpeakerLive,
         streetBeds: this.street?.bedsLive ?? 0,
         crowdNear: round(this.crowdNear),
+        horn: !!this.horn?.sounding,
+        counts: { ...this.counts },
+        hornHeldFor: round(this.hornHeldFor, 2),
         voice: this.director?.stats() ?? {},
       }),
       play: (id, x, y, z, volume) => {
@@ -1480,16 +1759,22 @@ export class AudioSystem implements System, AudioService {
           f0: round(v.state?.fundamental ?? 0, 2),
           drive: round(v.state?.drive ?? 0),
           overrun: round(v.state?.overrun ?? 0),
+          limiter: round(v.state?.limiter ?? 0),
+          pop: round(v.state?.popIntensity ?? 0),
+          reverse: round(v.state?.reverseWhine ?? 0),
           exhaust: round(v.state?.exhaustLevel ?? 0),
           induction: round(v.state?.inductionLevel ?? 0),
           roll: round(v.tyre?.rollLevel ?? 0),
           squeal: round(v.tyre?.squealLevel ?? 0),
           brakeSqueal: round(v.tyre?.brakeSquealLevel ?? 0),
           rattle: round(v.rattleActivity ?? 0),
+          brakeArmed: !!t?.brakeArmed,
+          engineOff: (this.suppressEngineUntil.get(id) ?? 0) > (this._ctx?.currentTime ?? 0),
           roughness: round(t?.roughness ?? 0),
           distance: round(t?.distance ?? 0, 1),
         };
       }),
+      selfTest: () => runOfflineTests(),
       waitReady: async (timeoutMs = 20000) => {
         const t0 = performance.now();
         while (performance.now() - t0 < timeoutMs) {
@@ -1506,6 +1791,7 @@ export class AudioSystem implements System, AudioService {
   dispose(): void {
     for (const v of this.engineVoices) v.dispose();
     for (const s of this.sirenVoices) s.dispose();
+    this.horn?.dispose();
     this.ambience?.dispose();
     this.street?.dispose();
     this.director?.stop();

@@ -146,11 +146,16 @@ describe('engine model', () => {
   });
 
   test('load changes the SPECTRUM, not just the pitch', () => {
-    const speed = 18;
-    const loaded = engineState(dacia, { speed, throttle: 1, airborne: false, wrecked: false, prevGear: 2 });
-    const lifted = engineState(dacia, { speed, throttle: 0, airborne: false, wrecked: false, prevGear: 2 });
+    // Deliberately in TOP gear. Everywhere else, lifting the throttle now also
+    // changes the gear the driver would be in (see selectGear's `load`), so the
+    // only place a loaded and an unloaded engine share a fundamental is the gear
+    // there is nothing above.
+    const speed = dacia.topSpeed * 0.84;
+    const loaded = engineState(dacia, { speed, throttle: 1, airborne: false, wrecked: false, prevGear: 3 });
+    const lifted = engineState(dacia, { speed, throttle: 0, airborne: false, wrecked: false, prevGear: 3 });
 
     // Same gear, near-identical fundamental...
+    expect(loaded.gear).toBe(dacia.gearTops.length - 1);
     expect(loaded.gear).toBe(lifted.gear);
     expect(Math.abs(loaded.fundamental - lifted.fundamental) / loaded.fundamental).toBeLessThan(0.12);
 
@@ -218,6 +223,155 @@ describe('engine model', () => {
         expect(kind.length).toBeGreaterThan(0);
       }
     }
+  });
+
+  /* ---- the fixes this pass exists for ---- */
+
+  test('a blocked car does not sit at the redline forever', () => {
+    // The bug this guards: a traffic agent stuck behind a bus holds throttle 1
+    // at 0 m/s. The clutch flare is right for the first moment and absurd after
+    // that — a whole street of stationary cars screaming at 4000 rpm.
+    const launch = engineState(dacia, {
+      speed: 0, throttle: 1, airborne: false, wrecked: false, prevGear: 0, stalledFor: 0,
+    });
+    const stuck = engineState(dacia, {
+      speed: 0, throttle: 1, airborne: false, wrecked: false, prevGear: 0, stalledFor: 3,
+    });
+    // The flare is still there the instant you ask for it...
+    expect(launch.rpm).toBeGreaterThan(dacia.idleRpm * 2.2);
+    // ...and gone once it is obvious you are going nowhere: a fast idle, not a
+    // launch. Less than a third of the way up the rev range.
+    expect(stuck.rpm).toBeLessThan(dacia.idleRpm + (dacia.maxRpm - dacia.idleRpm) * 0.3);
+    expect(stuck.rpm).toBeGreaterThan(dacia.idleRpm);
+    // And it is monotonic, so there is no point at which it flares back up.
+    let prev = Infinity;
+    for (const s of [0, 0.4, 0.8, 1.2, 1.6, 2]) {
+      const r = engineState(dacia, {
+        speed: 0, throttle: 1, airborne: false, wrecked: false, prevGear: 0, stalledFor: s,
+      }).rpm;
+      expect(r).toBeLessThanOrEqual(prev + 1);
+      prev = r;
+    }
+  });
+
+  test('a driver on a light throttle changes up early', () => {
+    // 30 km/h in a city. Flat out that is first gear; trickling it is not.
+    const speed = 8.5;
+    const cruising = engineState(dacia, {
+      speed, throttle: 0.12, airborne: false, wrecked: false, prevGear: -1,
+    });
+    const flatOut = engineState(dacia, {
+      speed, throttle: 1, airborne: false, wrecked: false, prevGear: -1,
+    });
+    expect(cruising.gear).toBeGreaterThan(flatOut.gear);
+    // And the whole point: the cruise is quiet. Below half the rev range while
+    // the same speed flat out is up near the top of it.
+    expect(cruising.rpmNorm).toBeLessThan(0.5);
+    expect(flatOut.rpmNorm).toBeGreaterThan(0.6);
+    expect(cruising.rpm).toBeLessThan(flatOut.rpm * 0.75);
+  });
+
+  test('first gear reaches a plausible road speed', () => {
+    // Guards the gearing itself. First gear on any road car tops out somewhere
+    // between 30 and 60 km/h; the first pass had these at 23 km/h, which is why
+    // everything screamed.
+    for (const [kind, spec] of Object.entries(ENGINE_SPECS)) {
+      if (kind === 'tram' || kind === 'scooter') continue; // no step-ratio box
+      const firstTopKmh = spec.gearTops[0] * spec.topSpeed * 3.6;
+      // Heavy diesels are the exception: a truck or a bus really does have a
+      // crawler first that runs out somewhere between 15 and 20 km/h.
+      const heavy = kind === 'truck' || kind === 'bus';
+      expect(firstTopKmh).toBeGreaterThan(heavy ? 13 : 20);
+      expect(firstTopKmh).toBeLessThan(70);
+    }
+  });
+
+  test('the engine runs out of breath at the top and says so', () => {
+    const mid = engineState(dacia, {
+      speed: dacia.topSpeed * 0.5, throttle: 1, airborne: false, wrecked: false, prevGear: 1,
+    });
+    const limit = engineState(dacia, {
+      speed: dacia.topSpeed * 1.05, throttle: 1, airborne: false, wrecked: false, prevGear: 3,
+    });
+    expect(mid.limiter).toBe(0);
+    expect(limit.limiter).toBeGreaterThan(0.4);
+    // Valve float takes power away as well as making a noise.
+    expect(limit.gain).toBeLessThan(dacia.trim * 1.25);
+    // Lifting off at the limit stops the float instantly — it needs throttle.
+    const lifted = engineState(dacia, {
+      speed: dacia.topSpeed * 1.05, throttle: 0, airborne: false, wrecked: false, prevGear: 3,
+    });
+    expect(lifted.limiter).toBe(0);
+  });
+
+  test('lifting off does not change gear — the revs come down with the road', () => {
+    // The bug this guards: making the shift point load-dependent also made it
+    // move the instant the driver lifted, so a closed throttle "changed up" two
+    // gears in one frame and the revs dropped 2500 in 16 ms.
+    const speed = dacia.topSpeed * 0.43;
+    const onPower = engineState(dacia, {
+      speed, throttle: 1, airborne: false, wrecked: false, prevGear: -1,
+    });
+    const justLifted = engineState(dacia, {
+      speed, throttle: 0, airborne: false, wrecked: false, prevGear: onPower.gear,
+    });
+    expect(justLifted.gear).toBe(onPower.gear);
+    // Same gear, same road speed, so the note must be within a few per cent —
+    // the drop that IS there is the load coming off, not a gear change.
+    expect(Math.abs(justLifted.rpm - onPower.rpm) / onPower.rpm).toBeLessThan(0.12);
+    // And that is what puts the overrun AT revs, which is what makes it pop.
+    expect(justLifted.overrun).toBeGreaterThan(0.8);
+    expect(justLifted.popIntensity).toBeGreaterThan(0.5);
+  });
+
+  test('the exhaust only pops on a lift from revs', () => {
+    const hardLift = engineState(dacia, {
+      speed: dacia.topSpeed * 0.9, throttle: 0, airborne: false, wrecked: false, prevGear: 3,
+    });
+    const onLoad = engineState(dacia, {
+      speed: dacia.topSpeed * 0.9, throttle: 1, airborne: false, wrecked: false, prevGear: 3,
+    });
+    const idle = engineState(dacia, {
+      speed: 0, throttle: 0, airborne: false, wrecked: false, prevGear: -1,
+    });
+    expect(hardLift.popIntensity).toBeGreaterThan(0.25);
+    expect(onLoad.popIntensity).toBe(0);
+    expect(idle.popIntensity).toBe(0);
+    // A tram has no exhaust to pop out of, whatever it is doing.
+    const tramLift = engineState(ENGINE_SPECS.tram, {
+      speed: ENGINE_SPECS.tram.topSpeed * 0.9, throttle: 0, airborne: false, wrecked: false, prevGear: 0,
+    });
+    expect(tramLift.popIntensity).toBe(0);
+  });
+
+  test('reverse whines and forward does not', () => {
+    const back = engineState(dacia, {
+      speed: -4, throttle: -0.8, airborne: false, wrecked: false, prevGear: 0,
+    });
+    const fwd = engineState(dacia, {
+      speed: 4, throttle: 0.8, airborne: false, wrecked: false, prevGear: 0,
+    });
+    const still = engineState(dacia, {
+      speed: 0, throttle: 0, airborne: false, wrecked: false, prevGear: -1,
+    });
+    expect(back.reverseWhine).toBeGreaterThan(0.5);
+    expect(fwd.reverseWhine).toBe(0);
+    expect(still.reverseWhine).toBe(0);
+    // Backing up under power is WORK, not a coast: the pedal is pushing the car
+    // the way the car is going, so the engine loads up exactly as it would
+    // going forward.
+    expect(back.drive).toBeGreaterThan(0.5);
+    expect(back.overrun).toBe(0);
+    const backCoast = engineState(dacia, {
+      speed: -4, throttle: 0, airborne: false, wrecked: false, prevGear: 0,
+    });
+    expect(backCoast.drive).toBeLessThan(back.drive * 0.6);
+    // The whine tracks road speed, not the engine note — that is what makes it
+    // read as a gear rather than as part of the engine.
+    const fast = engineState(dacia, {
+      speed: -9, throttle: -0.8, airborne: false, wrecked: false, prevGear: 0,
+    });
+    expect(fast.reverseWhineHz).toBeGreaterThan(back.reverseWhineHz * 1.4);
   });
 
   test('a truck sits far below a scooter at full chat', () => {
@@ -329,6 +483,11 @@ describe('siren', () => {
 
 describe('synthesised SFX bank', () => {
   test('every id renders a finite, non-silent, non-clipping buffer', () => {
+    // The NaN sweep is a plain loop reduced to ONE assertion rather than one
+    // assertion per sample. It covers exactly the same samples; the difference
+    // is that 25 000 `expect()` calls cost more than rendering the entire bank
+    // does, which had this test flirting with the 5 s timeout for no benefit.
+    const bad: string[] = [];
     for (const id of SFX_IDS) {
       const b = renderSfx(id, SR, new Rng(`test:${id}`));
       expect(b.length).toBeGreaterThan(SR * 0.05);
@@ -338,9 +497,18 @@ describe('synthesised SFX bank', () => {
       expect(p).toBeGreaterThan(0.05);
       expect(p).toBeLessThanOrEqual(1.0001);
       expect(r).toBeGreaterThan(0.002);
-      for (let i = 0; i < b.length; i += 97) expect(Number.isNaN(b[i])).toBe(false);
+      for (let i = 0; i < b.length; i += 97) {
+        if (!Number.isFinite(b[i])) {
+          bad.push(`${id}@${i}`);
+          break;
+        }
+      }
     }
-  });
+    expect(bad).toEqual([]);
+    // Explicit timeout: this single test synthesises every sound in the game at
+    // 44.1 kHz from scratch, which is a couple of seconds of honest DSP. The
+    // default 5 s left it flaky on a loaded machine.
+  }, 30000);
 
   test('renderers are deterministic for a given seed', () => {
     const a = renderSfx('impact_heavy', SR, new Rng('seed-x'));

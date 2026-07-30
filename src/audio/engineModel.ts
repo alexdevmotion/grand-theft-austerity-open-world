@@ -44,21 +44,34 @@ export interface EngineSpec {
   clatter: number;
 }
 
+/**
+ * Gear tops are the normalised road speed at the redline in each gear, and they
+ * are the single most audible number in this file.
+ *
+ * The first pass had first gear topping out at 0.15-0.17 of top speed — around
+ * 23 km/h for a car that will do 150 — so every vehicle in the city sat at
+ * 5000 rpm at walking pace and Bucharest sounded like a permanent drag race.
+ * Real gearboxes are spread far wider: first gear on a 1970s four-speed reaches
+ * something like 40 km/h at the limit, which on this scale is ~0.28. Heavy
+ * diesels are the exception — a truck genuinely does have a crawler first and
+ * six closely stacked ratios, and it genuinely does spend its life at 1800 rpm.
+ */
 export const ENGINE_SPECS: Record<EngineClass, EngineSpec> = {
   // Dacia 1300: 1.3 four, ~5200 rpm redline, boomy shell, rattly everything.
-  dacia:   { cylinders: 4, firingScale: 1, idleRpm: 780,  maxRpm: 5200, gearTops: [0.17, 0.36, 0.62, 1.0],       topSpeed: 38, trim: 1.00, rattle: 1.00, bodyResonance: 132, exhaustCutoff: 420, clatter: 0.22 },
-  sedan:   { cylinders: 4, firingScale: 1, idleRpm: 800,  maxRpm: 6200, gearTops: [0.15, 0.31, 0.50, 0.74, 1.0], topSpeed: 44, trim: 0.82, rattle: 0.25, bodyResonance: 165, exhaustCutoff: 520, clatter: 0.08 },
-  hatch:   { cylinders: 4, firingScale: 1, idleRpm: 820,  maxRpm: 6400, gearTops: [0.16, 0.33, 0.53, 0.77, 1.0], topSpeed: 40, trim: 0.78, rattle: 0.35, bodyResonance: 178, exhaustCutoff: 560, clatter: 0.10 },
-  van:     { cylinders: 4, firingScale: 1, idleRpm: 700,  maxRpm: 4400, gearTops: [0.14, 0.30, 0.52, 0.78, 1.0], topSpeed: 35, trim: 0.95, rattle: 0.45, bodyResonance: 108, exhaustCutoff: 340, clatter: 0.62 },
-  truck:   { cylinders: 6, firingScale: 1, idleRpm: 600,  maxRpm: 2600, gearTops: [0.10, 0.21, 0.34, 0.50, 0.72, 1.0], topSpeed: 28, trim: 1.15, rattle: 0.40, bodyResonance: 78,  exhaustCutoff: 240, clatter: 0.85 },
-  bus:     { cylinders: 6, firingScale: 1, idleRpm: 580,  maxRpm: 2400, gearTops: [0.12, 0.26, 0.44, 0.68, 1.0], topSpeed: 25, trim: 1.10, rattle: 0.35, bodyResonance: 72,  exhaustCutoff: 230, clatter: 0.80 },
-  police:  { cylinders: 6, firingScale: 1, idleRpm: 760,  maxRpm: 6600, gearTops: [0.14, 0.29, 0.47, 0.70, 1.0], topSpeed: 50, trim: 0.90, rattle: 0.12, bodyResonance: 190, exhaustCutoff: 640, clatter: 0.05 },
+  dacia:   { cylinders: 4, firingScale: 1, idleRpm: 780,  maxRpm: 5200, gearTops: [0.28, 0.48, 0.72, 1.0],       topSpeed: 38, trim: 1.00, rattle: 1.00, bodyResonance: 132, exhaustCutoff: 420, clatter: 0.22 },
+  sedan:   { cylinders: 4, firingScale: 1, idleRpm: 800,  maxRpm: 6200, gearTops: [0.24, 0.42, 0.60, 0.79, 1.0], topSpeed: 44, trim: 0.82, rattle: 0.25, bodyResonance: 165, exhaustCutoff: 520, clatter: 0.08 },
+  hatch:   { cylinders: 4, firingScale: 1, idleRpm: 820,  maxRpm: 6400, gearTops: [0.25, 0.43, 0.61, 0.80, 1.0], topSpeed: 40, trim: 0.78, rattle: 0.35, bodyResonance: 178, exhaustCutoff: 560, clatter: 0.10 },
+  van:     { cylinders: 4, firingScale: 1, idleRpm: 700,  maxRpm: 4400, gearTops: [0.23, 0.41, 0.60, 0.80, 1.0], topSpeed: 35, trim: 0.95, rattle: 0.45, bodyResonance: 108, exhaustCutoff: 340, clatter: 0.62 },
+  truck:   { cylinders: 6, firingScale: 1, idleRpm: 600,  maxRpm: 2600, gearTops: [0.15, 0.27, 0.41, 0.57, 0.77, 1.0], topSpeed: 28, trim: 1.15, rattle: 0.40, bodyResonance: 78,  exhaustCutoff: 240, clatter: 0.85 },
+  bus:     { cylinders: 6, firingScale: 1, idleRpm: 580,  maxRpm: 2400, gearTops: [0.21, 0.39, 0.59, 0.79, 1.0], topSpeed: 25, trim: 1.10, rattle: 0.35, bodyResonance: 72,  exhaustCutoff: 230, clatter: 0.80 },
+  police:  { cylinders: 6, firingScale: 1, idleRpm: 760,  maxRpm: 6600, gearTops: [0.22, 0.40, 0.58, 0.78, 1.0], topSpeed: 50, trim: 0.90, rattle: 0.12, bodyResonance: 190, exhaustCutoff: 640, clatter: 0.05 },
   // Not combustion: an electric traction whine plus wheel-on-rail rumble, so
   // the "firing" series is voiced high up.
   tram:    { cylinders: 2, firingScale: 8, idleRpm: 300,  maxRpm: 2200, gearTops: [1.0],                          topSpeed: 17, trim: 0.85, rattle: 0.20, bodyResonance: 62,  exhaustCutoff: 180, clatter: 0.00 },
   // A 2-stroke single: true firing rate is 12-140 Hz, but the buzz you hear is
-  // its 4th order.
-  scooter: { cylinders: 1, firingScale: 4, idleRpm: 1400, maxRpm: 8200, gearTops: [0.42, 1.0],                    topSpeed: 8.5, trim: 0.42, rattle: 0.55, bodyResonance: 320, exhaustCutoff: 1100, clatter: 0.02 },
+  // its 4th order. One "gear" because a variomatic has no steps — it just
+  // screams at one pitch and the scenery speeds up.
+  scooter: { cylinders: 1, firingScale: 4, idleRpm: 1400, maxRpm: 8200, gearTops: [0.55, 1.0],                    topSpeed: 8.5, trim: 0.42, rattle: 0.55, bodyResonance: 320, exhaustCutoff: 1100, clatter: 0.02 },
 };
 
 export interface EngineInput {
@@ -78,6 +91,19 @@ export interface EngineInput {
    * It only bites near idle, so it cannot smear a note under throttle.
    */
   idleWander?: number;
+  /**
+   * Seconds the throttle has been held while the car is barely moving.
+   *
+   * This exists because of what a city full of traffic AI actually sounds like
+   * without it. An agent stuck behind a bus holds throttle 1.0 at 0 m/s, and the
+   * naive clutch-slip term ("in first gear the engine revs ahead of the
+   * wheels") then parks that car at 3500 rpm for as long as it is blocked — a
+   * whole street of stationary cars screaming. No driver does that: the flare
+   * lasts about as long as it takes to realise you are not going anywhere, and
+   * then your left foot goes down and the engine drops to a fast idle. So the
+   * flare decays with this, and only this.
+   */
+  stalledFor?: number;
 }
 
 export interface EngineState {
@@ -102,6 +128,23 @@ export interface EngineState {
   drive: number;
   /** 0..1 — overrun burble (throttle lifted at speed). */
   overrun: number;
+  /**
+   * 0..1 — how hard the engine is hitting its limit. On a 1980s carburettor
+   * there is no rev limiter, there is valve float: past the redline the engine
+   * simply stops making power in a ragged, stuttering way. The voice turns this
+   * into a ~13 Hz gate on the harmonic stack, which is what the ear reads as
+   * "that is all it has".
+   */
+  limiter: number;
+  /**
+   * 0..1 — how much unburnt fuel is going down the exhaust right now. A lift at
+   * high revs fills the pipe and it pops. Purely a scheduling weight; the
+   * one-shot is fired by the audio system.
+   */
+  popIntensity: number;
+  /** 0..1 straight-cut reverse gear whine, and its pitch in Hz. */
+  reverseWhine: number;
+  reverseWhineHz: number;
   /** Overall voice gain before distance attenuation. */
   gain: number;
 }
@@ -111,46 +154,96 @@ export const HARMONIC_ORDERS = [1, 2, 3, 4, 6, 8] as const;
 
 /**
  * Gear selection with hysteresis: a gear is held until normalised speed passes
- * its top, and downshifts only below 88% of the gear below's top. Without the
- * hysteresis the note chatters between two gears at a cruise.
+ * its shift point, and downshifts only below 88% of the gear below's. Without
+ * the hysteresis the note chatters between two gears at a cruise.
+ *
+ * `load` (0..1 throttle) decides WHERE in the gear the driver changes up, and
+ * that is not a detail — it is the difference between a city that hums and a
+ * city that screams. Flat out you use every last rev; trickling along at a
+ * tenth of a throttle you are up into third by 40 km/h and sitting at 2000 rpm.
+ * Selecting purely on speed, as the first pass did, meant a taxi doing 30 km/h
+ * was pinned in first at 5200 rpm — technically consistent, audibly absurd.
  */
-export function selectGear(spec: EngineSpec, speedNorm: number, prevGear: number): number {
+export function selectGear(
+  spec: EngineSpec, speedNorm: number, prevGear: number, load = 1,
+): number {
   const tops = spec.gearTops;
-  let g = 0;
-  while (g < tops.length - 1 && speedNorm > tops[g]) g++;
-  if (prevGear >= 0 && prevGear < tops.length) {
-    // Hold the previous gear if we have not dropped meaningfully below it.
-    if (prevGear > g) {
-      const downTo = (prevGear >= 1 ? tops[prevGear - 1] : 0) * 0.88;
-      if (speedNorm > downTo) g = prevGear;
-    }
+  const l = clamp(load, 0, 1);
+  // 0.52 of the gear at a trickle, all of it at full throttle.
+  const shiftAt = lerp(0.52, 1, l);
+
+  if (prevGear < 0 || prevGear >= tops.length) {
+    // No history — pick whatever gear this speed and pedal imply.
+    let g = 0;
+    while (g < tops.length - 1 && speedNorm > tops[g] * shiftAt) g++;
+    return g;
   }
+
+  let g = prevGear;
+  // An UPSHIFT needs the driver's foot in it. This gate matters more than it
+  // looks: without it, lifting off at 60 km/h instantly moves the shift point
+  // down, the box "changes up" two gears in one frame, and the revs fall off a
+  // cliff from 4800 to 2300. A real car does not do that — you lift, and you
+  // engine-brake in the gear you were already in while the revs come down with
+  // the road speed. Which is also the only way the overrun is ever AT revs, and
+  // therefore the only way the exhaust ever pops.
+  if (l > 0.12) {
+    while (g < tops.length - 1 && speedNorm > tops[g] * shiftAt) g++;
+  }
+  // A DOWNSHIFT happens whether the driver wants it or not as the speed falls.
+  // Earlier under power (you want the revs) than on a coast (you are happy to
+  // let it lug down in a tall gear).
+  const downAt = lerp(0.45, 0.8, l);
+  while (g > 0 && speedNorm < tops[g - 1] * downAt) g--;
   return g;
 }
 
 export function engineState(spec: EngineSpec, input: EngineInput): EngineState {
   const absSpeed = Math.abs(input.speed);
   const speedNorm = clamp(absSpeed / spec.topSpeed, 0, 1.15);
-  const gear = selectGear(spec, speedNorm, input.prevGear);
-  const tops = spec.gearTops;
-  const lo = gear === 0 ? 0 : tops[gear - 1];
-  const hi = tops[gear];
-  const within = clamp((speedNorm - lo) / Math.max(1e-4, hi - lo), 0, 1.2);
 
+  // Load is the pedal pushing the car the way the car is already going, and
+  // braking is the pedal fighting it — which means in reverse the signs flip.
+  // Taking `throttle > 0` as load unconditionally (as the first pass did) made
+  // reversing read as a permanent coast: no load, no brightness, no noise, and
+  // the engine sounding like it was switched off while you backed up a hill.
   const throttle = clamp(input.throttle, -1, 1);
-  const load = clamp(throttle, 0, 1);
-  const braking = clamp(-throttle, 0, 1);
+  const direction = input.speed < -0.35 ? -1
+    : input.speed > 0.35 ? 1
+    // At a standstill the pedal itself says which way you intend to go.
+    : throttle < 0 ? -1 : 1;
+  const signed = throttle * direction;
+  const load = clamp(signed, 0, 1);
+  const braking = clamp(-signed, 0, 1);
 
-  // Base rev band inside the gear. First gear starts at idle; higher gears
-  // drop back to ~34% of the band on the upshift, which is what makes an
-  // upshift audible as a dip rather than a continuous ramp.
-  const bandFloor = gear === 0 ? 0 : 0.34;
-  let rpmNorm = clamp(bandFloor + (1 - bandFloor) * within, 0, 1.08);
+  const gear = selectGear(spec, speedNorm, input.prevGear, load);
+  const tops = spec.gearTops;
+
+  // Revs from road speed through the gear, exactly: `gearTops[g]` IS the road
+  // speed at which gear g reaches the redline, so the engine sits at
+  // `speedNorm / gearTops[g]` of its range. Nothing else is needed —
+  //
+  //  - the upshift dip falls out for free and is the real ratio step
+  //    (0.28 → 0.48 on a Dacia is a 42% rev drop, which is what a four-speed
+  //    box does);
+  //  - and, unlike the previous formulation, the note keeps tracking the road
+  //    when the car is below its current gear's nominal band. That case is not
+  //    rare — the downshift hysteresis puts you there every time you slow down
+  //    in gear — and the old fixed 34% floor pinned the engine at a constant
+  //    2283 rpm through it, so decelerating in gear made no sound at all.
+  let rpmNorm = clamp(speedNorm / Math.max(1e-4, tops[gear]), 0, 1.08);
 
   // Clutch slip: in first gear the engine revs ahead of the wheels until the
   // wheel-derived speed catches up and the clutch locks. Expressed as a max()
   // rather than a threshold so there is no cliff when the car starts rolling.
-  if (gear === 0) rpmNorm = Math.max(rpmNorm, load * 0.62);
+  //
+  // The flare DECAYS while the car is not actually going anywhere (see
+  // `stalledFor`): a driver who is not moving stops asking. Without the decay
+  // every blocked traffic agent in the city holds full revs indefinitely.
+  if (gear === 0) {
+    const flare = clamp(1 - (input.stalledFor ?? 0) / 1.4, 0.14, 1);
+    rpmNorm = Math.max(rpmNorm, load * 0.62 * flare);
+  }
   if (input.airborne) rpmNorm = Math.max(rpmNorm, 0.55 + load * 0.45);
 
   // Load pulls a couple of hundred rpm; lifting lets it sag.
@@ -212,8 +305,32 @@ export function engineState(spec: EngineSpec, input: EngineInput): EngineState {
   const drive = clamp(load * 0.7 + rpmNorm * 0.45 + (input.wrecked ? 0.4 : 0), 0, 1);
   const detuneCents = spec.rattle * lerp(4, 22, 1 - rpmNorm) * (input.wrecked ? 2.4 : 1);
 
+  // ---- the limit --------------------------------------------------
+  // Past ~97% of the usable band the engine is out of breath. Trams and buses
+  // are geared so they never get there; a Dacia held flat in third does.
+  const limiter = clamp((rpmNorm - 0.96) / 0.1, 0, 1) * clamp(load * 1.4, 0, 1);
+
+  // ---- pops -------------------------------------------------------
+  // Unburnt fuel in a hot pipe. Needs revs, a closed throttle, and a pipe that
+  // was working a moment ago — which is exactly what `overrun` already means.
+  // A tram has no exhaust; a diesel is too lazy to bang.
+  const popIntensity = clamp(overrun * rpmNorm * 1.5 - 0.18, 0, 1)
+    * (spec.exhaustCutoff > 200 ? 1 : 0) * lerp(1, 0.25, spec.clatter);
+
+  // ---- reverse ----------------------------------------------------
+  // Reverse is the one straight-cut gear in the box, so it sings where the
+  // forward gears hum. It is a tone at a high multiple of the wheel rate, not
+  // of the firing rate, which is why it does not follow the engine note.
+  const reversing = input.speed < -0.35;
+  const reverseWhine = reversing
+    ? clamp((absSpeed - 0.3) / 2.4, 0, 1) * (0.35 + load * 0.65)
+    : 0;
+  const reverseWhineHz = clamp(320 + absSpeed * 210, 260, 3200);
+
   // Total loudness rises with both revs and load, but never to zero at idle.
-  const gain = spec.trim * clamp(0.24 + rpmNorm * 0.5 + load * 0.34, 0, 1.25);
+  const gain = spec.trim * clamp(0.24 + rpmNorm * 0.5 + load * 0.34, 0, 1.25)
+    // Valve float takes power away as well as making a noise.
+    * lerp(1, 0.86, limiter);
 
   return {
     gear,
@@ -229,6 +346,10 @@ export function engineState(spec: EngineSpec, input: EngineInput): EngineState {
     exhaustLevel,
     drive,
     overrun,
+    limiter,
+    popIntensity,
+    reverseWhine,
+    reverseWhineHz,
     gain,
   };
 }

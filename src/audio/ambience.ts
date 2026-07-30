@@ -12,6 +12,11 @@
  * The cabin filter closes when the player is inside a vehicle — the city goes
  * muffled and the engine takes over, which is most of what "being in a car"
  * sounds like.
+ *
+ * One layer deliberately does the opposite: `roofRain` is only audible INSIDE
+ * a car, and it bypasses the cabin filter entirely, because rain on a Dacia's
+ * roof is not the street's rain arriving muffled — it is a different sound
+ * made by a different object forty centimetres over your head.
  */
 
 import type { DistrictKind } from '../core/services';
@@ -19,18 +24,33 @@ import { Rng } from '../core/rng';
 import { approach, clamp } from './dsp';
 import {
   renderConstructionLoop, renderCrowdLoop, renderHvacLoop, renderIndustrialLoop,
-  renderParkLoop, renderRainLoop, renderTrafficLoop, renderTramLoop,
-  renderWindLoop, toAudioBuffer,
+  renderParkLoop, renderRainLoop, renderRoofRainLoop, renderTrafficLoop,
+  renderTramLoop, renderWindLoop, toAudioBuffer,
 } from './bank';
 
 export type AmbienceLayer =
   | 'traffic' | 'crowd' | 'tram' | 'wind' | 'rain' | 'industrial' | 'hvac'
-  | 'park' | 'construction';
+  | 'park' | 'construction' | 'roofRain';
 
 export const AMBIENCE_LAYERS: AmbienceLayer[] = [
   'traffic', 'crowd', 'tram', 'wind', 'rain', 'industrial', 'hvac', 'park',
-  'construction',
+  'construction', 'roofRain',
 ];
+
+/** Layers that must NOT go through the cabin muffling filter. */
+const UNMUFFLED: ReadonlySet<AmbienceLayer> = new Set<AmbienceLayer>(['roofRain']);
+
+/**
+ * Layers the chase mix is NOT allowed to duck away.
+ *
+ * The bus-level duck (stars + sirens + voice) is right for the city's *detail* —
+ * a crowd murmur and a distant tram should get out of the way of three sirens.
+ * It is wrong for the weather, which is not detail: it is the physical situation
+ * the chase is happening inside. Ducking the ambience bus at five stars in a
+ * storm took the rain down to -38 dBFS and left the player being chased through
+ * silent weather, which reads as a bug in the rain rather than as focus.
+ */
+const WEATHER: ReadonlySet<AmbienceLayer> = new Set<AmbienceLayer>(['rain', 'roofRain', 'wind']);
 
 type Mix = Partial<Record<AmbienceLayer, number>>;
 
@@ -87,6 +107,11 @@ export class AmbienceBed {
   /** Exposed for the debug hook. */
   readonly mix: Record<string, number> = {};
   district: DistrictKind = 'bulevard';
+  /**
+   * 0..1 — how hard the chase is asking the city's detail to get out of the way.
+   * Set by AudioSystem; the weather layers ignore it (see WEATHER).
+   */
+  duck = 0;
 
   constructor(ctx: AudioContext, destination: AudioNode, seed = 'gta-ambience') {
     this.ctx = ctx;
@@ -113,6 +138,7 @@ export class AmbienceBed {
       industrial: () => renderIndustrialLoop(sr, 10, rng.fork('industrial')),
       hvac: () => renderHvacLoop(sr, 6, rng.fork('hvac')),
       park: () => renderParkLoop(sr, 9, rng.fork('park')),
+      roofRain: () => renderRoofRainLoop(sr, 5, rng.fork('roofRain')),
     };
 
     for (const name of AMBIENCE_LAYERS) {
@@ -123,7 +149,7 @@ export class AmbienceBed {
       const gain = ctx.createGain();
       gain.gain.value = 0;
       src.connect(gain);
-      gain.connect(this.cabin);
+      gain.connect(UNMUFFLED.has(name) ? this.out : this.cabin);
       src.start(0, rng.range(0, b.duration));
       this.layers.set(name, { name, src, gain, target: 0, current: 0 });
       this.mix[name] = 0;
@@ -175,6 +201,16 @@ export class AmbienceBed {
           break;
         case 'rain':
           v = rain * 0.95 + wet * 0.1;
+          // Inside, the glass takes the street's rain away almost entirely and
+          // the roof layer replaces it.
+          if (input.inCabin) v *= 0.3;
+          break;
+        case 'roofRain':
+          // Only in the car, only when it is actually raining, and louder as
+          // you drive into it — the drops hit harder at 50 km/h.
+          v = input.inCabin
+            ? rain * (0.75 + speedWind * 0.5)
+            : 0;
           break;
         case 'park':
           v *= dayness;
@@ -192,10 +228,12 @@ export class AmbienceBed {
 
     // Crossfade. 1.6 s time constant — audible as a change, never as a cut.
     const t = this.ctx.currentTime;
+    const detailDuck = 1 - clamp(this.duck, 0, 1) * 0.82;
     for (const l of this.layers.values()) {
       l.current = approach(l.current, l.target, 0.65, dt);
-      l.gain.gain.setTargetAtTime(l.current * 0.55, t, 0.25);
-      this.mix[l.name] = Math.round(l.current * 1000) / 1000;
+      const trim = WEATHER.has(l.name) ? 1 : detailDuck;
+      l.gain.gain.setTargetAtTime(l.current * 0.55 * trim, t, 0.25);
+      this.mix[l.name] = Math.round(l.current * trim * 1000) / 1000;
     }
 
     // Cabin muffling.

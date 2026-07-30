@@ -9,13 +9,16 @@
  *   noise loop ─▶ induction BP ─▶ induction gain ────────┤                     │
  *   noise loop ─▶ exhaust LP  ─▶ exhaust gain ───────────┘                     │
  *                                                                              │
- *   noise loop ─▶ roll BP   ─▶ roll gain ───────────────────────────────┐      │
- *   noise loop ─▶ spray HP  ─▶ spray gain ──────────────────────────────┤      │
+ *   noise loop ─▶ roll BP    ─▶ roll gain ──────────────────────────────┐      │
+ *   noise loop ─▶ spray HP   ─▶ spray gain ─────────────────────────────┤      │
  *   squeal loop ─▶ squeal BP ─▶ squeal gain ────────────────────────────┤      │
+ *   saw osc (reverse gear)   ─▶ whine BP ─▶ whine gain ────────────────┤      │
  *                                                                       ▼      ▼
- *                                                       voiceGain ◀─────┴──────┘
- *                                                            │
- *                                              panner ─▶ occlusion LP ─▶ vehicles bus
+ *                          cabinIn ◀──────────────────────────────┴──────┘
+ *                             │
+ *          bulkhead LP ─▶ cabin low shelf ─▶ voiceGain
+ *                                               │
+ *                                  panner ─▶ occlusion LP ─▶ vehicles bus
  *
  * The oscillators never stop. LOD mutes branches rather than tearing the graph
  * down, so a car driving past does not cost a graph rebuild.
@@ -23,6 +26,12 @@
  * Doppler is explicit (WebAudio dropped it): the whole oscillator bank plus the
  * noise playback rates are detuned by the radial relative velocity, which is
  * what gives a pass-by its falling pitch.
+ *
+ * The bulkhead filter is the difference between hearing your own car and
+ * hearing somebody else's. From the driver's seat the engine arrives through a
+ * steel firewall — the top two octaves are gone and the boom builds up in the
+ * box — which is why the same synthesis has to sound like two different things
+ * depending on whether you are in it.
  */
 
 import * as THREE from 'three';
@@ -58,6 +67,20 @@ export interface VehicleProbe {
   damage?: number;
   /** Mean |d(compression)/dt| across the wheels — how hard the road is working. */
   suspensionActivity?: number;
+  /**
+   * The engine is not running: it has stalled, or it is still being cranked.
+   *
+   * This has to be a real state rather than "throttle 0 at 0 m/s", because the
+   * caller's existing trick for muting a starting engine — reporting a distance
+   * of 999 m — does nothing for the player's own car, since `lodForDistance`
+   * short-circuits to LOD 0 for the player. The result was a stall gag playing
+   * over an engine that was audibly still idling.
+   *
+   * The tyres are deliberately NOT silenced by this. A car whose engine has
+   * died is still rolling, and hearing the roll continue while the engine goes
+   * is most of what makes a stall read as a stall.
+   */
+  engineOff?: boolean;
 }
 
 /** 0 = full synthesis, 3 = silent. */
@@ -108,6 +131,16 @@ export class VehicleVoice {
   private brakeBp: BiquadFilterNode;
   private brakeGain: GainNode;
 
+  /** Reverse: the one straight-cut gear in the box. */
+  private whine: OscillatorNode;
+  private whineBp: BiquadFilterNode;
+  private whineGain: GainNode;
+
+  /** Everything the car makes lands here, before the cabin/no-cabin colouring. */
+  private cabinIn: GainNode;
+  private bulkhead: BiquadFilterNode;
+  private cabinShelf: BiquadFilterNode;
+
   readonly voiceGain: GainNode;
   slot: SpatialSlot | null = null;
 
@@ -130,6 +163,21 @@ export class VehicleVoice {
   private wanderTimer = 0;
   /** Rattle burst scheduling is the audio system's job; this is the level. */
   rattleActivity = 0;
+  /**
+   * Seconds the throttle has been held while the car is not going anywhere.
+   * Feeds the clutch-flare decay in `engineState` — see EngineInput.stalledFor.
+   */
+  private stalledFor = 0;
+  /** Phase of the valve-float stutter, radians. */
+  private limiterPhase = 0;
+  /**
+   * Set for exactly one frame when the exhaust should bang. Read and cleared by
+   * the audio system, which owns the one-shot pool.
+   */
+  popNow = false;
+  private popTimer = 0;
+  /** How loud the pop that was just requested should be. */
+  popLevel = 0;
 
   constructor(
     ctx: AudioContext,
@@ -145,6 +193,23 @@ export class VehicleVoice {
     this.voiceGain = ctx.createGain();
     this.voiceGain.gain.value = 0;
     this.voiceGain.connect(destination);
+
+    // --- cabin colouring ---
+    // Wide open by default (you are hearing the car through open air); closed
+    // down to a firewall when this voice IS the car you are sitting in.
+    this.cabinIn = ctx.createGain();
+    this.cabinIn.gain.value = 1;
+    this.bulkhead = ctx.createBiquadFilter();
+    this.bulkhead.type = 'lowpass';
+    this.bulkhead.frequency.value = 21000;
+    this.bulkhead.Q.value = 0.55;
+    this.cabinShelf = ctx.createBiquadFilter();
+    this.cabinShelf.type = 'lowshelf';
+    this.cabinShelf.frequency.value = 110;
+    this.cabinShelf.gain.value = 0;
+    this.cabinIn.connect(this.bulkhead);
+    this.bulkhead.connect(this.cabinShelf);
+    this.cabinShelf.connect(this.voiceGain);
 
     this.engineGain = ctx.createGain();
     this.engineGain.gain.value = 1;
@@ -167,7 +232,7 @@ export class VehicleVoice {
     this.preShaper.connect(this.shaper);
     this.shaper.connect(this.bodyEq);
     this.bodyEq.connect(this.engineGain);
-    this.engineGain.connect(this.voiceGain);
+    this.engineGain.connect(this.cabinIn);
 
     // --- harmonic stack ---
     for (let i = 0; i < HARMONIC_ORDERS.length; i++) {
@@ -227,7 +292,7 @@ export class VehicleVoice {
     this.rollGain.gain.value = 0;
     this.rollSrc.connect(this.rollBp);
     this.rollBp.connect(this.rollGain);
-    this.rollGain.connect(this.voiceGain);
+    this.rollGain.connect(this.cabinIn);
 
     this.spraySrc = loopSource(ctx, noise, 0.71);
     this.sprayHp = ctx.createBiquadFilter();
@@ -238,13 +303,13 @@ export class VehicleVoice {
     this.sprayGain.gain.value = 0;
     this.spraySrc.connect(this.sprayHp);
     this.sprayHp.connect(this.sprayGain);
-    this.sprayGain.connect(this.voiceGain);
+    this.sprayGain.connect(this.cabinIn);
 
     this.squealSrc = loopSource(ctx, squeal, 1);
     this.squealGain = ctx.createGain();
     this.squealGain.gain.value = 0;
     this.squealSrc.connect(this.squealGain);
-    this.squealGain.connect(this.voiceGain);
+    this.squealGain.connect(this.cabinIn);
 
     // Brake pads. Same source bed, but a 2-3 kHz resonance with a very high Q
     // — narrow enough that it reads as a single screaming tone rather than
@@ -257,7 +322,25 @@ export class VehicleVoice {
     this.brakeGain.gain.value = 0;
     this.squealSrc.connect(this.brakeBp);
     this.brakeBp.connect(this.brakeGain);
-    this.brakeGain.connect(this.voiceGain);
+    this.brakeGain.connect(this.cabinIn);
+
+    // Reverse gear. A sawtooth is the right shape — a straight-cut gear tooth
+    // mesh is a sequence of impacts, not a pure tone — pushed through a
+    // moderately resonant bandpass that tracks it so it stays a whine rather
+    // than becoming a buzz saw.
+    this.whine = ctx.createOscillator();
+    this.whine.type = 'sawtooth';
+    this.whine.frequency.value = 400;
+    this.whineBp = ctx.createBiquadFilter();
+    this.whineBp.type = 'bandpass';
+    this.whineBp.frequency.value = 800;
+    this.whineBp.Q.value = 3.5;
+    this.whineGain = ctx.createGain();
+    this.whineGain.gain.value = 0;
+    this.whine.connect(this.whineBp);
+    this.whineBp.connect(this.whineGain);
+    this.whineGain.connect(this.cabinIn);
+    this.whine.start();
   }
 
   setKind(kind: EngineClass): void {
@@ -310,6 +393,15 @@ export class VehicleVoice {
     }
     this.wander = approach(this.wander, this.wanderTarget, 2.2, dt);
 
+    // Standing on it and going nowhere. Accumulates while the pedal is down and
+    // the car is not moving; resets the instant it starts to roll, which is why
+    // pulling away still gets the full clutch flare.
+    if (this.smoothedThrottle > 0.35 && Math.abs(p.speed) < 1.6) {
+      this.stalledFor = Math.min(4, this.stalledFor + dt);
+    } else {
+      this.stalledFor = Math.max(0, this.stalledFor - dt * 2.5);
+    }
+
     const st = engineState(this.spec, {
       speed: p.speed,
       throttle: this.smoothedThrottle,
@@ -318,6 +410,7 @@ export class VehicleVoice {
       prevGear: this.prevGear,
       // A tired engine hunts harder; a bent one hunts hardest.
       idleWander: this.wander * (0.5 + this.spec.rattle * 0.7 + (p.damage ?? 0) * 0.8),
+      stalledFor: this.stalledFor,
     });
     const gearChanged = st.gear !== this.prevGear && this.prevGear >= 0;
     this.prevGear = st.gear;
@@ -343,25 +436,48 @@ export class VehicleVoice {
     );
     const cents = ratioToCents(dop);
 
+    // Dead engine: everything the engine makes goes, over 60 ms so it sounds
+    // like it died rather than like it was switched off at the mixing desk.
+    const off = !!p.engineOff;
+    const engineLive = off ? 0 : 1;
+    this.engineGain.gain.setTargetAtTime(engineLive, t, 0.06);
+
+    // ---- valve float ----
+    // A ~13 Hz square-ish gate on the whole stack, deepening with how far past
+    // the limit the engine is. Advanced by dt rather than by context time so it
+    // stays coherent across a frame-rate change.
+    this.limiterPhase = (this.limiterPhase + dt * 13.2 * Math.PI * 2) % (Math.PI * 2);
+    const floatGate = st.limiter > 0.02
+      ? 1 - st.limiter * 0.62 * (0.5 + 0.5 * Math.sign(Math.sin(this.limiterPhase)))
+      : 1;
+
     // ---- harmonic stack ----
     // 25 ms smoothing: fast enough to follow a throttle stab, slow enough to
     // avoid the zipper artefacts of per-frame setValueAtTime.
     const tc = 0.025;
+    // The float gate has to be faster than the note smoothing or it turns into
+    // a tremolo instead of a stutter.
+    const gateTc = st.limiter > 0.02 ? 0.006 : tc;
     const nH = LOD_HARMONICS[lod];
     for (let i = 0; i < this.oscs.length; i++) {
       const on = i < nH;
       const f = clamp(st.fundamental * HARMONIC_ORDERS[i], 12, 12000);
       this.oscs[i].frequency.setTargetAtTime(f, t, tc);
       this.oscs[i].detune.setTargetAtTime(cents, t, tc);
-      this.oscGains[i].gain.setTargetAtTime(on ? st.harmonics[i] * 0.26 : 0, t, tc);
+      this.oscGains[i].gain.setTargetAtTime(
+        on ? st.harmonics[i] * 0.26 * floatGate : 0, t, gateTc,
+      );
     }
 
     // Rattle bank: only worth its node at LOD 0-1. Level tracks how hard the
     // car is being shaken — revs, road, and how bent it is — because a Dacia
     // sitting at idle on smooth tarmac does not troncăne, it only bate.
     const rough = clamp(p.roughness ?? 0, 0, 1);
+    // Rough ground only shakes a car that is MOVING over it. A Dacia parked on
+    // the pavement is on rough ground and is not troncănind at all.
+    const roughShake = rough * clamp((Math.abs(p.speed) - 0.5) / 3, 0, 1);
     const shake = clamp(
-      st.rpmNorm * 0.5 + rough * 0.7 + clamp((p.suspensionActivity ?? 0) / 3, 0, 1) * 0.6 + (p.damage ?? 0) * 0.5,
+      st.rpmNorm * 0.5 + roughShake * 0.7 + clamp((p.suspensionActivity ?? 0) / 3, 0, 1) * 0.6 + (p.damage ?? 0) * 0.5,
       0, 1.6,
     );
     this.rattleActivity = shake * this.spec.rattle;
@@ -407,6 +523,52 @@ export class VehicleVoice {
     this.brakeBp.frequency.setTargetAtTime(clamp(ty.brakeSquealHz * dop, 400, 6000), t, 0.06);
     this.brakeGain.gain.setTargetAtTime(lod === 0 ? ty.brakeSquealLevel * 0.30 : 0, t, 0.05);
 
+    // ---- reverse gear ----
+    this.whine.frequency.setTargetAtTime(clamp(st.reverseWhineHz, 60, 4000), t, 0.04);
+    this.whine.detune.setTargetAtTime(cents, t, tc);
+    this.whineBp.frequency.setTargetAtTime(clamp(st.reverseWhineHz * 2, 120, 7000), t, 0.04);
+    this.whineGain.gain.setTargetAtTime(
+      lod <= 1 ? st.reverseWhine * 0.055 : 0, t, 0.06,
+    );
+
+    // ---- exhaust pops ----
+    // Only the player's car and its close neighbours: a whole street of cars
+    // banging on every lift would be a comedy in the wrong sense. Rate limited
+    // to a plausible 2-4 bangs per lift rather than a machine gun.
+    this.popTimer = Math.max(0, this.popTimer - dt);
+    this.popNow = false;
+    if (lod === 0 && st.popIntensity > 0.12 && this.popTimer === 0) {
+      // The chance per frame scales with intensity, so a gentle lift usually
+      // gives nothing and a hard one off the redline nearly always bangs.
+      if (this.rng.bool(clamp(st.popIntensity * 0.5, 0, 0.6))) {
+        this.popNow = true;
+        this.popLevel = clamp(st.popIntensity, 0.15, 1);
+        this.popTimer = this.rng.range(0.09, 0.32);
+      } else {
+        this.popTimer = 0.05;
+      }
+    }
+
+    // ---- cabin ----
+    // Inside, the engine arrives through the firewall: the top gone and the
+    // bottom two octaves built up by the box. Outside it is unfiltered. The
+    // 0.09 s time constant means stepping out of the car is an audible opening,
+    // not a cut.
+    // 2400 Hz, not the 3400 the first attempt used. A steel firewall is a
+    // serious attenuator and 3400 measured as only a 17% shift in spectral
+    // centroid — technically a filter, not audibly a cabin. 2400 still sits
+    // above the 8th order of the firing frequency (~1.2 kHz at speed), so none
+    // of the harmonic tilt that carries the LOAD information is lost; what goes
+    // is the top of the induction hiss, which is exactly what the glass and the
+    // bulkhead take away in a real car.
+    const wantHz = p.isPlayer ? 2400 : 21000;
+    // Modest, and placed below the body resonance rather than on top of it. The
+    // first attempt used +5.5 dB at 180 Hz, which stacked with the bodyEq peak
+    // at 132 Hz and put the vehicles bus at -0.16 dBFS with one car playing.
+    const wantShelf = p.isPlayer ? 3.5 : 0;
+    this.bulkhead.frequency.setTargetAtTime(wantHz, t, 0.09);
+    this.cabinShelf.gain.setTargetAtTime(wantShelf, t, 0.09);
+
     // ---- overall level ----
     // The player's own car sits closer and louder; everything else is
     // attenuated by the panner, so the voice gain only carries the model.
@@ -428,12 +590,16 @@ export class VehicleVoice {
     this.smoothedSlip = 0;
     this.smoothedBrake = 0;
     this.rattleActivity = 0;
+    this.stalledFor = 0;
+    this.popNow = false;
+    this.popTimer = 0;
   }
 
   dispose(): void {
     try {
       for (const o of this.oscs) o.stop();
       this.rattle.stop();
+      this.whine.stop();
       this.inductionSrc.stop();
       this.exhaustSrc.stop();
       this.rollSrc.stop();

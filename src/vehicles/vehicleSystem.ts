@@ -26,12 +26,13 @@ import {
 } from '../core/services';
 import { createCarMaterial, makeCarUniforms, type CarUniforms } from './builder';
 import { vehicleAtlas } from './texture';
-import { SPECS, VARIANTS, buildBody, type BodyAnchors, type VehicleSpec } from './bodies';
+import { SPECS, VARIANTS, buildBody, cachedBodyStats, type BodyAnchors, type VehicleSpec } from './bodies';
+import { CLASS_MODELS, MODELS, heroDents, modelFor, type ModelHandling, type VehicleModel } from './models';
+import type { DoorPart } from './carkit';
 import { wheelGeometry } from './wheels';
 import { VehicleLamps, VehicleLightPool, contactShadowAssets } from './lights';
 import { DamageModel, deform } from './damage';
 import { ParticlePool, SkidmarkPool } from './skidmarks';
-import { heroDents } from './dacia';
 
 /* ------------------------------------------------------------------ */
 /* Tuning                                                              */
@@ -77,21 +78,10 @@ export interface VehicleTuning {
   seats: number;
 }
 
-interface HandlingOverride {
+interface HandlingOverride extends ModelHandling {
   mass: number;
   engineForce: number;
   topSpeed: number;
-  gripFront?: number;
-  gripRear?: number;
-  rearGripFade?: number;
-  maxSteerRad?: number;
-  suspensionStiffness?: number;
-  rollGain?: number;
-  pitchGain?: number;
-  brakeForce?: number;
-  handbrakeForce?: number;
-  antiRoll?: number;
-  downforce?: number;
 }
 
 const HANDLING: Record<VehicleClass, HandlingOverride> = {
@@ -111,9 +101,9 @@ const HANDLING: Record<VehicleClass, HandlingOverride> = {
   scooter: { mass: 30, engineForce: 260, topSpeed: 8.5, gripFront: 9, gripRear: 9, rearGripFade: 0, maxSteerRad: 0.7, rollGain: 0.5, pitchGain: 0.5, antiRoll: 4.5, suspensionStiffness: 40 },
 };
 
-function makeTuning(kind: VehicleClass): VehicleTuning {
-  const spec = SPECS[kind];
-  const h = HANDLING[kind];
+function makeTuning(kind: VehicleClass, model: VehicleModel): VehicleTuning {
+  const spec = model.spec;
+  const h: HandlingOverride = { ...HANDLING[kind], ...(model.handling ?? {}) };
   const stiffness = h.suspensionStiffness ?? 28;
   const rest = Math.min(0.36, spec.wheelRadius * 1.15);
   // Static compression at rest: spring force must balance a quarter of the
@@ -130,22 +120,35 @@ function makeTuning(kind: VehicleClass): VehicleTuning {
     );
   } else {
     for (const sx of [-1, 1]) {
-      wheels.push({ offset: new THREE.Vector3(sx * spec.trackHalf, attachY, spec.frontAxleZ), radius: spec.wheelRadius, steered: true, driven: kind === 'truck' || kind === 'bus' ? false : false, handbraked: false });
+      wheels.push({ offset: new THREE.Vector3(sx * spec.trackHalf, attachY, spec.frontAxleZ), radius: spec.wheelRadius, steered: true, driven: false, handbraked: false });
     }
     for (const sx of [-1, 1]) {
       wheels.push({ offset: new THREE.Vector3(sx * spec.trackHalf, attachY, spec.rearAxleZ), radius: spec.wheelRadius, steered: false, driven: true, handbraked: true });
     }
+    // Extra unpowered axles. A 15 m tram carried on four rays 10.8 m apart has
+    // 2.2 m of unsupported overhang at each end, so every road crown pitched it
+    // like a see-saw and the nose speared into the tarmac; a bus and a truck
+    // want their real rear bogies for the same reason.
+    for (const az of spec.extraAxles ?? []) {
+      for (const sx of [-1, 1]) {
+        wheels.push({ offset: new THREE.Vector3(sx * spec.trackHalf, attachY, az), radius: spec.wheelRadius, steered: false, driven: false, handbraked: true });
+      }
+    }
   }
 
   // Collider covers the lower body only — a box up to the belt line keeps the
-  // car from catching its own roof on things and keeps the inertia low.
+  // car from catching its own roof on things and keeps the inertia low. Long
+  // vehicles get more ground clearance under the box and a slightly shorter
+  // one, or the corners catch every kerb and launch them.
   const halfY = Math.max(0.3, spec.height * 0.34);
-  const colliderCentreY = -spec.rideHeight + halfY + 0.14;
+  const clearance = THREE.MathUtils.clamp(spec.wheelRadius * 0.5, 0.14, 0.26);
+  const colliderCentreY = -spec.rideHeight + halfY + clearance;
+  const halfZ = spec.length > 6 ? spec.length * 0.455 : spec.length * 0.48;
 
   return {
     spec,
     mass: h.mass,
-    halfExtents: new THREE.Vector3(spec.width * 0.48, halfY, spec.length * 0.48),
+    halfExtents: new THREE.Vector3(spec.width * 0.48, halfY, halfZ),
     colliderCentreY,
     comOffset: new THREE.Vector3(0, -spec.rideHeight + spec.height * 0.20, spec.length * 0.01),
     suspensionRest: rest,
@@ -172,11 +175,52 @@ function makeTuning(kind: VehicleClass): VehicleTuning {
   };
 }
 
-const TUNING = {} as Record<VehicleClass, VehicleTuning>;
-for (const k of Object.keys(SPECS) as VehicleClass[]) TUNING[k] = makeTuning(k);
+/** Tuning is per MODEL, not per class — a Duster and an Oltcit are both hatches. */
+const TUNING_CACHE = new Map<string, VehicleTuning>();
+function tuningFor(kind: VehicleClass, model: VehicleModel): VehicleTuning {
+  let t = TUNING_CACHE.get(model.id);
+  if (!t) {
+    t = makeTuning(kind, model);
+    TUNING_CACHE.set(model.id, t);
+  }
+  return t;
+}
 
 const UP = new THREE.Vector3(0, 1, 0);
 const DOWN = new THREE.Vector3(0, -1, 0);
+
+/* ------------------------------------------------------------------ */
+/* Doors                                                               */
+/* ------------------------------------------------------------------ */
+
+interface DoorState {
+  readonly part: DoorPart;
+  readonly group: THREE.Group;
+  /** 0 shut, 1 fully open. */
+  open: number;
+  target: number;
+  /** Sprung shut when nothing is holding it open. */
+  autoClose: boolean;
+}
+
+/**
+ * What `src/gameplay/player.ts` (and anything else that wants to open a door)
+ * can rely on. `VehicleHandle` in the frozen `core/services.ts` does not
+ * declare these, so callers duck-type:
+ *
+ *   const d = v as Partial<VehicleDoors>;
+ *   d.setDoorOpen?.('driver', amount);
+ */
+export interface VehicleDoors {
+  /** Door ids present on this vehicle, e.g. frontLeft / frontRight / rearLeft. */
+  readonly doorIds: ReadonlyArray<string>;
+  /** `'driver'` resolves to the left-hand front door (this city drives LHD). */
+  setDoorOpen(id: string, amount: number): void;
+  /** World point a character should stand at to work this door. */
+  doorAnchor(id: string, out: THREE.Vector3): THREE.Vector3 | null;
+  /** World point the occupant of this door's seat ends up at. */
+  seatAnchor(id: string, out: THREE.Vector3): THREE.Vector3 | null;
+}
 
 /* ------------------------------------------------------------------ */
 /* Vehicle                                                             */
@@ -200,7 +244,13 @@ class Vehicle implements VehicleHandle {
   shellMesh!: THREE.Mesh;
   glassMesh: THREE.Mesh | null = null;
   contactShadow: THREE.Mesh | null = null;
+  driverMesh: THREE.Mesh | null = null;
   lodBand = -1;
+  /** Baked-in filth, before any collision damage. */
+  baseGrime = 0;
+
+  /** Openable doors, in the order the model declared them. */
+  readonly doors: DoorState[] = [];
 
   seats: number;
   throttle = 0;
@@ -255,8 +305,9 @@ class Vehicle implements VehicleHandle {
     readonly kind: VehicleClass,
     readonly faction: Faction,
     private phys: PhysicsWorld,
+    readonly model: VehicleModel,
   ) {
-    this.tuning = TUNING[kind];
+    this.tuning = tuningFor(kind, model);
     this.seats = this.tuning.seats;
     const n = this.tuning.wheels.length;
     this.wheelContact = new Array(n).fill(false);
@@ -299,6 +350,48 @@ class Vehicle implements VehicleHandle {
     // visual wheel rotation together, since both read `steerAngle`.
     this.steerInput = -THREE.MathUtils.clamp(steer, -1, 1);
     this.handbrakeInput = handbrake;
+  }
+
+  /* ---------------- doors (see `VehicleDoors`) ---------------- */
+
+  get doorIds(): ReadonlyArray<string> {
+    return this.doors.map((d) => d.part.id);
+  }
+
+  private findDoor(id: string): DoorState | undefined {
+    if (id === 'driver') return this.doors.find((d) => d.part.row === 0 && d.part.side < 0) ?? this.doors[0];
+    if (id === 'passenger') return this.doors.find((d) => d.part.row === 0 && d.part.side > 0);
+    return this.doors.find((d) => d.part.id === id);
+  }
+
+  setDoorOpen(id: string, amount: number): void {
+    const d = this.findDoor(id);
+    if (!d) return;
+    d.target = THREE.MathUtils.clamp(amount, 0, 1);
+    d.autoClose = d.target <= 0.001;
+  }
+
+  doorAnchor(id: string, out: THREE.Vector3): THREE.Vector3 | null {
+    const d = this.findDoor(id);
+    if (!d) return null;
+    return out.copy(d.part.board).applyQuaternion(this.rotation).add(this.position);
+  }
+
+  seatAnchor(id: string, out: THREE.Vector3): THREE.Vector3 | null {
+    const d = this.findDoor(id);
+    if (!d) return null;
+    return out.copy(d.part.seat).applyQuaternion(this.rotation).add(this.position);
+  }
+
+  private updateDoors(dt: number): void {
+    for (const d of this.doors) {
+      // A door left open while the car drives away swings shut on its own.
+      if (d.autoClose && d.target > 0) d.target = 0;
+      const k = Math.min(1, dt * (d.target > d.open ? 6.5 : 8.5));
+      d.open += (d.target - d.open) * k;
+      if (Math.abs(d.open - d.target) < 0.002) d.open = d.target;
+      d.group.rotation.y = -d.part.side * d.open * d.part.maxAngle;
+    }
   }
 
   /** Not part of VehicleService — police/AI cast to this. */
@@ -522,6 +615,33 @@ class Vehicle implements VehicleHandle {
       }
     }
 
+    /* --- rail vehicles are ON RAILS ------------------------------------
+     *
+     * A 15 m rigid box on suspension rays is a see-saw: a road crown, a kerb
+     * or a Dacia under one corner pitched the tram, the pitch drove the nose
+     * into the tarmac, and the reaction threw the whole thing into the air —
+     * which is exactly the "trams jumping off the rails" report. A tram has no
+     * suspension geometry that can do that: the bogies hold it square to the
+     * permanent way. So we pin the attitude to yaw-only, kill any upward
+     * velocity it did not get from the ground, and let the wheels only ever
+     * hold it up.
+     *
+     * (Lateral position — whether it is ON the rails at all — is the traffic
+     * system's routing, not ours. See the report.)
+     */
+    if (tuning.spec.railed) {
+      _railE.setFromQuaternion(this.rotation, 'YXZ');
+      _railQ.setFromAxisAngle(UP, _railE.y);
+      body.setRotation({ x: _railQ.x, y: _railQ.y, z: _railQ.z, w: _railQ.w }, true);
+      const av = body.angvel();
+      body.setAngvel({ x: 0, y: av.y, z: 0 }, true);
+      const lv = body.linvel();
+      if (lv.y > 0) body.setLinvel({ x: lv.x, y: 0, z: lv.z }, true);
+      this.rotation.copy(_railQ);
+      this.object.quaternion.copy(_railQ);
+      this.upsideTime = 0;
+    }
+
     // Self-recovery: about a second on the roof and it flips itself back.
     if (uprightness < 0.1) {
       this.upsideTime += dt;
@@ -577,6 +697,18 @@ class Vehicle implements VehicleHandle {
       for (let i = 0; i < this.wheelContact.length; i++) if (this.wheelContact[i]) grounded++;
       const want = grounded / Math.max(1, this.wheelContact.length);
       this.contactShadow.visible = want > 0.1 && this.lodBand <= 1;
+    }
+
+    this.updateDoors(dt);
+
+    // Filth: what the car came with, plus what the crashes added.
+    this.uniforms.uGrime.value = Math.min(1, this.baseGrime + (1 - this.damage.ratio) * 0.55);
+
+    // A driver is only visible when somebody is actually in there. Traffic and
+    // police cars are always crewed; the player's parked car is not.
+    if (this.driverMesh) {
+      const crewed = this.occupants.length > 0 || this.faction !== 'player';
+      this.driverMesh.visible = crewed && this.lodBand <= 2;
     }
 
     // Lamps.
@@ -699,6 +831,8 @@ const _invQ = new THREE.Quaternion();
 const _shadowE = new THREE.Euler();
 const _shadowQ = new THREE.Quaternion();
 const _shadowInv = new THREE.Quaternion();
+const _railE = new THREE.Euler();
+const _railQ = new THREE.Quaternion();
 const FLAT_Q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
 
 /* ------------------------------------------------------------------ */
@@ -726,6 +860,34 @@ export class VehicleSystem implements System, VehicleService {
   private wantHarness = false;
   /** Walking position for `__VEH__.stage`, so a staged fleet never overlaps. */
   private stageCursor = 0;
+  /** Ids staged by the debug helpers, so they can be cleared without touching traffic. */
+  private staged: string[] = [];
+
+  /**
+   * Spawn a specific MODEL. The class/variant indirection exists for traffic;
+   * the showroom helpers want a named car, so this searches for the variant
+   * that resolves to it.
+   */
+  private stageModel(modelId: string, pos: THREE.Vector3, heading: number): Vehicle {
+    const m = MODELS[modelId];
+    const list = CLASS_MODELS[m.cls];
+    let variant = list.indexOf(modelId);
+    if (variant < 0) variant = 0;
+    // Offset by one full cycle so the paint rng differs from the traffic default.
+    const seed = variant + list.length;
+    const v = this.spawn(m.cls, pos, heading, {
+      faction: modelId === 'ministry' ? 'police' : 'civilian',
+      colorSeed: seed,
+    }) as Vehicle;
+    this.staged.push(v.id);
+    return v;
+  }
+
+  private unstage(): void {
+    for (const id of this.staged) this.despawn(id);
+    this.staged.length = 0;
+    this.stageCursor = 0;
+  }
 
   get all(): ReadonlyArray<VehicleHandle> {
     return this.list;
@@ -750,7 +912,7 @@ export class VehicleSystem implements System, VehicleService {
     // it never replaces anything on window.__GTA_DEBUG__.
     (window as unknown as { __VEH__: unknown }).__VEH__ = {
       list: () => this.list.map((v) => ({
-        id: v.id, kind: v.kind,
+        id: v.id, kind: v.kind, model: v.model.id,
         pos: [v.position.x, v.position.y, v.position.z],
         speed: +v.speed.toFixed(2),
         health: v.health,
@@ -776,6 +938,43 @@ export class VehicleSystem implements System, VehicleService {
       spawn: (kind: VehicleClass, x: number, z: number, heading = 0, seed = 1) =>
         this.spawn(kind, new THREE.Vector3(x, 0.4, z), heading, { colorSeed: seed }).id,
       showcase: () => this.showcase(),
+      models: () => Object.values(MODELS).map((m) => ({
+        id: m.id, cls: m.cls, label: m.label,
+        size: [m.spec.length, m.spec.width, m.spec.height],
+      })),
+      bodyStats: () => cachedBodyStats(),
+      doors: (id: string) => {
+        const v = this.vehicles.get(id);
+        return v ? v.doors.map((d) => ({ id: d.part.id, open: +d.open.toFixed(2), target: d.target })) : null;
+      },
+      openDoor: (id: string, door: string, amount = 1) => this.vehicles.get(id)?.setDoorOpen(door, amount),
+      /**
+       * Stage one of EVERY model down the nearest road, in a fixed order, so a
+       * screenshot pass covers the whole fleet.
+       */
+      fleet: (only?: string) => {
+        const out: Array<{ id: string; model: string; heading: number }> = [];
+        for (const m of Object.values(MODELS)) {
+          if (only && m.id !== only) continue;
+          const gap = m.spec.length * 0.5 + 4;
+          const along = this.stageCursor + gap;
+          this.stageCursor = along + gap;
+          const { pos, heading } = this.roadSlot(along);
+          const v = this.stageModel(m.id, pos, heading);
+          out.push({ id: v.id, model: v.model.id, heading });
+        }
+        return out;
+      },
+      /** One named model on the nearest clear road slot; previous ones removed. */
+      only: (modelId: string, offset = 0) => {
+        this.unstage();
+        const m = MODELS[modelId];
+        if (!m) return null;
+        const { pos, heading } = this.roadSlot(offset);
+        const v = this.stageModel(m.id, pos, heading);
+        return { id: v.id, model: v.model.id, heading };
+      },
+      unstage: () => this.unstage(),
       /**
        * Put one vehicle of `kind` on a clear road node, aligned with the road.
        *
@@ -812,7 +1011,10 @@ export class VehicleSystem implements System, VehicleService {
   ): VehicleHandle {
     const id = `veh_${this.nextId++}`;
     const faction = opts?.faction ?? (kind === 'police' ? 'police' : 'civilian');
-    const v = new Vehicle(id, kind, faction, this.phys);
+    const colorSeed = opts?.colorSeed ?? this.rng.int(0, 4096);
+    const hero = kind === 'dacia' && (faction === 'player' || colorSeed === 0);
+    const variant = hero ? 0 : colorSeed % VARIANTS[kind];
+    const v = new Vehicle(id, kind, faction, this.phys, modelFor(kind, variant, hero));
     const tuning = v.tuning;
 
     const q = new THREE.Quaternion().setFromAxisAngle(UP, headingRad);
@@ -851,7 +1053,7 @@ export class VehicleSystem implements System, VehicleService {
       true,
     );
 
-    this.buildMesh(v, opts?.colorSeed ?? this.rng.int(0, 4096));
+    this.buildMesh(v, variant, hero);
     this.ctx.scene.add(v.object);
 
     this.vehicles.set(id, v);
@@ -859,11 +1061,11 @@ export class VehicleSystem implements System, VehicleService {
     return v;
   }
 
-  private buildMesh(v: Vehicle, colorSeed: number): void {
-    const hero = v.kind === 'dacia' && (v.faction === 'player' || colorSeed === 0);
-    const variant = hero ? 0 : colorSeed % VARIANTS[v.kind];
+  private buildMesh(v: Vehicle, variant: number, hero: boolean): void {
     const build = buildBody(v.kind, variant, hero);
     v.anchors = build.anchors;
+    // Every car in this city has been standing in the same wet street.
+    v.baseGrime = hero ? 0.26 : new Rng(`grime-${v.kind}-${variant}`).range(0.04, 0.28);
 
     const opaque = createCarMaterial(this.atlas, v.uniforms, { alphaTest: 0.4 });
     const glassMat = createCarMaterial(this.atlas, v.uniforms, {
@@ -891,6 +1093,43 @@ export class VehicleSystem implements System, VehicleService {
       glass.renderOrder = 3;
       v.glassMesh = glass;
       v.bodyGroup.add(glass);
+    }
+
+    // Doors: one group per door, pivoted on the hinge, carrying the skin that
+    // was routed out of the body loft plus that door's own glass.
+    for (const part of build.doors ?? []) {
+      const group = new THREE.Group();
+      group.position.copy(part.hinge);
+      let doorGeo = part.shell;
+      if (hero) {
+        // The baked-in hero damage has to reach the doors too, or the car has
+        // pristine panels bolted into a dented shell.
+        doorGeo = part.shell.clone();
+        const local = heroDents(new Rng('hero-dents')).map((dn) => ({
+          p: dn.p.clone().sub(part.hinge), r: dn.r, d: dn.d,
+        }));
+        deform(doorGeo, local);
+      }
+      const skin = new THREE.Mesh(doorGeo, opaque);
+      skin.castShadow = true;
+      skin.receiveShadow = true;
+      group.add(skin);
+      if ((part.glass.attributes.position as THREE.BufferAttribute).count > 0) {
+        const dg = new THREE.Mesh(part.glass, glassMat);
+        dg.renderOrder = 3;
+        group.add(dg);
+      }
+      v.bodyGroup.add(group);
+      v.doors.push({ part, group, open: 0, target: 0, autoClose: true });
+    }
+
+    if (build.driver && (build.driver.attributes.position as THREE.BufferAttribute).count > 0) {
+      const dm = new THREE.Mesh(build.driver, opaque);
+      dm.castShadow = false;
+      dm.receiveShadow = false;
+      dm.visible = false;
+      v.driverMesh = dm;
+      v.bodyGroup.add(dm);
     }
 
     const spec = v.tuning.spec;
@@ -1024,6 +1263,9 @@ export class VehicleSystem implements System, VehicleService {
       const dir = event.maxForceDirection();
       for (const v of [a, b]) {
         if (!v || !v.settled) continue;
+        // A 26 tonne tram is not damaged by a Dacia, and it certainly is not
+        // damaged by the road it is standing on.
+        if (v.tuning.spec.railed) continue;
         if (magnitude < v.crashThreshold) continue;
         const other = v === a ? b : a;
         // Damage needs a genuine impact, which means RELATIVE motion. Grading

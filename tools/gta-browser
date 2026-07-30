@@ -24,7 +24,7 @@
 
 set -uo pipefail
 
-SLOTS="${GTA_BROWSER_SLOTS:-2}"
+SLOTS="${GTA_BROWSER_SLOTS:-1}"
 LOCKDIR="${TMPDIR:-/tmp}/gta-browser-locks"
 WAIT_TIMEOUT="${GTA_BROWSER_WAIT:-600}"
 
@@ -33,7 +33,20 @@ if [ $# -lt 2 ]; then
   exit 2
 fi
 
-SESSION="$1"; shift
+# The caller's session name is accepted for readability and then DISCARDED.
+#
+# agent-browser keeps one persistent Chrome PER SESSION NAME, so honouring
+# per-agent names would leave one browser alive per agent no matter how well
+# the lock serialised individual calls — five agents, five Chromes, which is
+# exactly what ground the machine to a halt. Everything shares one session, and
+# the lock below makes access to it exclusive.
+#
+# Consequence for agents: page state is shared and another agent may have
+# navigated or moved the camera since your last call. Re-establish what you
+# need (open, goTo, framing) at the start of each verification burst rather
+# than assuming the page is where you left it.
+CALLER_SESSION="$1"; shift
+SESSION="${GTA_BROWSER_SESSION:-gta}"
 mkdir -p "$LOCKDIR"
 
 held=""
@@ -66,6 +79,7 @@ while :; do
   sleep 2
 done
 
+# CALLER_SESSION is intentionally unused beyond documentation.
 agent-browser --session "$SESSION" --args "--mute-audio" "$@"
 status=$?
 exit $status

@@ -26,10 +26,11 @@
  */
 
 import * as THREE from 'three';
+import { Rng } from '../core/rng';
 import { approach, clamp, softClipCurve } from './dsp';
 import {
   ENGINE_SPECS, HARMONIC_ORDERS, engineState, tyreState,
-  type EngineClass, type EngineSpec, type EngineState,
+  type EngineClass, type EngineSpec, type EngineState, type TyreState,
 } from './engineModel';
 import { dopplerFactor, ratioToCents } from './sirenModel';
 import type { SpatialSlot } from './spatial';
@@ -51,6 +52,12 @@ export interface VehicleProbe {
   airborne: boolean;
   isPlayer: boolean;
   distance: number;
+  /** 0..1 surface roughness under the wheels (kerb, verge, rubble). */
+  roughness?: number;
+  /** 0..1 body damage — a bent car rattles more and idles worse. */
+  damage?: number;
+  /** Mean |d(compression)/dt| across the wheels — how hard the road is working. */
+  suspensionActivity?: number;
 }
 
 /** 0 = full synthesis, 3 = silent. */
@@ -97,6 +104,9 @@ export class VehicleVoice {
   private sprayGain: GainNode;
   private squealSrc: AudioBufferSourceNode;
   private squealGain: GainNode;
+  /** Brake pads: the same squeal bed pushed through a far higher resonance. */
+  private brakeBp: BiquadFilterNode;
+  private brakeGain: GainNode;
 
   readonly voiceGain: GainNode;
   slot: SpatialSlot | null = null;
@@ -106,10 +116,20 @@ export class VehicleVoice {
   state: EngineState | null = null;
   prevGear = -1;
   active = false;
+  /** Live tyre model, for the debug hook. */
+  tyre: TyreState | null = null;
   private smoothedThrottle = 0;
   private smoothedSlip = 0;
-  private lastGearChange = 0;
+  private smoothedBrake = 0;
+  private lastGearChange = -1e9;
   private curve: Float32Array;
+  /** Slow random walk driving the idle hunt. */
+  private rng: Rng;
+  private wander = 0;
+  private wanderTarget = 0;
+  private wanderTimer = 0;
+  /** Rattle burst scheduling is the audio system's job; this is the level. */
+  rattleActivity = 0;
 
   constructor(
     ctx: AudioContext,
@@ -120,6 +140,7 @@ export class VehicleVoice {
   ) {
     this.ctx = ctx;
     this.id = id;
+    this.rng = new Rng(`voice:${id}`);
 
     this.voiceGain = ctx.createGain();
     this.voiceGain.gain.value = 0;
@@ -224,6 +245,19 @@ export class VehicleVoice {
     this.squealGain.gain.value = 0;
     this.squealSrc.connect(this.squealGain);
     this.squealGain.connect(this.voiceGain);
+
+    // Brake pads. Same source bed, but a 2-3 kHz resonance with a very high Q
+    // — narrow enough that it reads as a single screaming tone rather than
+    // noise, which is exactly the difference between a brake and a tyre.
+    this.brakeBp = ctx.createBiquadFilter();
+    this.brakeBp.type = 'bandpass';
+    this.brakeBp.frequency.value = 2400;
+    this.brakeBp.Q.value = 22;
+    this.brakeGain = ctx.createGain();
+    this.brakeGain.gain.value = 0;
+    this.squealSrc.connect(this.brakeBp);
+    this.brakeBp.connect(this.brakeGain);
+    this.brakeGain.connect(this.voiceGain);
   }
 
   setKind(kind: EngineClass): void {
@@ -258,17 +292,45 @@ export class VehicleVoice {
     this.smoothedThrottle = approach(this.smoothedThrottle, p.throttle, 9, dt);
     this.smoothedSlip = approach(this.smoothedSlip, p.slip, 14, dt);
 
+    // Braking is the pedal fighting the direction of travel, not merely a
+    // lift. Below walking pace it stops counting so a parked car does not
+    // squeal at itself.
+    const rawBrake = Math.abs(p.speed) > 0.7 && Math.sign(p.throttle) === -Math.sign(p.speed)
+      ? Math.min(1, Math.abs(p.throttle))
+      : 0;
+    this.smoothedBrake = approach(this.smoothedBrake, rawBrake, 10, dt);
+
+    // Idle hunt: a new target every 0.4-1.4 s, approached slowly. Deterministic
+    // per voice, so two cars idling side by side wander out of phase but the
+    // same car wanders the same way every run.
+    this.wanderTimer -= dt;
+    if (this.wanderTimer <= 0) {
+      this.wanderTimer = this.rng.range(0.4, 1.4);
+      this.wanderTarget = this.rng.gauss() * 0.7;
+    }
+    this.wander = approach(this.wander, this.wanderTarget, 2.2, dt);
+
     const st = engineState(this.spec, {
       speed: p.speed,
       throttle: this.smoothedThrottle,
       airborne: p.airborne,
       wrecked: p.wrecked,
       prevGear: this.prevGear,
+      // A tired engine hunts harder; a bent one hunts hardest.
+      idleWander: this.wander * (0.5 + this.spec.rattle * 0.7 + (p.damage ?? 0) * 0.8),
     });
     const gearChanged = st.gear !== this.prevGear && this.prevGear >= 0;
     this.prevGear = st.gear;
     if (gearChanged) this.lastGearChange = t;
     this.state = st;
+
+    // ---- shift cut ----
+    // A gear change is a hole in the sound, not a jump in it: the drive comes
+    // off for ~110 ms, the note sags, then it picks the load back up. Without
+    // this the "gear step" is only a pitch discontinuity, which reads as a
+    // glitch rather than as a mechanism.
+    const sinceShift = t - this.lastGearChange;
+    const shiftCut = sinceShift < 0.16 ? Math.pow(1 - sinceShift / 0.16, 0.6) : 0;
 
     // ---- doppler ----
     const dx = p.position.x - listenerPos.x;
@@ -294,14 +356,25 @@ export class VehicleVoice {
       this.oscGains[i].gain.setTargetAtTime(on ? st.harmonics[i] * 0.26 : 0, t, tc);
     }
 
-    // Rattle bank: only worth its node at LOD 0-1.
+    // Rattle bank: only worth its node at LOD 0-1. Level tracks how hard the
+    // car is being shaken — revs, road, and how bent it is — because a Dacia
+    // sitting at idle on smooth tarmac does not troncăne, it only bate.
+    const rough = clamp(p.roughness ?? 0, 0, 1);
+    const shake = clamp(
+      st.rpmNorm * 0.5 + rough * 0.7 + clamp((p.suspensionActivity ?? 0) / 3, 0, 1) * 0.6 + (p.damage ?? 0) * 0.5,
+      0, 1.6,
+    );
+    this.rattleActivity = shake * this.spec.rattle;
     this.rattle.frequency.setTargetAtTime(clamp(st.fundamental, 12, 4000), t, tc);
     this.rattle.detune.setTargetAtTime(cents + st.detuneCents, t, tc);
-    this.rattleGain.gain.setTargetAtTime(lod <= 1 ? this.spec.rattle * 0.035 : 0, t, tc);
+    this.rattleGain.gain.setTargetAtTime(
+      lod <= 1 ? this.spec.rattle * (0.018 + shake * 0.042) : 0, t, tc,
+    );
 
     // Load-dependent drive into the shaper: this is the "harder" character
-    // under throttle, not just a louder one.
-    this.preShaper.gain.setTargetAtTime(0.6 + st.drive * 1.5, t, tc);
+    // under throttle, not just a louder one. The shift cut pulls it back to
+    // the unloaded value for the length of the change.
+    this.preShaper.gain.setTargetAtTime((0.6 + st.drive * 1.5) * (1 - shiftCut * 0.55), t, 0.012);
 
     // ---- noise beds ----
     this.inductionBp.frequency.setTargetAtTime(clamp(st.inductionHz, 120, 9000), t, tc);
@@ -318,7 +391,10 @@ export class VehicleVoice {
       slip: this.smoothedSlip,
       handbrake: p.handbrake,
       grounded: p.grounded,
+      brake: this.smoothedBrake,
+      roughness: rough,
     });
+    this.tyre = ty;
     this.rollBp.frequency.setTargetAtTime(clamp(ty.rollHz, 90, 6000), t, tc);
     this.rollGain.gain.setTargetAtTime(lod <= 1 ? ty.rollLevel * 0.42 : 0, t, tc);
     this.sprayGain.gain.setTargetAtTime(lod === 0 ? ty.sprayLevel * 0.38 : 0, t, tc);
@@ -326,14 +402,19 @@ export class VehicleVoice {
     this.squealGain.gain.setTargetAtTime(lod <= 1 ? ty.squealLevel * 0.32 : 0, t, 0.04);
     this.rollSrc.playbackRate.setTargetAtTime(1.17 * dop, t, tc);
 
+    // Brake squeal: only the player's car and its close neighbours, because
+    // a 2.5 kHz tone from every car in a traffic jam is unlistenable.
+    this.brakeBp.frequency.setTargetAtTime(clamp(ty.brakeSquealHz * dop, 400, 6000), t, 0.06);
+    this.brakeGain.gain.setTargetAtTime(lod === 0 ? ty.brakeSquealLevel * 0.30 : 0, t, 0.05);
+
     // ---- overall level ----
     // The player's own car sits closer and louder; everything else is
     // attenuated by the panner, so the voice gain only carries the model.
     const lodTrim = lod === 0 ? 1 : lod === 1 ? 0.85 : 0.55;
-    const target = st.gain * lodTrim * (p.isPlayer ? 0.72 : 0.5);
-    this.voiceGain.gain.setTargetAtTime(target, t, 0.05);
+    const target = st.gain * lodTrim * (p.isPlayer ? 0.72 : 0.5) * (1 - shiftCut * 0.42);
+    this.voiceGain.gain.setTargetAtTime(target, t, gearChanged ? 0.012 : 0.05);
 
-    return gearChanged && t - this.lastGearChange < dt * 2;
+    return gearChanged;
   }
 
   silence(): void {
@@ -341,9 +422,12 @@ export class VehicleVoice {
     this.voiceGain.gain.setTargetAtTime(0, t, 0.05);
     this.active = false;
     this.state = null;
+    this.tyre = null;
     this.prevGear = -1;
     this.smoothedThrottle = 0;
     this.smoothedSlip = 0;
+    this.smoothedBrake = 0;
+    this.rattleActivity = 0;
   }
 
   dispose(): void {

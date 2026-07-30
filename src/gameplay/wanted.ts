@@ -73,7 +73,11 @@ export class WantedSystem implements System, WantedService {
       this.cooldown -= dt;
       return;
     }
-    this.heat = Math.max(0, this.heat - dt * 24);
+    // Level 4's `cool_head` unlock (src/gameplay/progression.ts): the whole
+    // point of it is that a chase you used to lose becomes one you can break,
+    // so it moves the decay rate rather than anything cosmetic.
+    const decay = this.ctx.tryGet(Services.Progression)?.has('cool_head') ? 24 * 1.45 : 24;
+    this.heat = Math.max(0, this.heat - dt * decay);
     this.recomputeStars();
   }
 }

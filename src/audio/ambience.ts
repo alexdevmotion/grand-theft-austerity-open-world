@@ -18,15 +18,18 @@ import type { DistrictKind } from '../core/services';
 import { Rng } from '../core/rng';
 import { approach, clamp } from './dsp';
 import {
-  renderCrowdLoop, renderHvacLoop, renderIndustrialLoop, renderParkLoop,
-  renderRainLoop, renderTrafficLoop, renderTramLoop, renderWindLoop, toAudioBuffer,
+  renderConstructionLoop, renderCrowdLoop, renderHvacLoop, renderIndustrialLoop,
+  renderParkLoop, renderRainLoop, renderTrafficLoop, renderTramLoop,
+  renderWindLoop, toAudioBuffer,
 } from './bank';
 
 export type AmbienceLayer =
-  | 'traffic' | 'crowd' | 'tram' | 'wind' | 'rain' | 'industrial' | 'hvac' | 'park';
+  | 'traffic' | 'crowd' | 'tram' | 'wind' | 'rain' | 'industrial' | 'hvac'
+  | 'park' | 'construction';
 
 export const AMBIENCE_LAYERS: AmbienceLayer[] = [
   'traffic', 'crowd', 'tram', 'wind', 'rain', 'industrial', 'hvac', 'park',
+  'construction',
 ];
 
 type Mix = Partial<Record<AmbienceLayer, number>>;
@@ -36,12 +39,12 @@ type Mix = Partial<Record<AmbienceLayer, number>>;
  * weather scale them afterwards.
  */
 const DISTRICT_MIX: Record<DistrictKind, Mix> = {
-  centruVechi:    { traffic: 0.34, crowd: 0.85, tram: 0.10, wind: 0.10, hvac: 0.05 },
-  bulevard:       { traffic: 0.95, crowd: 0.34, tram: 0.42, wind: 0.24, hvac: 0.04 },
-  glassCorporate: { traffic: 0.52, crowd: 0.40, tram: 0.16, wind: 0.44, hvac: 0.55 },
-  guvern:         { traffic: 0.44, crowd: 0.22, tram: 0.12, wind: 0.38, hvac: 0.14 },
-  cartier:        { traffic: 0.38, crowd: 0.44, tram: 0.26, wind: 0.20, hvac: 0.06 },
-  industrial:     { traffic: 0.28, crowd: 0.06, tram: 0.20, wind: 0.34, industrial: 0.85 },
+  centruVechi:    { traffic: 0.34, crowd: 0.85, tram: 0.10, wind: 0.10, hvac: 0.05, construction: 0.10 },
+  bulevard:       { traffic: 0.95, crowd: 0.34, tram: 0.42, wind: 0.24, hvac: 0.04, construction: 0.26 },
+  glassCorporate: { traffic: 0.52, crowd: 0.40, tram: 0.16, wind: 0.44, hvac: 0.55, construction: 0.34 },
+  guvern:         { traffic: 0.44, crowd: 0.22, tram: 0.12, wind: 0.38, hvac: 0.14, construction: 0.12 },
+  cartier:        { traffic: 0.38, crowd: 0.44, tram: 0.26, wind: 0.20, hvac: 0.06, construction: 0.30 },
+  industrial:     { traffic: 0.28, crowd: 0.06, tram: 0.20, wind: 0.34, industrial: 0.85, construction: 0.45 },
   parc:           { traffic: 0.16, crowd: 0.26, tram: 0.05, wind: 0.30, park: 0.90 },
 };
 
@@ -58,6 +61,12 @@ export interface AmbienceInput {
   stars: number;
   /** Player speed, m/s — adds wind rush. */
   speed: number;
+  /**
+   * 0..1.4 — how many people are actually standing near the listener, counted
+   * from PedService. A busy pavement has to sound busy even in a district
+   * whose base mix is quiet, otherwise walking into a crowd changes nothing.
+   */
+  crowd?: number;
 }
 
 interface Layer {
@@ -95,6 +104,7 @@ export class AmbienceBed {
     this.out.connect(destination);
 
     const build: Record<AmbienceLayer, () => Float32Array> = {
+      construction: () => renderConstructionLoop(sr, 12, rng.fork('construction')),
       traffic: () => renderTrafficLoop(sr, 9, rng.fork('traffic')),
       crowd: () => renderCrowdLoop(sr, 8, rng.fork('crowd')),
       tram: () => renderTramLoop(sr, 7, rng.fork('tram')),
@@ -139,11 +149,19 @@ export class AmbienceBed {
     const tension = clamp(input.stars / 5, 0, 1);
     const speedWind = clamp(Math.abs(input.speed) / 34, 0, 1);
 
+    const crowdNear = clamp(input.crowd ?? 0, 0, 1.4);
+
     for (const name of AMBIENCE_LAYERS) {
       let v = base[name] ?? 0;
       switch (name) {
         case 'crowd':
           v *= dayness * (1 - rain * 0.65) * (1 + tension * 0.45);
+          // Real bodies on the pavement beat the district average.
+          v = Math.max(v, crowdNear * 0.72 * (1 - rain * 0.5));
+          break;
+        case 'construction':
+          // Builders knock off at dusk and do not work in a downpour.
+          v *= clamp((h > 7 && h < 18 ? 1 : 0.08), 0, 1) * (1 - rain * 0.7);
           break;
         case 'traffic':
           v *= 0.45 + dayness * 0.55;

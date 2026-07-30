@@ -72,6 +72,12 @@ export interface EngineInput {
   wrecked: boolean;
   /** Previous gear, for hysteresis. -1 for "no history". */
   prevGear: number;
+  /**
+   * -1..1 slow random walk from the caller. A real idle hunts: the mixture is
+   * never quite right and the revs wander by a few tens of rpm over seconds.
+   * It only bites near idle, so it cannot smear a note under throttle.
+   */
+  idleWander?: number;
 }
 
 export interface EngineState {
@@ -149,6 +155,13 @@ export function engineState(spec: EngineSpec, input: EngineInput): EngineState {
 
   // Load pulls a couple of hundred rpm; lifting lets it sag.
   rpmNorm = clamp(rpmNorm + load * 0.06 - braking * 0.03, 0, 1.1);
+
+  // Idle hunt. Weighted by how close we are to a true idle — at 4000 rpm on
+  // full throttle the mixture is the last thing you can hear.
+  const idleness = clamp(1 - rpmNorm * 3.2, 0, 1) * (1 - load);
+  if (idleness > 0 && input.idleWander) {
+    rpmNorm = clamp(rpmNorm + input.idleWander * 0.035 * idleness, 0, 1.1);
+  }
 
   const rpm = lerp(spec.idleRpm, spec.maxRpm, rpmNorm);
   // 4-stroke firing frequency, voiced at the audible order.
@@ -233,6 +246,17 @@ export interface TyreInput {
   handbrake: boolean;
   /** 0..1 fraction of wheels touching the ground. */
   grounded: number;
+  /**
+   * 0..1 — how hard the brakes are on. Derived from throttle opposing the
+   * direction of travel, so a lift is not braking but reversing the pedal is.
+   */
+  brake?: number;
+  /**
+   * 0..1 surface roughness. 0 = tarmac, 1 = kerb/verge/rubble. Coarse surfaces
+   * roll louder and darker, which is most of what "you have left the road"
+   * sounds like from inside the car.
+   */
+  roughness?: number;
 }
 
 export interface TyreState {
@@ -245,13 +269,22 @@ export interface TyreState {
   /** Squeal level and pitch. */
   squealLevel: number;
   squealHz: number;
+  /**
+   * Brake pad squeal — a separate, much higher and narrower resonance than
+   * tyre squeal, and it gets WORSE as the car slows, which is the opposite of
+   * every other tyre sound. That inversion is the tell that it is brakes.
+   */
+  brakeSquealLevel: number;
+  brakeSquealHz: number;
 }
 
 export function tyreState(t: TyreInput): TyreState {
   const v = Math.abs(t.speed);
   const vn = Math.min(1, v / 34);
-  const rollLevel = t.grounded * Math.min(0.55, Math.pow(vn, 0.8) * 0.5) * (1 + t.wetness * 0.55);
-  const rollHz = 260 + vn * 900 + t.wetness * 420;
+  const rough = clamp(t.roughness ?? 0, 0, 1);
+  const rollLevel = t.grounded * Math.min(0.7, Math.pow(vn, 0.8) * 0.5 * (1 + rough * 0.85)) * (1 + t.wetness * 0.55);
+  // Coarse ground drops the roll band — chippings rumble, tarmac hisses.
+  const rollHz = (260 + vn * 900 + t.wetness * 420) * lerp(1, 0.55, rough);
   const sprayLevel = t.wetness * t.grounded * Math.min(0.5, Math.pow(vn, 1.15) * 0.62);
   // Squeal only above a slip threshold, and it dies below walking pace.
   const slipN = Math.max(0, t.slip - 1.15) / 3.2;
@@ -259,5 +292,17 @@ export function tyreState(t: TyreInput): TyreState {
   const hb = t.handbrake && v > 3 ? 0.55 : 0;
   const squealLevel = Math.min(0.85, (slipN + hb) * speedGate * t.grounded * (1 - t.wetness * 0.35));
   const squealHz = 780 + Math.min(1, slipN) * 620 + vn * 260;
-  return { rollLevel, rollHz, sprayLevel, squealLevel, squealHz };
+
+  // Pads only sing once they are warm and the wheel is turning slowly enough
+  // for the stick-slip to fall into the audible band: strongest between about
+  // 1 and 9 m/s, gone at a standstill and gone at speed. Water kills it.
+  const brake = clamp(t.brake ?? 0, 0, 1);
+  const slowBand = clamp((v - 0.6) / 1.6, 0, 1) * clamp((11 - v) / 6, 0, 1);
+  const brakeSquealLevel = clamp(brake * slowBand * t.grounded * (1 - t.wetness * 0.8), 0, 1) * 0.6;
+  const brakeSquealHz = 2200 + (1 - clamp(v / 11, 0, 1)) * 900;
+
+  return {
+    rollLevel, rollHz, sprayLevel, squealLevel, squealHz,
+    brakeSquealLevel, brakeSquealHz,
+  };
 }

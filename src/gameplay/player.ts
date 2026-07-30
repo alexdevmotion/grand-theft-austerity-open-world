@@ -27,6 +27,7 @@ import {
   type VehicleClass,
   type VehicleHandle,
 } from '../core/services';
+import { interactionClaimed } from './interaction';
 
 const WALK = 2.1;
 const JOG = 4.6;
@@ -524,10 +525,13 @@ export class PlayerSystem implements System, PlayerService {
     this.travelYaw = travelYaw;
     const forwardish = Math.abs(angleDelta(travelYaw, yaw)) < TRAVEL_FORWARD_CONE;
     const sprint = !boarding && input.action('sprint') && !this.crouching && forwardish;
+    // Level 2's unlock (`sprint_boost`, src/gameplay/progression.ts) is meant
+    // to be felt, so it lands on the one number the player is watching.
+    const sprintSpeed = SPRINT * (ctx.tryGet(Services.Progression)?.has('sprint_boost') ? 1.15 : 1);
     let speed = !moving
       ? 0
       : this.crouching ? CROUCH * Math.min(1, mag / 0.7)
-      : sprint ? SPRINT
+      : sprint ? sprintSpeed
       : mag > 0.65 ? JOG
       : WALK;
     if (!this.crouching && !forwardish) speed = Math.min(speed, BACKPEDAL);
@@ -659,8 +663,13 @@ export class PlayerSystem implements System, PlayerService {
 
     if (!boarding && ctx.input.actionPressed('punch')) this.character.playState('punch');
 
-    // Enter a nearby vehicle.
-    if (!boarding && input.actionPressed('interact') && this.enterCooldown <= 0) {
+    // Enter a nearby vehicle — unless the interaction system has a marker
+    // focused, in which case E belongs to that. Standing at the community
+    // server with the Dacia parked behind you, both used to fire.
+    if (
+      !boarding && input.actionPressed('interact') &&
+      this.enterCooldown <= 0 && !interactionClaimed()
+    ) {
       const vehicles = ctx.tryGet(Services.Vehicles);
       const near = vehicles?.nearestEnterable(this.character.position, 3.6);
       if (near) this.enterVehicle(near);
@@ -938,6 +947,8 @@ export class PlayerSystem implements System, PlayerService {
 
   applyDamage(amount: number, _source?: Faction, point?: THREE.Vector3): void {
     if (this.deathTimer > 0) return;
+    // Level 6's unlock.
+    if (this.ctx.tryGet(Services.Progression)?.has('tough_hide')) amount *= 0.8;
     this.character.applyDamage(amount);
     this.ctx.events.emit('player:damaged', { amount, health: this.character.health });
     if (this.character.health > 0) {

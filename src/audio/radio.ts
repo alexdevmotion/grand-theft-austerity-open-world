@@ -35,7 +35,8 @@ import type { EventBus } from '../core/events';
 import { Rng } from '../core/rng';
 import { clamp, speakerCurve } from './dsp';
 import type { AudioGraph } from './graph';
-import { FOLK_TITLE, FOLK_TRACK, bucket, type Clip, type VoBucket } from './clips';
+import { FOLK_TITLE, FOLK_TRACK, bucket, type VoBucket } from './clips';
+import type { VoiceDirector } from './voiceDirector';
 
 export type StationId = 'off' | 'enerveaza' | 'folclor';
 export const STATIONS: StationId[] = ['enerveaza', 'folclor', 'off'];
@@ -233,12 +234,6 @@ export interface RadioContext {
   powered: boolean;
 }
 
-interface QueuedLine {
-  clip: Clip;
-  priority: number;
-  bucket: VoBucket;
-}
-
 export class Radio {
   station: StationId = 'enerveaza';
   /** Set true once the player first starts a car. */
@@ -267,22 +262,31 @@ export class Radio {
   private houseGain: GainNode | null = null;
   private houseSource: AudioBufferSourceNode | null = null;
 
-  private voiceSource: AudioBufferSourceNode | null = null;
-  private voiceEndsAt = 0;
   private nextChatterAt = 0;
-  private queue: QueuedLine[] = [];
-  private history: string[] = [];
-  private bucketCursor = new Map<VoBucket, number>();
   private segmentsSinceIdent = 0;
   private identDone = false;
-  /** Every clip key that has actually been played this session. */
-  readonly played = new Map<string, number>();
+  /** The single speaking authority. Attached right after construction. */
+  private director: VoiceDirector | null = null;
+
+  afterparty = false;
 
   /** 0..1 — how hard voice is currently ducking music/ambience. */
-  duck = 0;
-  nowPlaying = '';
-  lastClipKey = '';
-  afterparty = false;
+  get duck(): number {
+    return this.director?.duck ?? 0;
+  }
+
+  get nowPlaying(): string {
+    return this.director?.nowPlaying ?? '';
+  }
+
+  get lastClipKey(): string {
+    return this.director?.lastKey ?? '';
+  }
+
+  /** Every clip key that has actually been played this session. */
+  get played(): Map<string, number> {
+    return this.director?.played ?? _noPlays;
+  }
 
   constructor(ctx: AudioContext, graph: AudioGraph, events: EventBus, seed = 'gta-radio') {
     this.ctx = ctx;
@@ -308,6 +312,25 @@ export class Radio {
 
   get loadedClips(): number {
     return this.loader.loadedCount;
+  }
+
+  /** Where a spoken line must land to sound like it came out of the car. */
+  voiceInput(): AudioNode {
+    return this.voiceChain.input;
+  }
+
+  /** The decoded folk recording, once it lands. Shared with the street kiosks. */
+  get folk(): AudioBuffer | null {
+    return this.folkBuffer;
+  }
+
+  /** The clip cache, so the director does not need a second loader. */
+  get clipLoader(): ClipLoader {
+    return this.loader;
+  }
+
+  attachDirector(d: VoiceDirector): void {
+    this.director = d;
   }
 
   /** Kick off the (large) folk download. Safe to call before unlock. */
@@ -408,7 +431,7 @@ export class Radio {
     this.identDone = false;
     this.segmentsSinceIdent = 99;
     this.events.emit('ui:toast', { text: STATION_LABELS[s], kind: 'info', ms: 1800 });
-    if (s === 'off') this.stopVoice();
+    if (s === 'off') this.director?.stop();
   }
 
   next(): StationId {
@@ -427,105 +450,27 @@ export class Radio {
 
   powerOff(): void {
     this.powered = false;
-    this.stopVoice();
+    this.director?.stop();
   }
 
   /* ---- reactive commentary ---- */
 
   /**
-   * Ask the commentator to say something from `b`. Higher priority interrupts
-   * a lower-priority line that is already playing.
+   * Ask the commentator to say something from a first-batch bucket. Kept as the
+   * station's own vocabulary (idents, show segments, free-roam chatter); the
+   * curated per-moment lines go through the director directly. Either way the
+   * director is the only thing that ever starts a voice source, so a line is
+   * never cut off by another.
    */
   say(b: VoBucket, priority = 1): boolean {
-    const list = bucket(b);
-    if (!list.length) return false;
-    const clip = this.pickFresh(b, list);
-    if (!clip) return false;
-    // Drop anything weaker than what is already queued/playing.
-    if (this.voiceSource && priority <= this.currentPriority) {
-      if (this.queue.length > 3) return false;
-      this.queue.push({ clip, priority, bucket: b });
-      this.queue.sort((x, y) => y.priority - x.priority);
-      return true;
-    }
-    void this.playClip(clip, priority, b);
-    return true;
-  }
-
-  private currentPriority = 0;
-
-  private pickFresh(b: VoBucket, list: Clip[]): Clip | undefined {
-    // Walk the bucket round-robin with a small random jump so repeats are rare
-    // but the ordering is still deterministic from the seed.
-    const start = this.bucketCursor.get(b) ?? this.rng.int(0, list.length);
-    for (let i = 0; i < list.length; i++) {
-      const c = list[(start + i) % list.length];
-      if (!this.history.includes(c.key)) {
-        this.bucketCursor.set(b, (start + i + 1) % list.length);
-        return c;
-      }
-    }
-    this.bucketCursor.set(b, (start + 1) % list.length);
-    return list[start % list.length];
-  }
-
-  private remember(key: string): void {
-    this.history.push(key);
-    if (this.history.length > 14) this.history.shift();
-    this.played.set(key, (this.played.get(key) ?? 0) + 1);
-  }
-
-  private async playClip(c: Clip, priority: number, b: VoBucket): Promise<void> {
-    const buf = await this.loader.load(c.file);
-    if (!buf) return;
+    if (!this.director) return false;
     // Switching the radio off silences the station, but not the city: the
     // facade-screen reactions (priority >= 2) still get through.
-    if (this.station === 'off' && priority < 2) return;
-
-    this.stopVoice();
-    const s = this.ctx.createBufferSource();
-    s.buffer = buf;
-    s.connect(this.voiceChain.input);
-    const now = this.ctx.currentTime;
-    s.start(now);
-    this.voiceSource = s;
-    this.currentPriority = priority;
-    // The long "complete" cuts are minutes of talk radio; cap them so they do
-    // not block reactive commentary forever.
-    const dur = c.long ? Math.min(buf.duration, 52) : buf.duration;
-    this.voiceEndsAt = now + dur;
-    if (c.long) s.stop(now + dur);
-    this.nowPlaying = c.text;
-    this.lastClipKey = c.key;
-    this.remember(c.key);
-    this.segmentsSinceIdent++;
-
-    this.events.emit('ui:subtitle', {
-      speaker: 'CE NE ENERVEAZĂ',
-      text: c.text,
-      ms: Math.round(dur * 1000) + 400,
-    });
-
-    s.onended = () => {
-      if (this.voiceSource === s) {
-        this.voiceSource = null;
-        this.currentPriority = 0;
-        this.nowPlaying = '';
-      }
-    };
-  }
-
-  private stopVoice(): void {
-    if (!this.voiceSource) return;
-    try {
-      this.voiceSource.onended = null;
-      this.voiceSource.stop();
-    } catch {
-      /* already stopped */
-    }
-    this.voiceSource = null;
-    this.currentPriority = 0;
-    this.nowPlaying = '';
+    if (this.station === 'off' && priority < 2) return false;
+    if (!bucket(b).length) return false;
+    const ok = this.director.requestBucket(b, priority);
+    if (ok) this.segmentsSinceIdent++;
+    return ok;
   }
 
   /* ---- afterparty ---- */
@@ -563,13 +508,14 @@ export class Radio {
   /* ---- per-frame ---- */
 
   update(dt: number, rc: RadioContext): void {
+    void dt;
     const t = this.ctx.currentTime;
-    const speaking = !!this.voiceSource && t < this.voiceEndsAt;
+    const director = this.director;
+    const speaking = !!director?.speaking;
 
     // --- ducking ---
-    // Music sits under the commentator by 11 dB and comes back over 0.6 s.
-    const targetDuck = speaking ? 1 : 0;
-    this.duck += (targetDuck - this.duck) * (1 - Math.exp(-(speaking ? 12 : 2.2) * dt));
+    // Music sits under the commentator by ~11 dB and comes back over 0.6 s.
+    // The director owns the envelope; the radio only applies it to its bed.
     this.folkDuck.gain.setTargetAtTime(1 - this.duck * 0.72, t, speaking ? 0.06 : 0.22);
 
     // --- routing: cabin vs. on foot ---
@@ -581,7 +527,8 @@ export class Radio {
     // Reactions (priority >= 2: stars, crashes, mission beats, the broadcast
     // hijack) also come out of the city's facade screens, so they still land
     // when the player is on foot and nowhere near a car.
-    const paLive = !rc.inCabin && world < 0.15 && speaking && this.currentPriority >= 2;
+    const paLive = !rc.inCabin && world < 0.15 && speaking
+      && director!.route === 'radio' && director!.priority >= 2;
     this.voiceChain.pa.gain.setTargetAtTime(paLive ? 0.55 : 0, t, paLive ? 0.05 : 0.3);
     this.musicChain.pa.gain.setTargetAtTime(0, t, 0.3);
 
@@ -602,22 +549,15 @@ export class Radio {
     this.folkGain.gain.setTargetAtTime(on ? bed : 0, t, 0.4);
     if (on && !this.folkSource && this.folkBuffer) this.startFolkBed();
 
-    if (!on) return;
+    if (!on || !director) return;
 
     // --- scheduling ---
+    // The director drains its own queue; the station only ever *adds* to it,
+    // and only when nothing at all is being said.
     if (speaking) {
-      this.nextChatterAt = Math.max(this.nextChatterAt, this.voiceEndsAt);
+      this.nextChatterAt = Math.max(this.nextChatterAt, t + director.remaining);
       return;
     }
-    if (this.voiceSource && !speaking) this.stopVoice();
-
-    // Drain the reaction queue first.
-    if (this.queue.length) {
-      const q = this.queue.shift()!;
-      void this.playClip(q.clip, q.priority, q.bucket);
-      return;
-    }
-
     if (t < this.nextChatterAt) return;
 
     // Station ident on power-up and every ~6 segments.
@@ -636,16 +576,24 @@ export class Radio {
       return;
     }
 
-    // Talk station: mostly idle chatter, occasionally a long show segment.
-    const wantLong = this.rng.next() < 0.12;
-    this.say(wantLong ? 'showSegment' : 'idle', 0.4);
+    // Talk station. Most of the airtime is the curated filler pool — the long
+    // *Ce Ne Enervează* lines that are too long to be reactions but are the
+    // best writing in the library — with the first-batch chatter and the
+    // occasional full show segment in between.
+    const roll = this.rng.next();
+    if (roll < 0.55) director.requestFiller(0.4);
+    else if (roll < 0.9) this.say('idle', 0.4);
+    else this.say('showSegment', 0.4);
     this.nextChatterAt = t + this.rng.range(6, 15);
   }
 
   dispose(): void {
-    this.stopVoice();
+    this.director?.stop();
     for (const s of [this.folkSource, this.houseSource, this.dryMusicSource]) {
       try { s?.stop(); } catch { /* already stopped */ }
     }
   }
 }
+
+/** Stand-in so `played` is never null before the director is attached. */
+const _noPlays = new Map<string, number>();

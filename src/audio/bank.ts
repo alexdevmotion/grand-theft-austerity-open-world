@@ -30,8 +30,13 @@ export type SfxId =
   | 'door_open' | 'door_close' | 'car_door' | 'pickup' | 'interact'
   // vehicle incidental
   | 'horn' | 'horn_low' | 'dacia_cough' | 'spikes'
+  // vehicle foley — the mechanical untidiness of a car held together with wire
+  | 'gear_clunk' | 'handbrake' | 'body_rattle' | 'brake_squeal' | 'kerb_thump'
+  | 'engine_stall'
   // world
-  | 'thunder' | 'tram_bell' | 'crowd_gasp' | 'bird'
+  | 'thunder' | 'tram_bell' | 'tram_screech' | 'crowd_gasp' | 'bird'
+  | 'crowd_shout' | 'crowd_scream' | 'pigeon_flutter' | 'cloth_rustle'
+  | 'construction_hammer' | 'dog_bark' | 'shop_bell'
   // ui / mission stings
   | 'star_up' | 'star_down' | 'mission_start' | 'mission_complete' | 'mission_failed'
   | 'activity_start' | 'activity_win' | 'radio_click' | 'radio_static';
@@ -44,7 +49,11 @@ export const SFX_IDS: SfxId[] = [
   'ped_yell', 'ped_hit', 'punch', 'body_fall',
   'door_open', 'door_close', 'car_door', 'pickup', 'interact',
   'horn', 'horn_low', 'dacia_cough', 'spikes',
-  'thunder', 'tram_bell', 'crowd_gasp', 'bird',
+  'gear_clunk', 'handbrake', 'body_rattle', 'brake_squeal', 'kerb_thump',
+  'engine_stall',
+  'thunder', 'tram_bell', 'tram_screech', 'crowd_gasp', 'bird',
+  'crowd_shout', 'crowd_scream', 'pigeon_flutter', 'cloth_rustle',
+  'construction_hammer', 'dog_bark', 'shop_bell',
   'star_up', 'star_down', 'mission_start', 'mission_complete', 'mission_failed',
   'activity_start', 'activity_win', 'radio_click', 'radio_static',
 ];
@@ -56,6 +65,9 @@ const VARIANTS: Partial<Record<SfxId, number>> = {
   prop_wood: 2, prop_metal: 2, prop_plastic: 2, prop_glass: 2,
   ped_yell: 3, ped_hit: 2, punch: 3, suspension_knock: 3, bird: 3,
   horn: 2, crowd_gasp: 2,
+  gear_clunk: 3, body_rattle: 4, kerb_thump: 3, brake_squeal: 2,
+  crowd_shout: 3, crowd_scream: 2, cloth_rustle: 4, construction_hammer: 2,
+  dog_bark: 2, tram_screech: 2, pigeon_flutter: 2,
 };
 
 /* ------------------------------------------------------------------ */
@@ -590,6 +602,226 @@ function renderRadioStatic(sr: number, rng: Rng): Float32Array {
   return normalise(out, 0.5);
 }
 
+/* ---- vehicle foley: the Dacia "e legată cu sârme, bate, troncăne" ---- */
+
+/**
+ * Gearbox clunk. A worn linkage is two events a few milliseconds apart — the
+ * lever hitting the gate, then the dog teeth engaging — plus a short body
+ * shudder as the driveline takes up the slack.
+ */
+function renderGearClunk(sr: number, rng: Rng): Float32Array {
+  const out = buf(sr, 0.26);
+  const d = 1 + rng.range(-0.09, 0.09);
+  // lever into the gate: hard, bright, tiny
+  mixInto(out, noiseBurst(sr, rng, 0.035, 2600 * d, 3.5, 0.0035), 0, 0.75);
+  mixInto(out, modes(sr, 0.1, [520 * d, 1180 * d, 2340 * d], [0.012, 0.008, 0.005], [0.4, 0.26, 0.16]), 0, 0.7);
+  // dog teeth: a lower, duller knock ~14 ms later
+  const at = Math.round(sr * rng.range(0.010, 0.020));
+  mixInto(out, modes(sr, 0.16, [176 * d, 341 * d, 703 * d], [0.03, 0.02, 0.012], [0.55, 0.32, 0.18]), at, 0.85);
+  // driveline take-up
+  const shud = buf(sr, 0.13);
+  sweep(shud, sr, 78, 44, 1, true);
+  applyEnvelope(shud, sr, { attack: 0.002, decay: 0.03, sustain: 0, duration: 0.13, release: 0.05 });
+  mixInto(out, shud, at, 0.5);
+  return normalise(out, 0.55);
+}
+
+/** Handbrake: the ratchet pawl walking over its teeth, then the lever seating. */
+function renderHandbrake(sr: number, rng: Rng): Float32Array {
+  const out = buf(sr, 0.5);
+  const teeth = 6 + Math.floor(rng.range(0, 3));
+  for (let i = 0; i < teeth; i++) {
+    const at = Math.round(sr * (0.02 + i * rng.range(0.028, 0.042)));
+    mixInto(out, noiseBurst(sr, rng, 0.02, rng.range(3000, 4600), 5, 0.0022), at, 0.5 + i * 0.03);
+    mixInto(out, modes(sr, 0.04, [1450, 2880], [0.004, 0.003], [0.3, 0.2]), at, 0.4);
+  }
+  // Cable tension + lever stop.
+  const stop = Math.round(sr * (0.02 + teeth * 0.035 + 0.02));
+  mixInto(out, modes(sr, 0.2, [190, 430, 880], [0.035, 0.02, 0.012], [0.5, 0.3, 0.18]), Math.min(stop, out.length - 1), 0.8);
+  return normalise(out, 0.5);
+}
+
+/**
+ * Body rattle — the "troncăne". Loose trim, a wire-tied bumper and a boot lid
+ * with no gasket: a short burst of inharmonic taps with no single pitch. Played
+ * repeatedly over rough road, so it must sit low and never draw attention.
+ */
+function renderBodyRattle(sr: number, rng: Rng): Float32Array {
+  const out = buf(sr, 0.42);
+  const taps = 5 + Math.floor(rng.range(0, 6));
+  for (let i = 0; i < taps; i++) {
+    const at = Math.round(sr * rng.range(0, 0.3));
+    const f = rng.range(320, 1900);
+    mixInto(out, modes(sr, 0.09, [f, f * 2.41, f * 3.77], [0.012, 0.008, 0.005], [0.4, 0.24, 0.13]), at, rng.range(0.25, 0.8));
+    if (rng.bool(0.5)) mixInto(out, noiseBurst(sr, rng, 0.02, rng.range(2200, 5200), 6, 0.0025), at, rng.range(0.1, 0.35));
+  }
+  // A bit of sheet-metal boom under it, so it reads as a car and not a box of cutlery.
+  const boom = buf(sr, 0.16);
+  sweep(boom, sr, 132, 96, 1, true);
+  applyEnvelope(boom, sr, { attack: 0.003, decay: 0.04, sustain: 0, duration: 0.16, release: 0.06 });
+  mixInto(out, boom, 0, 0.28);
+  return normalise(out, 0.42);
+}
+
+/** Brake squeal: a high, narrow pad resonance that swells and dies. */
+function renderBrakeSqueal(sr: number, rng: Rng): Float32Array {
+  const out = buf(sr, 0.85);
+  const f = rng.range(2100, 2900);
+  additive(out, sr, [[f, 0.5], [f * 1.997, 0.16], [f * 3.01, 0.06]]);
+  // Beating between two nearly-equal pads makes the classic warble.
+  additive(out, sr, [[f * 1.006, 0.4]]);
+  const hiss = buf(sr, 0.85);
+  whiteNoise(hiss, rng);
+  biquad(hiss, 'bandpass', f * 0.62, 3, sr);
+  mixInto(out, hiss, 0, 0.12);
+  applyEnvelope(out, sr, { attack: 0.09, decay: 0.5, sustain: 0.5, duration: 0.85, release: 0.35 });
+  return normalise(out, 0.35);
+}
+
+/** A wheel dropping off (or climbing) a kerb: rubber slap then suspension. */
+function renderKerbThump(sr: number, rng: Rng): Float32Array {
+  const out = buf(sr, 0.4);
+  const slap = buf(sr, 0.09);
+  whiteNoise(slap, rng);
+  biquad(slap, 'bandpass', rng.range(150, 260), 0.8, sr);
+  for (let i = 0; i < slap.length; i++) slap[i] *= Math.exp(-(i / sr) / 0.011);
+  mixInto(out, slap, 0, 0.9);
+  const thud = buf(sr, 0.26);
+  sweep(thud, sr, 88, 36, 1, true);
+  applyEnvelope(thud, sr, { attack: 0.001, decay: 0.026, sustain: 0, duration: 0.26, release: 0.09 });
+  mixInto(out, thud, Math.round(sr * 0.004), 1);
+  mixInto(out, modes(sr, 0.2, [268, 517, 962], [0.03, 0.02, 0.012], [0.3, 0.2, 0.12]), Math.round(sr * 0.006), 0.6);
+  return normalise(out, 0.8);
+}
+
+/** The engine giving up: the note drops, coughs twice and stops. */
+function renderEngineStall(sr: number, rng: Rng): Float32Array {
+  const out = buf(sr, 1.1);
+  const die = buf(sr, 0.75);
+  sweep(die, sr, 96, 22, 1, true);
+  applyEnvelope(die, sr, { attack: 0.01, decay: 0.4, sustain: 0.35, duration: 0.75, release: 0.4 });
+  mixInto(out, die, 0, 0.8);
+  for (const at of [0.28, 0.52]) {
+    mixInto(out, noiseBurst(sr, rng, 0.16, rng.range(180, 300), 1.1, 0.03), Math.round(sr * at), 0.55);
+  }
+  return normalise(out, 0.6);
+}
+
+/* ---- city & people ---- */
+
+/** Tram flange screech: metal-on-metal on a tight curve. Long and horrible. */
+function renderTramScreech(sr: number, rng: Rng): Float32Array {
+  const out = buf(sr, 1.8);
+  const f = rng.range(1250, 1750);
+  // Stick-slip: the pitch wanders and the amplitude flutters.
+  const n = out.length;
+  let phase = 0;
+  for (let i = 0; i < n; i++) {
+    const t = i / sr;
+    const wob = 1 + 0.045 * Math.sin(2 * Math.PI * 5.3 * t) + 0.02 * Math.sin(2 * Math.PI * 13.1 * t);
+    phase += (2 * Math.PI * f * wob) / sr;
+    const flutter = 0.6 + 0.4 * Math.abs(Math.sin(2 * Math.PI * 21 * t));
+    out[i] = (Math.sin(phase) * 0.6 + Math.sin(phase * 2.004) * 0.25 + Math.sin(phase * 3.01) * 0.1) * flutter;
+  }
+  const grind = buf(sr, 1.8);
+  whiteNoise(grind, rng);
+  biquad(grind, 'bandpass', f * 0.55, 2.2, sr);
+  mixInto(out, grind, 0, 0.22);
+  applyEnvelope(out, sr, { attack: 0.16, decay: 0.9, sustain: 0.7, duration: 1.8, release: 0.7 });
+  return normalise(out, 0.55);
+}
+
+/** One angry Romanian street shout. Not a word — the shape of one. */
+function renderCrowdShout(sr: number, rng: Rng): Float32Array {
+  const out = buf(sr, 0.62);
+  // "Bă!" — a short hard onset then an open vowel falling away.
+  mixInto(out, renderVocal(sr, rng, 0.2, rng.range(150, 210), 0.22, [640, 1180, 2500], 0.9), 0, 0.85);
+  mixInto(out, renderVocal(sr, rng, 0.36, rng.range(130, 190), -0.24, [720, 1250, 2600], 1), Math.round(sr * 0.2), 1);
+  return normalise(out, 0.75);
+}
+
+/** A scream — a car just came over the kerb at them. */
+function renderCrowdScream(sr: number, rng: Rng): Float32Array {
+  const out = buf(sr, 0.95);
+  mixInto(out, renderVocal(sr, rng, 0.9, rng.range(320, 470), rng.range(0.3, 0.7), [900, 1900, 3100], 1), 0, 1);
+  const breath = buf(sr, 0.3);
+  whiteNoise(breath, rng);
+  biquad(breath, 'bandpass', 2400, 1.1, sr);
+  for (let i = 0; i < breath.length; i++) breath[i] *= Math.exp(-(i / sr) / 0.09);
+  mixInto(out, breath, 0, 0.2);
+  return normalise(out, 0.8);
+}
+
+/** Pigeons leaving in a hurry. */
+function renderPigeonFlutter(sr: number, rng: Rng): Float32Array {
+  const out = buf(sr, 1.2);
+  const beats = 14 + Math.floor(rng.range(0, 8));
+  for (let i = 0; i < beats; i++) {
+    const t = i * rng.range(0.055, 0.085);
+    if (t > 1.05) break;
+    const w = buf(sr, 0.06);
+    whiteNoise(w, rng);
+    biquad(w, 'bandpass', rng.range(320, 900), 1.3, sr);
+    for (let k = 0; k < w.length; k++) w[k] *= Math.sin((Math.PI * k) / w.length) ** 2;
+    mixInto(out, w, Math.round(sr * t), rng.range(0.3, 0.8) * (1 - t / 1.4));
+  }
+  // A couple of alarmed coos.
+  mixInto(out, renderVocal(sr, rng, 0.22, 430, -0.3, [560, 1100, 2000], 0.4), Math.round(sr * rng.range(0.1, 0.5)), 0.35);
+  return normalise(out, 0.5);
+}
+
+/** Clothing rustle — the quiet half of a footstep. */
+function renderClothRustle(sr: number, rng: Rng): Float32Array {
+  const out = buf(sr, 0.18);
+  whiteNoise(out, rng);
+  biquad(out, 'bandpass', rng.range(2600, 4400), 0.8, sr);
+  biquad(out, 'highpass', 1400, 0.7, sr);
+  for (let i = 0; i < out.length; i++) {
+    const t = i / sr;
+    out[i] *= Math.exp(-t / 0.035) * (0.6 + 0.4 * Math.sin(2 * Math.PI * 31 * t));
+  }
+  return normalise(out, 0.22);
+}
+
+/** Construction: a pneumatic hammer burst, or a scaffold pole dropped. */
+function renderConstructionHammer(sr: number, rng: Rng): Float32Array {
+  const out = buf(sr, 1.4);
+  const hits = 8 + Math.floor(rng.range(0, 10));
+  const period = rng.range(0.055, 0.085);
+  for (let i = 0; i < hits; i++) {
+    const at = Math.round(sr * (0.02 + i * period));
+    if (at > out.length - 100) break;
+    mixInto(out, noiseBurst(sr, rng, 0.05, rng.range(900, 1800), 1.4, 0.008), at, 0.7);
+    mixInto(out, modes(sr, 0.09, [148, 372, 690], [0.014, 0.009, 0.006], [0.5, 0.3, 0.18]), at, 0.8);
+  }
+  return normalise(out, 0.6);
+}
+
+function renderDogBark(sr: number, rng: Rng): Float32Array {
+  const out = buf(sr, 0.9);
+  const barks = 2 + Math.floor(rng.range(0, 3));
+  for (let i = 0; i < barks; i++) {
+    const at = Math.round(sr * (i * rng.range(0.18, 0.3)));
+    const b = renderVocal(sr, rng, 0.13, rng.range(230, 380), -0.45, [520, 1400, 2700], 1);
+    mixInto(out, b, at, rng.range(0.6, 1));
+  }
+  return normalise(out, 0.62);
+}
+
+/** The bell over a shop door. */
+function renderShopBell(sr: number, rng: Rng): Float32Array {
+  const out = buf(sr, 0.9);
+  const d = 1 + rng.range(-0.03, 0.03);
+  mixInto(out, modes(
+    sr, 0.85,
+    [2180 * d, 3270 * d, 4890 * d, 6110 * d],
+    [0.22, 0.16, 0.1, 0.07],
+    [0.5, 0.35, 0.2, 0.12],
+  ), 0, 1);
+  mixInto(out, modes(sr, 0.5, [2210 * d, 3310 * d], [0.18, 0.12], [0.3, 0.2]), Math.round(sr * 0.09), 0.6);
+  return normalise(out, 0.35);
+}
+
 /* ------------------------------------------------------------------ */
 /* Dispatch                                                            */
 /* ------------------------------------------------------------------ */
@@ -641,10 +873,24 @@ export function renderSfx(id: SfxId, sr: number, rng: Rng): Float32Array {
     case 'horn_low': return renderHorn(sr, rng, true);
     case 'dacia_cough': return renderDaciaCough(sr, rng);
     case 'spikes': return renderSpikes(sr, rng);
+    case 'gear_clunk': return renderGearClunk(sr, rng);
+    case 'handbrake': return renderHandbrake(sr, rng);
+    case 'body_rattle': return renderBodyRattle(sr, rng);
+    case 'brake_squeal': return renderBrakeSqueal(sr, rng);
+    case 'kerb_thump': return renderKerbThump(sr, rng);
+    case 'engine_stall': return renderEngineStall(sr, rng);
     case 'thunder': return renderThunder(sr, rng);
     case 'tram_bell': return renderTramBell(sr);
+    case 'tram_screech': return renderTramScreech(sr, rng);
     case 'crowd_gasp': return renderCrowdGasp(sr, rng);
     case 'bird': return renderBird(sr, rng);
+    case 'crowd_shout': return renderCrowdShout(sr, rng);
+    case 'crowd_scream': return renderCrowdScream(sr, rng);
+    case 'pigeon_flutter': return renderPigeonFlutter(sr, rng);
+    case 'cloth_rustle': return renderClothRustle(sr, rng);
+    case 'construction_hammer': return renderConstructionHammer(sr, rng);
+    case 'dog_bark': return renderDogBark(sr, rng);
+    case 'shop_bell': return renderShopBell(sr, rng);
     case 'star_up': return renderSting(sr, [0, 3, 6], true, 1.1, 1.1);
     case 'star_down': return renderSting(sr, [6, 3, 0], false, 0.7, 1.0);
     case 'mission_start': return renderSting(sr, [0, 4, 7], true, 1.0, 1.3);
@@ -865,6 +1111,46 @@ export function renderParkLoop(sr: number, seconds: number, rng: Rng): Float32Ar
     mixInto(b, renderBird(sr, rng), Math.round(rng.range(0, b.length - sr * 0.6)), rng.range(0.25, 0.6));
   }
   return normalise(b, 0.55);
+}
+
+/**
+ * Building site: a compressor droning, a pneumatic hammer in bursts, and a
+ * scaffold pole going down every so often. Bucharest has one of these on
+ * every third corner, so it gets its own layer rather than living inside the
+ * industrial drone.
+ */
+export function renderConstructionLoop(sr: number, seconds: number, rng: Rng): Float32Array {
+  const b = new Float32Array(Math.round(sr * seconds));
+  // Diesel compressor: a low pulse train, not a pure tone.
+  const puls = 11.7;
+  for (let i = 0; i < b.length; i++) {
+    const t = i / sr;
+    const p = (t * puls) % 1;
+    b[i] = (Math.exp(-p * 5) * 2 - 0.7) * 0.16;
+  }
+  onePoleLowpass(b, 240, sr);
+  const hiss = renderNoiseLoop(sr, seconds, 'pink', rng);
+  biquad(hiss, 'bandpass', 1600, 0.6, sr);
+  mixInto(b, hiss, 0, 0.14);
+  // Hammer bursts, well spaced.
+  const bursts = Math.max(1, Math.round(seconds * 0.35));
+  for (let i = 0; i < bursts; i++) {
+    const h = renderConstructionHammer(sr, rng);
+    const at = Math.round(rng.range(0, Math.max(1, b.length - h.length - 1)));
+    mixInto(b, h, at, rng.range(0.25, 0.55));
+  }
+  // Dropped poles.
+  for (let i = 0; i < Math.max(1, Math.round(seconds * 0.2)); i++) {
+    const m = modes(sr, 1.6, [rng.range(160, 300), rng.range(620, 980), rng.range(1500, 2400)], [0.5, 0.34, 0.2], [0.4, 0.26, 0.14]);
+    const at = Math.round(rng.range(0, Math.max(1, b.length - m.length - 1)));
+    mixInto(b, m, at, rng.range(0.1, 0.28));
+  }
+  const xf = Math.round(sr * 0.4);
+  for (let i = 0; i < xf; i++) {
+    const t = i / xf;
+    b[i] = b[i] * t + b[b.length - xf + i] * (1 - t);
+  }
+  return normalise(b, 0.6);
 }
 
 /** Engine noise beds: one white loop reused by every vehicle voice. */

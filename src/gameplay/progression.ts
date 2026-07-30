@@ -33,7 +33,14 @@ export const LEVEL_UNLOCKS: Record<number, { id: string; text: string }> = {
   4: { id: 'cool_head', text: 'Instabilitatea scade mai repede · cursa Unirii' },
   5: { id: 'payday', text: 'Recompensele activităților +50%' },
   6: { id: 'tough_hide', text: 'Încasezi cu 20% mai puțin' },
+  // The economy now has an outflow (bribes, fines, repairs, food), so the
+  // curve gets a rung that is about MONEY rather than about the body — and it
+  // is the one that makes the two most satirical sinks affordable.
+  7: { id: 'conexiuni', text: 'Ai cunoștințe: șpaga și amenzile −30%' },
 };
+
+/** How much cheaper `conexiuni` makes anything the Ministry charges you. */
+export const CONEXIUNI_DISCOUNT = 0.7;
 
 /** XP per metre, by how you covered it. Walking is worth more per metre. */
 const XP_PER_METRE_FOOT = 1 / 12;
@@ -56,11 +63,15 @@ export class ProgressionSystem implements System, ProgressionService {
 
   private lastPos: THREE.Vector3 | null = null;
   private roamBank = 0;
-  private discovered = new Set<string>();
+  private discoveredSet = new Set<string>();
   private city: CityService | null = null;
   private peakStars = 0;
   /** Metres covered this session, for the harness. */
   private _metres = 0;
+  /** How many times the Ministry has actually caught him. */
+  private _busted = 0;
+  /** Set by `forfeitEscape`, consumed by the next drop to zero stars. */
+  private escapeForfeited = false;
 
   get level(): number {
     return this._level;
@@ -70,6 +81,9 @@ export class ProgressionSystem implements System, ProgressionService {
   }
   get unlocks(): ReadonlySet<string> {
     return this._unlocks;
+  }
+  get discovered(): ReadonlySet<string> {
+    return this.discoveredSet;
   }
   /** XP into the current level and what the next one costs. */
   get levelProgress(): { into: number; span: number } {
@@ -96,11 +110,15 @@ export class ProgressionSystem implements System, ProgressionService {
     ctx.events.on('instability:changed', ({ stars, previous }) => {
       this.peakStars = Math.max(this.peakStars, previous, stars);
       if (stars === 0) {
-        if (this.peakStars >= 2) {
+        // A bust also ends at zero stars, and the event cannot tell the two
+        // apart — `previous` is five either way. `forfeitEscape` raises the
+        // flag; it is consumed here so the next genuine escape still pays.
+        if (this.peakStars >= 2 && !this.escapeForfeited) {
           const gain = ESCAPE_XP * this.peakStars;
           this.addXp(gain, 'evadare');
           ctx.tryGet(Services.Hud)?.toast(`Ai scăpat de Minister · +${gain} XP`, 'good');
         }
+        this.escapeForfeited = false;
         this.peakStars = 0;
       }
     });
@@ -130,6 +148,60 @@ export class ProgressionSystem implements System, ProgressionService {
 
   has(unlock: string): boolean {
     return this._unlocks.has(unlock);
+  }
+
+  /**
+   * SAVE / LOAD. Loading is not earning: this sets the curve directly and fires
+   * neither `progression:levelUp` nor a banner, so resuming at level 5 does not
+   * throw four "NIVEL n" toasts across the screen. Level and unlocks are
+   * recomputed from XP when the record does not carry them, which is also what
+   * repairs a slot written before an unlock table change.
+   */
+  restore(state: {
+    xp: number;
+    level?: number;
+    unlocks?: readonly string[];
+    discovered?: readonly string[];
+  }): void {
+    this._xp = Math.max(0, state.xp);
+    this._level = 1;
+    while (this._level < LEVEL_CURVE.length && this._xp >= LEVEL_CURVE[this._level]) this._level++;
+    if (state.level !== undefined) this._level = Math.max(this._level, Math.round(state.level));
+
+    this._unlocks = new Set(state.unlocks ?? []);
+    // Whatever the slot says, the curve is authoritative about what this level
+    // has earned — an old slot must not leave you without your sprint boost.
+    for (let l = 2; l <= this._level; l++) {
+      const named = LEVEL_UNLOCKS[l];
+      this._unlocks.add(named?.id ?? `level_${l}`);
+      this._unlocks.add(`level_${l}`);
+    }
+    this.discoveredSet = new Set(state.discovered ?? []);
+    this.roamBank = 0;
+    this.lastPos = null;
+    this.peakStars = 0;
+
+    // The HUD reads level and the XP bar off the service every frame, but the
+    // bar only re-tints on this event. Fire the *value* change, not a level-up.
+    this.ctx.events.emit('progression:xp', { amount: 0, total: this._xp, reason: 'încărcare' });
+  }
+
+  /**
+   * THE CHASE YOU LOST DOES NOT PAY.
+   *
+   * `instability:changed` cannot tell the difference between shaking the
+   * Ministry off and being put in the back of their van — both end at zero
+   * stars. The detention loop in `wanted.ts` calls this first, so a bust
+   * cannot hand out the evade bonus it just took away from you.
+   */
+  forfeitEscape(): void {
+    this.peakStars = 0;
+    this.escapeForfeited = true;
+    this._busted++;
+  }
+
+  get bustedCount(): number {
+    return this._busted;
   }
 
   /* ---------------------------------------------------------------- */
@@ -165,10 +237,10 @@ export class ProgressionSystem implements System, ProgressionService {
     const city = this.city;
     if (!city) return;
     for (const [id, lm] of city.landmarks) {
-      if (this.discovered.has(id)) continue;
+      if (this.discoveredSet.has(id)) continue;
       const r = Math.max(24, lm.radius * 0.55);
       if (Math.hypot(p.x - lm.position.x, p.z - lm.position.z) > r) continue;
-      this.discovered.add(id);
+      this.discoveredSet.add(id);
       this.addXp(DISCOVERY_XP, 'descoperire');
       this.ctx.tryGet(Services.Hud)?.toast(`Descoperit: ${lm.name} · +${DISCOVERY_XP} XP`, 'good', 3600);
     }
@@ -183,8 +255,9 @@ export class ProgressionSystem implements System, ProgressionService {
         xp: this._xp,
         progress: this.levelProgress,
         unlocks: [...this._unlocks],
-        discovered: [...this.discovered],
+        discovered: [...this.discoveredSet],
         metres: Math.round(this._metres),
+        busted: this._busted,
       }),
       addXp: (n: number) => this.addXp(n, 'debug'),
       table: () => LEVEL_UNLOCKS,

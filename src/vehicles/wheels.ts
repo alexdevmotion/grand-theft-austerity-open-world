@@ -31,9 +31,9 @@ const lin = (hex: number) => new THREE.Color(hex).convertSRGBToLinear();
 
 const RUBBER = lin(0x16161b);
 const RUBBER_WORN = lin(0x2a2a31);
-const RIM_STEEL = lin(0xc3c7d4);
-const RIM_DARK = lin(0x33333c);
-const CHROME = lin(0xe4e9f5);
+const RIM_STEEL = lin(0x8d919c);
+const RIM_DARK = lin(0x2a2a32);
+const CHROME = lin(0xbcc2d2);
 
 const cache = new Map<string, THREE.BufferGeometry>();
 

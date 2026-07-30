@@ -18,6 +18,7 @@ import * as THREE from 'three';
 import type { Rng } from '../../core/rng';
 import type { DetailBuilder } from './builders';
 import { DetailColor, emi } from './facades';
+import { INTERIORS } from '../interiors/defs';
 
 const lin = (hex: number): THREE.Color => new THREE.Color(hex).convertSRGBToLinear();
 
@@ -126,6 +127,20 @@ export function buildLobby(
   const hw = w / 2 - inset;
   const hd = dep / 2 - inset;
   if (hw < 2 || hd < 2) return;
+
+  /*
+   * NOT OVER A ROOM YOU CAN WALK INTO.
+   *
+   * This lobby is a FAKE: a magenta emissive back wall and a purple ceiling
+   * coffer, authored to read from the plaza through glass at ten metres. Drawn
+   * inside an enterable interior it is a 24 m wall of blown-out magenta four
+   * metres from the player's face, and it swallows the real room — which is
+   * exactly what it did to the Builders House lobby: the fake was still being
+   * drawn at (-46, 46) on top of the room the finale happens in.
+   */
+  for (const room of INTERIORS) {
+    if (Math.abs(cx - room.cx) < room.w / 2 && Math.abs(cz - room.cz) < room.d / 2) return;
+  }
 
   d.box(cx, 0.3, cz, hw * 2, 0.2, hd * 2, 0, { color: lin(0x2b2530), mr: [0.1, 0.35] });
   // Back wall glowing magenta — this is the colour that leaks onto the plaza.

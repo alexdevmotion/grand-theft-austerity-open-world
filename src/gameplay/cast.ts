@@ -21,9 +21,15 @@
  */
 
 import * as THREE from 'three';
-import type { GameContext } from '../core/engine';
+import type { GameContext, System } from '../core/engine';
 import { Rng } from '../core/rng';
-import { Services, type CityService } from '../core/services';
+import {
+  Services,
+  type CastMemberSpec,
+  type CastRole,
+  type CastService,
+  type CityService,
+} from '../core/services';
 import {
   CAST_APPEARANCES,
   CharacterFactory,
@@ -41,20 +47,7 @@ const ANIM_RADIUS = 95;
 /** Head-tracking range. */
 const LOOK_RADIUS = 14;
 
-export type CastRole = 'nicusor' | 'ally' | 'builder';
-
-export interface CastMemberSpec {
-  id: string;
-  /** Romanian display name, used by subtitles and prompts. */
-  name: string;
-  role: CastRole;
-  x: number;
-  z: number;
-  /** Facing, radians. */
-  yaw: number;
-  /** Dance at the afterparty. */
-  parties?: boolean;
-}
+export type { CastRole, CastMemberSpec } from '../core/services';
 
 interface CastMember extends CastMemberSpec {
   actor: CharacterActor | null;
@@ -71,7 +64,11 @@ interface CastMember extends CastMemberSpec {
 const _v = new THREE.Vector3();
 const _look = new THREE.Vector3();
 
-export class CastDirector {
+export class CastDirector implements System, CastService {
+  readonly name = 'cast';
+  /** Before missions (220), which populates the cast list in its own `init`. */
+  readonly order = 217;
+
   private ctx!: GameContext;
   private city: CityService | null = null;
   private factory!: CharacterFactory;
@@ -83,6 +80,7 @@ export class CastDirector {
 
   init(ctx: GameContext): void {
     this.ctx = ctx;
+    ctx.provide(Services.Cast, this);
     this.city = ctx.tryGet(Services.City) ?? null;
     this.factory = CharacterFactory.of(ctx);
   }

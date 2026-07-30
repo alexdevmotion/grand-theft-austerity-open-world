@@ -16,7 +16,6 @@
 import * as THREE from 'three';
 import type { GameContext, System } from '../core/engine';
 import { Services, type HudService } from '../core/services';
-import { PauseMenu } from './pauseMenu';
 import { activityHud, missionHud } from '../gameplay/hudState';
 
 const _wp = new THREE.Vector3();
@@ -25,6 +24,12 @@ const _cam = new THREE.Vector3();
 export class HudSystem implements System, HudService {
   readonly name = 'hud';
   readonly order = 420;
+  /**
+   * The HUD hides itself while the world is stopped, and something has to be
+   * ticking for it to notice the world started again. It is one `display`
+   * assignment per paused frame.
+   */
+  readonly ticksWhenPaused = true;
 
   private root!: HTMLDivElement;
   private toastEl!: HTMLDivElement;
@@ -44,14 +49,6 @@ export class HudSystem implements System, HudService {
   private objHint = '';
   private lei = 0;
   private xpFlash = 0;
-
-  /**
-   * The pause screen lives here rather than as its own System because the
-   * engine only ticks systems with `order >= 400` while `time.paused` is true.
-   * The HUD is 420, so hanging the menu off it is what keeps it alive — and
-   * able to read Escape again — once the world has stopped.
-   */
-  private pause = new PauseMenu();
 
   init(ctx: GameContext): void {
     this.ctx = ctx;
@@ -101,7 +98,10 @@ export class HudSystem implements System, HudService {
       this.xpFlash = 1;
     });
 
-    this.pause.init(ctx);
+    // The front-end (order 2) pauses the world for the whole title screen. The
+    // HUD builds itself here, at 420, long after that — so it has to check
+    // rather than assume it is allowed on screen.
+    if (ctx.time.paused) this.setVisible(false);
   }
 
   private visible = true;
@@ -162,12 +162,11 @@ export class HudSystem implements System, HudService {
   /* ---------------------------------------------------------------- */
 
   update(dt: number): void {
-    // Escape only ever *opens* the menu from here: once it is up the menu owns
-    // the key on its own capture-phase listener, with gameplay input disabled.
-    if (!this.pause.isOpen && this.ctx.input.actionPressed('pause')) this.pause.show();
-    this.pause.update(dt);
-    this.root.style.display = this.pause.isOpen || !this.visible ? 'none' : '';
-    if (this.pause.isOpen) return;
+    // The HUD has no business on screen over a menu, and every menu in the game
+    // stops the world to show itself. One flag, no cross-system reference.
+    const hidden = this.ctx.time.paused || !this.visible;
+    this.root.style.display = hidden ? 'none' : '';
+    if (hidden) return;
 
     const player = this.ctx.tryGet(Services.Player);
     const veh = player?.inVehicle;
@@ -302,7 +301,6 @@ export class HudSystem implements System, HudService {
   }
 
   dispose(): void {
-    this.pause.dispose();
     this.root?.remove();
   }
 }

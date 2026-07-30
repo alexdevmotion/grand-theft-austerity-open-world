@@ -6,10 +6,11 @@
  *    this file                   the world half — waypoints, markers, cast,
  *                                stars, dialogue, rewards
  *
- *  `src/game.ts` is frozen, so three things that would otherwise be systems
- *  hang off this one and are ticked by it: the interaction system (E prompts),
- *  the cast director (Nicușor, Alex, the builders) and the Builders House
- *  lobby interior. The pause menu does the same thing off the HUD.
+ *  The interaction registry (E prompts), the cast director (Nicușor, Alex, the
+ *  builders) and Builders House used to hang off this class and be ticked by
+ *  it, because `src/game.ts` was closed. They are registered systems now
+ *  (orders 216, 217, 218) and this file reaches them through `Services` like
+ *  every other consumer.
  *
  *  THE WORLD STAYS PLAYABLE WITH THE CAMPAIGN IDLE. With no mission running,
  *  the only thing the campaign puts on screen is a single mission-giver marker
@@ -19,7 +20,14 @@
 
 import * as THREE from 'three';
 import type { GameContext, System } from '../core/engine';
-import { Services, type HudService, type MissionService, type VehicleHandle } from '../core/services';
+import {
+  Services,
+  type CastService,
+  type HudService,
+  type InteractionService,
+  type MissionService,
+  type VehicleHandle,
+} from '../core/services';
 import { CAMPAIGN, CAMPAIGN_BY_ID } from '../content/story';
 import {
   LOBBY,
@@ -35,9 +43,6 @@ import {
   type ObjectiveDef,
   type Vec3Lite,
 } from './missionState';
-import { InteractionSystem, setSharedInteraction } from './interaction';
-import { CastDirector } from './cast';
-import { LobbyInterior, carveLobbyDoorway } from './buildersHouse';
 import { missionHud, resetMissionHud } from './hudState';
 
 const GIVER_ID = 'story:giver';
@@ -68,11 +73,6 @@ export class MissionSystem implements System, MissionService {
   private failBanner = 0;
   private lastFailedId: string | null = null;
 
-  /** Systems this one owns because `src/game.ts` cannot register them. */
-  readonly interaction = new InteractionSystem();
-  readonly cast = new CastDirector();
-  private lobby: LobbyInterior | null = null;
-
   private daciaId: string | null = null;
   private partyOn = false;
 
@@ -90,22 +90,17 @@ export class MissionSystem implements System, MissionService {
   /* init                                                              */
   /* ---------------------------------------------------------------- */
 
+  /** The interaction registry. Registered at order 216, so it always exists. */
+  private get interaction(): InteractionService {
+    return this.ctx.get(Services.Interaction);
+  }
+  private get cast(): CastService {
+    return this.ctx.get(Services.Cast);
+  }
+
   init(ctx: GameContext): void {
     this.ctx = ctx;
     ctx.provide(Services.Missions, this);
-
-    this.interaction.init(ctx);
-    setSharedInteraction(this.interaction);
-    this.cast.init(ctx);
-
-    const phys = ctx.tryGet(Services.Physics);
-    if (phys) {
-      const carve = carveLobbyDoorway(phys);
-      if (!carve.carved) {
-        console.warn(`[missions] Builders House doorway not carved: ${carve.reason}`);
-      }
-      this.lobby = new LobbyInterior(ctx.scene);
-    }
 
     this.placeCast();
     this.offerNext();
@@ -201,6 +196,37 @@ export class MissionSystem implements System, MissionService {
     this.ctx.events.emit('mission:failed', { id, reason: 'abandoned' });
     this.toast('Misiune abandonată', 'bad');
     this.offerNext(id);
+  }
+
+  /**
+   * SAVE / LOAD. `completed` is authoritative — it replaces the set rather than
+   * adding to it, so loading an early slot really does take unfinished acts
+   * back off you. `currentId` re-enters that act from objective 1: an act is a
+   * chain of world side effects (a spawned Dacia, a lowered barricade, a
+   * hijacked broadcast) and replaying the beat you were on is honest, while
+   * claiming to restore the middle of one would not be.
+   */
+  restore(completed: readonly string[], currentId: string | null): void {
+    this.run = null;
+    this._current = null;
+    this._title = '';
+    this.lastFailedId = null;
+    this.failBanner = 0;
+    this.clearMarkers();
+    resetMissionHud();
+
+    this._completed = new Set(completed.filter((id) => CAMPAIGN_BY_ID.has(id)));
+
+    if (currentId && CAMPAIGN_BY_ID.has(currentId)) {
+      // A saved act must not be blocked by its own `requires` gate: the save
+      // already proves the player had reached it.
+      const def = CAMPAIGN_BY_ID.get(currentId)!;
+      if (def.requires) this._completed.add(def.requires);
+      this.start(currentId);
+    } else {
+      this.offerNext();
+    }
+    this.ctx.events.emit('mission:restored', { completed: [...this._completed], currentId });
   }
 
   /** Restart the mission currently running, or the last one that failed. */
@@ -335,7 +361,7 @@ export class MissionSystem implements System, MissionService {
    */
   private liberate(): void {
     this.partyOn = true;
-    this.lobby?.liberate();
+    this.ctx.tryGet(Services.BuildersHouse)?.liberate();
     this.cast.setParty(true);
     // The builders outside come in for the party.
     const seats: Array<[number, number]> = [
@@ -420,10 +446,6 @@ export class MissionSystem implements System, MissionService {
   /* ---------------------------------------------------------------- */
 
   update(dt: number, ctx: GameContext): void {
-    this.interaction.update(dt, ctx);
-    this.cast.update(dt, ctx);
-    this.lobby?.update(dt);
-
     if (this.failBanner > 0) {
       this.failBanner -= dt;
       if (this.failBanner <= 0) missionHud.failed = '';
@@ -586,11 +608,18 @@ export class MissionSystem implements System, MissionService {
         focus: this.interaction.focusLabel,
         cast: this.cast.all,
         party: this.partyOn,
-        lobbyLiberated: this.lobby?.liberated ?? false,
+        lobbyLiberated: this.ctx.tryGet(Services.BuildersHouse)?.liberated ?? false,
+        /** Act IV is unplayable if `passable` is false. Checked every boot. */
+        doorway: this.ctx.tryGet(Services.BuildersHouse)?.doorway ?? {
+          carved: false, passable: false, reason: 'buildersHouse system not registered', added: 0,
+        },
+        save: this.ctx.tryGet(Services.Save)?.peek() ?? null,
       }),
       start: (id: string) => this.start(id),
       abandon: () => this.abandon(),
       restart: () => this.restart(),
+      restore: (completed: string[], currentId: string | null = null) =>
+        this.restore(completed, currentId),
       /** Fire the current objective's trigger without walking there. */
       skip: () => this.satisfy(),
       /** Mark every act before `id` complete, so a later act can be played. */
@@ -617,15 +646,14 @@ export class MissionSystem implements System, MissionService {
         centre: [LOBBY.cx, LOBBY.floorY, LOBBY.cz],
         reception: [LOBBY_RECEPTION.x, LOBBY_RECEPTION.z],
         towerH: TOWER.h,
+        doorway: this.ctx.tryGet(Services.BuildersHouse)?.doorway ?? null,
       }),
     };
   }
 
   dispose(): void {
-    this.interaction.dispose();
-    this.cast.dispose();
-    this.lobby?.dispose();
-    setSharedInteraction(null);
+    if (!this.ctx) return;
+    this.clearMarkers();
   }
 }
 

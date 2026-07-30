@@ -11,6 +11,10 @@
  */
 
 import type { Box3, Object3D, Quaternion, Vector3 } from 'three';
+// Type-only, and deliberately circular: `engine.ts` imports `ServiceKey` from
+// here. Interfaces that hand a callback the frame context need the context type,
+// and `import type` is erased, so nothing circular survives to runtime.
+import type { GameContext } from './engine';
 
 /* ------------------------------------------------------------------ */
 /* Key plumbing                                                        */
@@ -227,6 +231,15 @@ export interface MissionService {
   start(id: string): void;
   abandon(): void;
   readonly completed: ReadonlySet<string>;
+  /**
+   * Put the campaign back where a save left it. `completed` replaces the whole
+   * set (it is authoritative, not additive) and `currentId` re-enters that act
+   * from its first objective — a mid-objective resume would need the objective
+   * index and every world side effect it had already applied, which no save
+   * format can honestly promise. Pass `null` to land in free roam with the next
+   * act on offer.
+   */
+  restore(completed: readonly string[], currentId: string | null): void;
 }
 
 export interface ActivityService {
@@ -241,8 +254,194 @@ export interface ProgressionService {
   readonly level: number;
   readonly xp: number;
   readonly unlocks: ReadonlySet<string>;
+  /** Landmark ids the player has already been paid for finding. */
+  readonly discovered: ReadonlySet<string>;
   addXp(amount: number, reason: string): void;
   has(unlock: string): boolean;
+  /**
+   * Set the whole curve at once, silently — a load is not a level-up, so this
+   * must not fire `progression:levelUp` or throw five banners on screen. Level
+   * and unlocks are recomputed from `xp` when they are not supplied.
+   */
+  restore(state: {
+    xp: number;
+    level?: number;
+    unlocks?: readonly string[];
+    discovered?: readonly string[];
+  }): void;
+}
+
+/* ------------------------------------------------------------------ */
+/* Interaction — world-space "press E" targets                         */
+/* ------------------------------------------------------------------ */
+
+export type InteractableKind = 'story' | 'activity' | 'world';
+
+export interface InteractableSpec {
+  id: string;
+  /** Romanian, imperative: "Vorbește cu Nicușor". */
+  label: string;
+  position: Vector3;
+  /** How close you must be. Default 3.4 m. */
+  radius?: number;
+  kind?: InteractableKind;
+  /** Must be out of the car. Default true. */
+  onFoot?: boolean;
+  /** Must be *driving*. Default false. */
+  inVehicle?: boolean;
+  /** Minimum cosine between camera forward and the direction to the marker. */
+  facing?: number;
+  /** Trace the eye line and refuse when a wall is in the way. Default true. */
+  requireLos?: boolean;
+  /** Fire on entry instead of waiting for E. */
+  auto?: boolean;
+  /** No marker geometry, no prompt — a silent trigger volume. */
+  silent?: boolean;
+  /** Marker tint. Defaults by kind. */
+  color?: number;
+  onTrigger: (ctx: GameContext) => void;
+}
+
+/**
+ * ONE registry of interactables for the whole game. There must be exactly one:
+ * two would fight over the same `interact` press. That is why it is a service
+ * and not a module singleton.
+ */
+export interface InteractionService {
+  add(spec: InteractableSpec): void;
+  remove(id: string): void;
+  /** Drop every interactable whose id starts with `prefix`. */
+  removeByPrefix(prefix: string): void;
+  has(id: string): boolean;
+  setEnabled(id: string, on: boolean): void;
+  moveTo(id: string, p: Vector3): void;
+  /** Fire one directly — the debug harness and the tests use this. */
+  trigger(id: string): boolean;
+  readonly count: number;
+  ids(): string[];
+  /** The label the player would see right now, or '' for none. */
+  readonly focusLabel: string;
+  readonly focusId: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Story cast                                                          */
+/* ------------------------------------------------------------------ */
+
+export type CastRole = 'nicusor' | 'ally' | 'builder';
+
+export interface CastMemberSpec {
+  id: string;
+  name: string;
+  role: CastRole;
+  x: number;
+  z: number;
+  /** Facing, radians. */
+  yaw: number;
+  /** Dance at the afterparty. */
+  parties?: boolean;
+}
+
+export interface CastService {
+  add(spec: CastMemberSpec): void;
+  moveTo(id: string, x: number, z: number, yaw?: number): void;
+  /** Start (or stop) the afterparty. */
+  setParty(on: boolean): void;
+  readonly all: ReadonlyArray<{ id: string; name: string; x: number; z: number; built: boolean }>;
+}
+
+/* ------------------------------------------------------------------ */
+/* Builders House — Act IV's interior                                  */
+/* ------------------------------------------------------------------ */
+
+/** Whether a player can actually walk through the lobby door. */
+export interface DoorwayReport {
+  /** The shell is open — built that way, or opened at runtime. */
+  carved: boolean;
+  /** A capsule-sized path really exists from the forecourt to the reception.
+   *  This is the one that decides whether Act IV can be finished. */
+  passable: boolean;
+  reason: string;
+  /** Replacement colliders the runtime fallback had to install. 0 is good. */
+  added: number;
+}
+
+export interface BuildersHouseService {
+  /** Lights up, tricolour on — Act IV's payoff. */
+  liberate(): void;
+  readonly liberated: boolean;
+  readonly doorway: DoorwayReport;
+}
+
+/* ------------------------------------------------------------------ */
+/* Interiors                                                           */
+/*                                                                     */
+/* Promoted here at the interiors owner's request (the note in         */
+/* src/world/interiors/interiorSystem.ts). The id is unchanged, so     */
+/* their `InteriorsServiceKey` and `Services.Interiors` are the same   */
+/* registration — nothing has to be migrated in one go.                */
+/* ------------------------------------------------------------------ */
+
+export interface InteriorsService {
+  /** Act IV: lights, tricolour, the room the afterparty happens in. */
+  liberate(): void;
+  /** Act III: every screen in the studio flips to the builders' broadcast. */
+  hijack(): void;
+  /** True when (x, z) is inside a named interior's clear volume. */
+  isInside(id: string, x: number, z: number): boolean;
+  /** Which interior the point is in, or null. */
+  interiorAt(x: number, z: number): string | null;
+  /** A standing spot just inside a doorway. */
+  doorwayInside(id: string): { x: number; y: number; z: number } | null;
+  readonly liberated: boolean;
+  readonly hijacked: boolean;
+}
+
+/* ------------------------------------------------------------------ */
+/* Saves                                                               */
+/* ------------------------------------------------------------------ */
+
+/** Everything a reload has to put back. Plain JSON — no class instances. */
+export interface SaveRecord {
+  /** Campaign act in progress, or null when only free-roaming. */
+  actId: string | null;
+  actTitle: string;
+  /** Acts already finished. */
+  completed: string[];
+  level: number;
+  xp: number;
+  unlocks: string[];
+  /** Landmark ids already discovered. */
+  discovered: string[];
+  lei: number;
+  /** World position, or null when there was no player yet. */
+  pos: [number, number, number] | null;
+  /** Facing, radians. */
+  heading: number;
+  /** Hours 0..24. */
+  timeOfDay: number;
+  weather: string;
+  /** Wall-clock ms when the record was written. */
+  savedAt: number;
+  /** Seconds of play accumulated across the sessions in this slot. */
+  playSeconds: number;
+}
+
+export interface SaveService {
+  /** Read the live world into a record without writing it anywhere. */
+  capture(): SaveRecord;
+  /** Capture and commit to storage. Returns what was written. */
+  save(reason?: string): SaveRecord;
+  /** The record in storage, or null when there is none / it is corrupt. */
+  peek(): SaveRecord | null;
+  /** Put a record back into the live world. */
+  restore(r: SaveRecord): void;
+  /** Load from storage and restore in one step. False when there was nothing. */
+  resume(): boolean;
+  /** Forget the slot — NEW GAME. */
+  clear(): void;
+  /** Seconds of play in this slot, including previous sessions. */
+  readonly playSeconds: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -312,6 +511,12 @@ export const Services = {
   Missions: key<MissionService>('missions'),
   Activities: key<ActivityService>('activities'),
   Progression: key<ProgressionService>('progression'),
+  Interaction: key<InteractionService>('interaction'),
+  Cast: key<CastService>('cast'),
+  BuildersHouse: key<BuildersHouseService>('buildersHouse'),
+  /** Same id as `InteriorsServiceKey` in src/world/interiors — one registration. */
+  Interiors: key<InteriorsService>('interiors'),
+  Save: key<SaveService>('save'),
   Hud: key<HudService>('hud'),
   Audio: key<AudioService>('audio'),
   Weather: key<WeatherService>('weather'),

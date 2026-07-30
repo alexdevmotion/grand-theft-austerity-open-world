@@ -21,6 +21,7 @@ import type { Rng } from '../../core/rng';
 import {
   DetailBuilder,
   FacadeBuilder,
+  insetPolygon,
   lFootprint,
   rectFootprint,
   type DetailOpts,
@@ -104,10 +105,26 @@ export function emi(c: THREE.Color, gain: number): number[] {
 /* Site description                                                    */
 /* ------------------------------------------------------------------ */
 
+/**
+ * A plot, ALWAYS DESCRIBED IN ITS OWN FRAME.
+ *
+ * `rot` puts local +x along the street frontage and local +z into the plot,
+ * away from the street, so `w` is always the frontage and `d` is always the
+ * depth whichever way the building happens to point. Every detail pass below
+ * builds in that frame and hands `rot` to the box builder.
+ *
+ * IT DID NOT USED TO WORK THIS WAY, and that was a bug worth writing down. The
+ * grid only ever produced plots facing one of four directions, so the passes
+ * picked their dimensions with `Math.abs(site.fx) > 0.5 ? d : w` — and picked
+ * the wrong one: an east-facing plot measured its distance to the front wall
+ * with its FRONTAGE, so its balconies, canopy and neon hung five to ten metres
+ * out in mid-air over the pavement. Real Bucharest streets run at every angle,
+ * which forced the frame to be explicit, which is what surfaced it.
+ */
 export interface BuildingSite {
   cx: number;
   cz: number;
-  /** Frontage (along the street) and depth (back from the street). */
+  /** Frontage (along local +x) and depth (along local +z, away from street). */
   w: number;
   d: number;
   /** Rotation about Y so that +x is along the frontage. */
@@ -119,11 +136,45 @@ export interface BuildingSite {
   heroDist: number;
 }
 
+/** Point at local (lx, lz) of a site, in world space. */
+function local(site: BuildingSite, lx: number, lz: number): [number, number] {
+  const c = Math.cos(site.rot);
+  const s = Math.sin(site.rot);
+  return [site.cx + lx * c + lz * s, site.cz - lx * s + lz * c];
+}
+
+/** Extent of a footprint in the site's own frame. */
+function localBounds(
+  fp: ReadonlyArray<Vec2>, site: BuildingSite,
+): { u0: number; u1: number; v0: number; v1: number } {
+  const c = Math.cos(site.rot);
+  const s = Math.sin(site.rot);
+  let u0 = Infinity; let u1 = -Infinity; let v0 = Infinity; let v1 = -Infinity;
+  for (const p of fp) {
+    const ox = p.x - site.cx;
+    const oz = p.z - site.cz;
+    const u = ox * c - oz * s;
+    const v = ox * s + oz * c;
+    if (u < u0) u0 = u;
+    if (u > u1) u1 = u;
+    if (v < v0) v0 = v;
+    if (v > v1) v1 = v;
+  }
+  return { u0, u1, v0, v1 };
+}
+
 export interface BuiltBuilding {
   height: number;
-  /** Axis-aligned half extents used for the collider and blocking query. */
+  /**
+   * Half extents IN THE BUILDING'S OWN FRAME, with the world-space centre of
+   * that box. The collider and the blocking query both rotate by `site.rot`;
+   * using a world AABB on a skewed plot inflates it by up to 40% and pushes an
+   * invisible wall out into the street.
+   */
   hx: number;
   hz: number;
+  cx: number;
+  cz: number;
 }
 
 /** Detail budget tiers by distance from the hero crossroads. */
@@ -143,7 +194,20 @@ export function buildBuilding(
   rng: Rng,
   f: FacadeBuilder,
   d: DetailBuilder,
-  opts: { heightScale?: number; forceStyle?: number } = {},
+  opts: {
+    heightScale?: number;
+    forceStyle?: number;
+    /**
+     * A REAL OSM OUTLINE, in world space, clockwise from above.
+     *
+     * When present it replaces the generated rectangle: the walls, the roof cap
+     * and the parapet all follow Bucharest's actual block shape, while
+     * everything else still comes out of the grammar.
+     */
+    footprint?: ReadonlyArray<Vec2>;
+    /** Storeys from the survey. Overrides the district's height populations. */
+    levels?: number;
+  } = {},
 ): BuiltBuilding {
   const tier = detailTier(site.heroDist);
   const floorH = rng.range(spec.floorH[0], spec.floorH[1]);
@@ -153,10 +217,33 @@ export function buildBuilding(
 
   // Height snapped to whole storeys so the grammar's floor lines meet the roof.
   // Two populations, never one wide range — see TowerSpec in districts.ts.
-  const isTower = spec.tower !== null && rng.bool(spec.tower.chance);
-  const range = isTower ? spec.tower!.height : spec.height;
-  const wanted = rng.range(range[0], range[1]) * (opts.heightScale ?? 1);
-  const floors = Math.max(1, Math.round((wanted - groundH) / floorH));
+  let floors: number;
+  if (opts.levels !== undefined && opts.levels > 0) {
+    // The survey knows. `building:levels` counts the storeys ABOVE ground, and
+    // the ground floor of a Bucharest block is taller than the rest.
+    floors = Math.max(1, Math.round(opts.levels) - 1);
+  } else {
+    const isTower = spec.tower !== null && rng.bool(spec.tower.chance);
+    const range = isTower ? spec.tower!.height : spec.height;
+    const wanted = rng.range(range[0], range[1]) * (opts.heightScale ?? 1);
+    floors = Math.max(1, Math.round((wanted - groundH) / floorH));
+  }
+
+  /*
+   * SLENDERNESS CAP.
+   *
+   * A storey count from the survey lands on whatever plan the survey gives it,
+   * and the compressed map plus a plot squeezed to fit between two streets can
+   * leave an eight-metre footprint carrying twelve floors. Those came out as
+   * pencil towers standing over the boulevards — the most obviously wrong thing
+   * in the first aerial pass, because nothing in Bucharest looks like that.
+   * Real slender blocks bottom out around 1:5.
+   */
+  const slim = Math.max(4, Math.min(site.w, site.d));
+  const maxH = Math.max(11, slim * 5.0);
+  if (groundH + floors * floorH > maxH) {
+    floors = Math.max(1, Math.floor((maxH - groundH) / floorH));
+  }
   const h = groundH + floors * floorH;
 
   const seed = rng.range(0, 97);
@@ -177,12 +264,16 @@ export function buildBuilding(
   /* ---------------- massing ---------------- */
 
   // An L-plan on a fraction of plots breaks the "field of cuboids" read.
-  const lPlan = style !== FacadeStyle.glassCorporate && rng.bool(0.26) && w > 18 && dep > 14;
-  const base: Vec2[] = lPlan
-    ? lFootprint(cx, cz, w, dep, w * rng.range(0.3, 0.45), dep * rng.range(0.3, 0.45))
-    : rectFootprint(cx, cz, w, dep, rot);
+  // A real outline already has a shape of its own and never wants one.
+  const lPlan = !opts.footprint
+    && style !== FacadeStyle.glassCorporate && rng.bool(0.26) && w > 18 && dep > 14;
+  const base: Vec2[] = opts.footprint
+    ? (opts.footprint as Vec2[])
+    : lPlan
+      ? lFootprint(cx, cz, w, dep, w * rng.range(0.3, 0.45), dep * rng.range(0.3, 0.45), rot)
+      : rectFootprint(cx, cz, w, dep, rot);
 
-  const setback = rng.bool(spec.setback) && h > groundH + floorH * 5;
+  const setback = !opts.footprint && rng.bool(spec.setback) && h > groundH + floorH * 5;
   let topOfBase = h;
 
   if (setback) {
@@ -258,8 +349,15 @@ export function buildBuilding(
     facadeScreen(d, site, groundH, h, rng);
   }
 
-  const bounds = footprintBounds(base);
-  return { height: h, hx: bounds.hx, hz: bounds.hz };
+  const lb = localBounds(base, site);
+  const [wcx, wcz] = local(site, (lb.u0 + lb.u1) / 2, (lb.v0 + lb.v1) / 2);
+  return {
+    height: h,
+    hx: (lb.u1 - lb.u0) / 2,
+    hz: (lb.v1 - lb.v0) / 2,
+    cx: wcx,
+    cz: wcz,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -302,13 +400,10 @@ function corniceAndParapet(
   rng: Rng,
   isMain: boolean,
 ): void {
-  const b = footprintBounds(fp);
-  const x0 = b.cx - b.hx;
-  const x1 = b.cx + b.hx;
-  const z0 = b.cz - b.hz;
-  const z1 = b.cz + b.hz;
-
-  // Parapet: the single most valuable silhouette detail — every roof gets one.
+  // Bands FOLLOW THE FOOTPRINT. An axis-aligned ring was fine while every
+  // building was a world-aligned box; on a plot that sits at 30 degrees to the
+  // grid — which is most of Calea Victoriei — it floats off two corners and
+  // buries itself in the other two.
   const parapetH = style === FacadeStyle.glassCorporate ? 1.0 : rng.range(0.85, 1.35);
   const parapetCol = style === FacadeStyle.glassCorporate
     ? DetailColor.alu
@@ -316,7 +411,7 @@ function corniceAndParapet(
       ? DetailColor.stone
       : DetailColor.concrete;
   const parapetMR = style === FacadeStyle.glassCorporate ? MR.metal : MR.concrete;
-  d.ring(x0, z0, x1, z1, top, 0.34, parapetH, { color: parapetCol, mr: parapetMR });
+  d.ringPoly(fp, top, 0.34, parapetH, { color: parapetCol, mr: parapetMR });
 
   if (tier === 0) return;
 
@@ -324,16 +419,14 @@ function corniceAndParapet(
   if (style !== FacadeStyle.glassCorporate && style !== FacadeStyle.industrial) {
     const proj = style === FacadeStyle.guvern ? 1.05 : style === FacadeStyle.centruVechi ? 0.8 : 0.55;
     const ch = style === FacadeStyle.guvern ? 1.15 : 0.55;
-    d.ring(
-      x0 - proj, z0 - proj, x1 + proj, z1 + proj,
-      top - ch, proj + 0.34, ch,
+    d.ringPoly(
+      insetPolygon(fp, -proj), top - ch, proj + 0.34, ch,
       { color: style === FacadeStyle.guvern ? DetailColor.stone : DetailColor.stoneDark, mr: MR.stone },
     );
     // Second, thinner band — reads as a moulding profile in raking sun.
     if (tier === 2 && (style === FacadeStyle.centruVechi || style === FacadeStyle.guvern)) {
-      d.ring(
-        x0 - proj * 0.55, z0 - proj * 0.55, x1 + proj * 0.55, z1 + proj * 0.55,
-        top - ch - 0.42, proj * 0.55 + 0.3, 0.3,
+      d.ringPoly(
+        insetPolygon(fp, -proj * 0.55), top - ch - 0.42, proj * 0.55 + 0.3, 0.3,
         { color: DetailColor.stone, mr: MR.stone },
       );
     }
@@ -341,7 +434,7 @@ function corniceAndParapet(
 
   // Coping shadow line on the main mass of glass towers.
   if (isMain && style === FacadeStyle.glassCorporate && tier >= 1) {
-    d.ring(x0 - 0.45, z0 - 0.45, x1 + 0.45, z1 + 0.45, top - 0.5, 0.6, 0.28, {
+    d.ringPoly(insetPolygon(fp, -0.45), top - 0.5, 0.6, 0.28, {
       color: DetailColor.metal, mr: MR.metal,
     });
   }
@@ -392,10 +485,12 @@ function chimneyStack(d: DetailBuilder, x: number, y: number, z: number, rng: Rn
  */
 function rooftopHoarding(
   d: DetailBuilder,
+  /** LOCAL bounds of the roof, in the site's frame. */
   b: { cx: number; cz: number; hx: number; hz: number },
   top: number,
   rng: Rng,
   tier: 0 | 1 | 2,
+  site: BuildingSite,
 ): void {
   // Face the long axis of the roof so the board presents to the street.
   const alongX = b.hx >= b.hz;
@@ -405,15 +500,18 @@ function rooftopHoarding(
   const y = top + stand + h / 2;
   // Sit it over one edge of the roof, as the real ones do.
   const side = rng.bool(0.5) ? 1 : -1;
-  const px = b.cx + (alongX ? 0 : side * b.hx * 0.6);
-  const pz = b.cz + (alongX ? side * b.hz * 0.6 : 0);
+  const pu = b.cx + (alongX ? 0 : side * b.hx * 0.6);
+  const pv = b.cz + (alongX ? side * b.hz * 0.6 : 0);
+  const rot = site.rot;
+  const w2 = (lx: number, lz: number): [number, number] => local(site, lx, lz);
+  const [px, pz] = w2(pu, pv);
 
   const sx = alongX ? w : 0.28;
   const sz = alongX ? 0.28 : w;
 
   // Backing panel, then the printed face stepped forward so it is never
   // z-fighting with its own backing.
-  d.box(px, y, pz, sx, h, sz, 0, { color: DetailColor.metal, mr: MR.metal });
+  d.box(px, y, pz, sx, h, sz, rot, { color: DetailColor.metal, mr: MR.metal });
   /*
    * Advertising is SATURATED and it is the only pure hue on a Bucharest
    * roofline — everything else up there is grey, rust and bitumen. Held
@@ -424,8 +522,8 @@ function rooftopHoarding(
     [3, 2, 1.6, 2, 1.2],
   );
   const face = alongX ? [w * 0.94, h * 0.86, 0.1] : [0.1, h * 0.86, w * 0.94];
-  d.box(px + (alongX ? 0 : side * 0.2), y, pz + (alongX ? side * 0.2 : 0),
-    face[0], face[1], face[2], 0,
+  const [fx, fz] = w2(pu + (alongX ? 0 : side * 0.2), pv + (alongX ? side * 0.2 : 0));
+  d.box(fx, y, fz, face[0], face[1], face[2], rot,
     { color: ink, mr: [0, 0.62], emissive: emi(ink, 0.5) });
 
   if (tier >= 1) {
@@ -434,9 +532,12 @@ function rooftopHoarding(
     for (let i = 0; i < 3; i++) {
       const t = (i - 1) * w * 0.26;
       const lw = w * 0.17;
+      const [lx, lz] = w2(
+        pu + (alongX ? t : side * 0.28), pv + (alongX ? side * 0.28 : t),
+      );
       d.box(
-        px + (alongX ? t : side * 0.28), y + h * 0.06, pz + (alongX ? side * 0.28 : t),
-        alongX ? lw : 0.06, h * 0.3, alongX ? 0.06 : lw, 0,
+        lx, y + h * 0.06, lz,
+        alongX ? lw : 0.06, h * 0.3, alongX ? 0.06 : lw, rot,
         { color: lin(0xf2ece0), mr: [0, 0.5], emissive: emi(lin(0xf2ece0), 0.9) },
       );
     }
@@ -446,15 +547,16 @@ function rooftopHoarding(
   const legs = tier === 0 ? 2 : 4;
   for (let i = 0; i < legs; i++) {
     const t = (i / Math.max(1, legs - 1) - 0.5) * w * 0.82;
-    const lx = px + (alongX ? t : 0);
-    const lz = pz + (alongX ? 0 : t);
+    const [lx, lz] = w2(pu + (alongX ? t : 0), pv + (alongX ? 0 : t));
     d.tube(lx, top, lz, lx, y + h / 2, lz, 0.075, 3,
       { color: DetailColor.metal, mr: MR.metal });
     if (tier >= 1) {
       // Back stay, which is what makes it read as a frame and not a wall.
-      d.tube(lx, top, lz,
-        lx - (alongX ? 0 : side * 2.2), y - h * 0.3, lz - (alongX ? side * 2.2 : 0),
-        0.05, 3, { color: DetailColor.metal, mr: MR.metal });
+      const [bx, bz] = w2(
+        pu - (alongX ? 0 : side * 2.2), pv - (alongX ? side * 2.2 : 0),
+      );
+      d.tube(lx, top, lz, bx, y - h * 0.3, bz, 0.05, 3,
+        { color: DetailColor.metal, mr: MR.metal });
     }
   }
 }
@@ -480,17 +582,29 @@ function roofscape(
   spec: DistrictSpec,
   site: BuildingSite,
 ): void {
-  const b = footprintBounds(fp);
+  // Scatter IN THE BUILDING'S OWN FRAME. Against the world axes a skewed roof
+  // gets its plant thrown over the parapet and hanging in the street.
+  const lb = localBounds(fp, site);
+  const b = {
+    cx: (lb.u0 + lb.u1) / 2, cz: (lb.v0 + lb.v1) / 2,
+    hx: (lb.u1 - lb.u0) / 2, hz: (lb.v1 - lb.v0) / 2,
+  };
   const heavy = rng.bool(spec.roofPlant);
-  const rx = (k: number): number => b.cx + rng.range(-b.hx * k, b.hx * k);
-  const rz = (k: number): number => b.cz + rng.range(-b.hz * k, b.hz * k);
+  let ru = 0;
+  let rv = 0;
+  const pick = (k: number): void => {
+    ru = b.cx + rng.range(-b.hx * k, b.hx * k);
+    rv = b.cz + rng.range(-b.hz * k, b.hz * k);
+  };
+  const rx = (k: number): number => { pick(k); return local(site, ru, rv)[0]; };
+  const rz = (_k: number): number => local(site, ru, rv)[1];
 
   // Lift shaft / stair head — the tallest thing on almost every roof.
   if (heavy || rng.bool(0.6)) {
     const sw = Math.min(b.hx * 1.0, rng.range(3.4, 6.2));
     const sd = Math.min(b.hz * 1.0, rng.range(3.0, 5.4));
     const sh = rng.range(2.6, 4.4);
-    d.box(rx(0.4), top + sh / 2, rz(0.4), sw, sh, sd, 0, {
+    d.box(rx(0.4), top + sh / 2, rz(0.4), sw, sh, sd, site.rot, {
       color: DetailColor.concrete, mr: MR.concrete,
     });
   }
@@ -501,7 +615,7 @@ function roofscape(
       : spec.style === FacadeStyle.centruVechi ? 0.08
         : spec.style === FacadeStyle.industrial ? 0.14 : 0.05;
   if (b.hx > 6 && b.hz > 5 && rng.bool(adChance)) {
-    rooftopHoarding(d, b, top, rng, tier);
+    rooftopHoarding(d, b, top, rng, tier, site);
   }
 
   /*
@@ -522,7 +636,7 @@ function roofscape(
   const units = tier === 2 ? rng.int(2, 6) : tier === 1 ? rng.int(1, 4) : rng.int(0, 2);
   for (let i = 0; i < units; i++) {
     const uh = rng.range(0.9, 2.1);
-    d.box(rx(0.72), top + uh / 2, rz(0.72), rng.range(1.6, 3.6), uh, rng.range(1.4, 3.0), 0, {
+    d.box(rx(0.72), top + uh / 2, rz(0.72), rng.range(1.6, 3.6), uh, rng.range(1.4, 3.0), site.rot, {
       color: rng.bool(0.5) ? DetailColor.metalPale : DetailColor.metal,
       mr: MR.metal,
     });
@@ -570,61 +684,52 @@ function entrance(
   style: number,
   rng: Rng,
 ): void {
-  // Push the canopy just proud of the street-facing wall.
-  const along = { x: -site.fz, z: site.fx };
-  const half = (Math.abs(site.fx) > 0.5 ? site.d : site.w) / 2;
-  const off = rng.range(-0.25, 0.25) * (Math.abs(site.fx) > 0.5 ? site.w : site.d);
-  const ex = site.cx + site.fx * half + along.x * off;
-  const ez = site.cz + site.fz * half + along.z * off;
+  // Push the canopy just proud of the street-facing wall. The wall is at local
+  // z = -d/2 and the street is further out still.
+  const front = -site.d / 2;
+  const u = rng.range(-0.25, 0.25) * site.w;
 
   const canopyY = Math.min(groundH - 0.6, 4.2);
   const proj = style === FocusGlass ? 3.2 : 2.0;
   const wide = style === FocusGlass ? 9.0 : 4.6;
+  const rot = site.rot;
 
   // Canopy slab.
+  const [cx1, cz1] = local(site, u, front - proj * 0.4);
   d.box(
-    ex + site.fx * proj * 0.4, canopyY, ez + site.fz * proj * 0.4,
-    Math.abs(site.fx) > 0.5 ? proj : wide, 0.26, Math.abs(site.fx) > 0.5 ? wide : proj, 0,
+    cx1, canopyY, cz1, wide, 0.26, proj, rot,
     { color: style === FocusGlass ? DetailColor.alu : DetailColor.stone, mr: style === FocusGlass ? MR.metal : MR.stone },
   );
   // Under-canopy light — reads as a lit doorway at dusk and at night.
   d.box(
-    ex + site.fx * proj * 0.4, canopyY - 0.16, ez + site.fz * proj * 0.4,
-    Math.abs(site.fx) > 0.5 ? proj * 0.7 : wide * 0.7, 0.05, Math.abs(site.fx) > 0.5 ? wide * 0.7 : proj * 0.7, 0,
+    cx1, canopyY - 0.16, cz1, wide * 0.7, 0.05, proj * 0.7, rot,
     { color: DetailColor.sodium, mr: [0, 0.4], emissive: emi(DetailColor.sodium, 2.2) },
   );
   // Columns.
   for (const s of [-1, 1]) {
-    d.cyl(
-      ex + site.fx * proj * 0.78 + along.x * s * wide * 0.42,
-      0, ez + site.fz * proj * 0.78 + along.z * s * wide * 0.42,
-      0.14, 0.12, canopyY, 5, { color: DetailColor.metal, mr: MR.metal }, false,
-    );
+    const [px, pz] = local(site, u + s * wide * 0.42, front - proj * 0.78);
+    d.cyl(px, 0, pz, 0.14, 0.12, canopyY, 5, { color: DetailColor.metal, mr: MR.metal }, false);
   }
   // Steps.
-  d.box(
-    ex + site.fx * 0.9, 0.12, ez + site.fz * 0.9,
-    Math.abs(site.fx) > 0.5 ? 1.8 : wide * 0.8, 0.24, Math.abs(site.fx) > 0.5 ? wide * 0.8 : 1.8, 0,
-    { color: DetailColor.stone, mr: MR.stone },
-  );
+  const [sx1, sz1] = local(site, u, front - 0.9);
+  d.box(sx1, 0.12, sz1, wide * 0.8, 0.24, 1.8, rot, {
+    color: DetailColor.stone, mr: MR.stone,
+  });
 }
 
 const FocusGlass = FacadeStyle.glassCorporate as number;
 
 function awnings(d: DetailBuilder, site: BuildingSite, groundH: number, rng: Rng): void {
-  const along = { x: -site.fz, z: site.fx };
-  const half = (Math.abs(site.fx) > 0.5 ? site.d : site.w) / 2;
-  const span = Math.abs(site.fx) > 0.5 ? site.d : site.w;
+  const span = site.w;
+  const front = -site.d / 2;
   const n = Math.max(1, Math.floor(span / 7));
   for (let i = 0; i < n; i++) {
     if (!rng.bool(0.55)) continue;
     const t = (i + 0.5) / n - 0.5;
-    const ax = site.cx + site.fx * (half + 0.9) + along.x * t * span;
-    const az = site.cz + site.fz * (half + 0.9) + along.z * t * span;
+    const [ax, az] = local(site, t * span, front - 0.9);
     d.box(
       ax, groundH - 1.3, az,
-      Math.abs(site.fx) > 0.5 ? 1.8 : span / n * 0.8, 0.14,
-      Math.abs(site.fx) > 0.5 ? span / n * 0.8 : 1.8, 0,
+      (span / n) * 0.8, 0.14, 1.8, site.rot,
       { color: DetailColor.awning, mr: MR.paint },
     );
   }
@@ -639,9 +744,8 @@ function balconies(
   _topOfBase: number,
   rng: Rng,
 ): void {
-  const along = { x: -site.fz, z: site.fx };
-  const half = (Math.abs(site.fx) > 0.5 ? site.d : site.w) / 2;
-  const span = Math.abs(site.fx) > 0.5 ? site.d : site.w;
+  const span = site.w;
+  const front = -site.d / 2;
   const bays = Math.max(1, Math.floor(span / 4.2));
   const proj = 1.25;
   let budget = 11;
@@ -651,20 +755,17 @@ function balconies(
     for (let b = 0; b < bays && budget > 0; b += 2) {
       if (!rng.bool(0.7)) continue;
       const t = (b + 0.5) / bays - 0.5;
-      const bx = site.cx + site.fx * (half + proj / 2) + along.x * t * span;
-      const bz = site.cz + site.fz * (half + proj / 2) + along.z * t * span;
-      const bw = span / bays * 0.86;
+      const bw = (span / bays) * 0.86;
       // Slab.
-      d.box(
-        bx, y + 0.09, bz,
-        Math.abs(site.fx) > 0.5 ? proj : bw, 0.18, Math.abs(site.fx) > 0.5 ? bw : proj, 0,
-        { color: DetailColor.concrete, mr: MR.concrete },
-      );
+      const [bx, bz] = local(site, t * span, front - proj / 2);
+      d.box(bx, y + 0.09, bz, bw, 0.18, proj, site.rot, {
+        color: DetailColor.concrete, mr: MR.concrete,
+      });
       // Front panel — glazed-in loggia on some, open rail on others.
       const glazed = rng.bool(0.45);
+      const [px, pz] = local(site, t * span, front - proj * 0.95);
       d.box(
-        bx + site.fx * proj * 0.45, y + 0.6, bz + site.fz * proj * 0.45,
-        Math.abs(site.fx) > 0.5 ? 0.1 : bw, 1.05, Math.abs(site.fx) > 0.5 ? bw : 0.1, 0,
+        px, y + 0.6, pz, bw, 1.05, 0.1, site.rot,
         glazed
           ? { color: DetailColor.glassDark, mr: MR.glass }
           : { color: DetailColor.concreteDark, mr: MR.concrete },
@@ -694,12 +795,10 @@ function continuousBalconies(
   floors: number,
   rng: Rng,
 ): void {
-  const facesX = Math.abs(site.fx) > 0.5;
-  const half = (facesX ? site.d : site.w) / 2;
-  const span = facesX ? site.d : site.w;
+  const front = -site.d / 2;
   const proj = rng.range(0.95, 1.45);
   // Balconies stop short of the vertical corner pier, as they really do.
-  const runLen = span * 0.88;
+  const runLen = site.w * 0.88;
 
   for (let fl = 1; fl < floors; fl++) {
     // The shader picks banded floors from the same kind of hash; an exact
@@ -707,20 +806,16 @@ function continuousBalconies(
     // that the slab lines up with a floor line.
     if (!rng.bool(0.55)) continue;
     const y = groundH + fl * floorH + 0.30;
-    const cx = site.cx + site.fx * (half + proj / 2);
-    const cz = site.cz + site.fz * (half + proj / 2);
     // Slab.
-    d.box(
-      cx, y, cz,
-      facesX ? proj : runLen, 0.20, facesX ? runLen : proj, 0,
-      { color: DetailColor.stone, mr: MR.stone },
-    );
+    const [cx, cz] = local(site, 0, front - proj / 2);
+    d.box(cx, y, cz, runLen, 0.20, proj, site.rot, {
+      color: DetailColor.stone, mr: MR.stone,
+    });
     // Solid rendered parapet closing its front — never an open rail on these.
-    d.box(
-      cx + site.fx * proj * 0.44, y + 0.52, cz + site.fz * proj * 0.44,
-      facesX ? 0.12 : runLen, 0.86, facesX ? runLen : 0.12, 0,
-      { color: DetailColor.stone, mr: MR.stone },
-    );
+    const [px, pz] = local(site, 0, front - proj * 0.94);
+    d.box(px, y + 0.52, pz, runLen, 0.86, 0.12, site.rot, {
+      color: DetailColor.stone, mr: MR.stone,
+    });
   }
 }
 
@@ -749,9 +844,8 @@ function verticalSign(
   h: number,
   rng: Rng,
 ): void {
-  const along = { x: -site.fz, z: site.fx };
-  const half = (Math.abs(site.fx) > 0.5 ? site.d : site.w) / 2;
-  const span = Math.abs(site.fx) > 0.5 ? site.d : site.w;
+  const span = site.w;
+  const front = -site.d / 2;
 
   // Hung near one end of the frontage, as they always are — they mark a
   // doorway, not the middle of an elevation.
@@ -764,23 +858,17 @@ function verticalSign(
   const yBot = yTop - sh;
   if (yBot < groundH * 0.6) return;
 
-  const bx = site.cx + site.fx * (half + 0.30) + along.x * t * span;
-  const bz = site.cz + site.fz * (half + 0.30) + along.z * t * span;
+  const u = t * span;
+  const [bx, bz] = local(site, u, front - 0.30);
   const w = cell * 0.86;
-  const facesX = Math.abs(site.fx) > 0.5;
-  const sx = facesX ? 0.5 : w;
-  const sz = facesX ? w : 0.5;
 
   // Dark carcass, standing off the wall on brackets.
-  d.box(bx, (yTop + yBot) / 2, bz, sx, sh, sz, 0, {
+  d.box(bx, (yTop + yBot) / 2, bz, w, sh, 0.5, site.rot, {
     color: DetailColor.metal, mr: MR.metal,
   });
+  const [wx, wz] = local(site, u, front);
   for (const yy of [yBot + sh * 0.12, yTop - sh * 0.12]) {
-    d.tube(
-      site.cx + site.fx * half + along.x * t * span, yy,
-      site.cz + site.fz * half + along.z * t * span,
-      bx, yy, bz, 0.05, 3, { color: DetailColor.metal, mr: MR.metal },
-    );
+    d.tube(wx, yy, wz, bx, yy, bz, 0.05, 3, { color: DetailColor.metal, mr: MR.metal });
   }
 
   // The lit face, one cell per letter.
@@ -788,14 +876,14 @@ function verticalSign(
     [DetailColor.neon, DetailColor.sodium, lin(0xff3a2a), lin(0x46d0ff)],
     [3, 2.2, 2, 1],
   );
+  const [fx1, fz1] = local(site, u, front - 0.58);
+  const [fx2, fz2] = local(site, u, front - 0.63);
   for (let i = 0; i < cells; i++) {
     const cy = yBot + (i + 0.5) * cell;
-    d.box(bx + site.fx * 0.28, cy, bz + site.fz * 0.28,
-      facesX ? 0.06 : w * 0.9, cell * 0.82, facesX ? w * 0.9 : 0.06, 0,
+    d.box(fx1, cy, fz1, w * 0.9, cell * 0.82, 0.06, site.rot,
       { color: tube, mr: [0, 0.35], emissive: emi(tube, 2.6) });
     // A dark bar through each cell so it reads as a letter, not a lamp.
-    d.box(bx + site.fx * 0.33, cy, bz + site.fz * 0.33,
-      facesX ? 0.05 : w * 0.5, cell * 0.16, facesX ? w * 0.5 : 0.05, 0,
+    d.box(fx2, cy, fz2, w * 0.5, cell * 0.16, 0.05, site.rot,
       { color: lin(0x120e18), mr: [0, 0.6] });
   }
 }
@@ -813,31 +901,27 @@ function wallBillboard(
   h: number,
   rng: Rng,
 ): void {
-  const along = { x: -site.fz, z: site.fx };
-  const half = (Math.abs(site.fx) > 0.5 ? site.d : site.w) / 2;
-  const span = Math.abs(site.fx) > 0.5 ? site.d : site.w;
+  const span = site.w;
+  const front = -site.d / 2;
   const bw = span * rng.range(0.55, 0.86);
   const bh = Math.min(bw * rng.range(0.3, 0.5), (h - groundH) * 0.7);
   if (bh < 2.2) return;
   const y = groundH + rng.range(1.0, Math.max(1.2, (h - groundH) - bh - 0.8)) + bh / 2;
-  const t = rng.range(-0.16, 0.16);
-  const bx = site.cx + site.fx * (half + 0.14) + along.x * t * span;
-  const bz = site.cz + site.fz * (half + 0.14) + along.z * t * span;
-  const facesX = Math.abs(site.fx) > 0.5;
+  const u = rng.range(-0.16, 0.16) * span;
 
   const ink = rng.weighted(
     [lin(0x1e3f96), lin(0xc41f2c), lin(0x0f7a4a), lin(0xe0a417), lin(0x2b2438)],
     [3, 2.4, 1.6, 1.6, 1],
   );
-  d.box(bx, y, bz, facesX ? 0.14 : bw, bh, facesX ? bw : 0.14, 0,
+  const [bx, bz] = local(site, u, front - 0.14);
+  d.box(bx, y, bz, bw, bh, 0.14, site.rot,
     { color: ink, mr: [0, 0.7], emissive: emi(ink, 0.22) });
   // A pale word block and a logo mark, which is all a board reads as at range.
-  d.box(bx + site.fx * 0.1, y, bz + site.fz * 0.1,
-    facesX ? 0.05 : bw * 0.6, bh * 0.26, facesX ? bw * 0.6 : 0.05, 0,
+  const [wx, wz] = local(site, u, front - 0.24);
+  d.box(wx, y, wz, bw * 0.6, bh * 0.26, 0.05, site.rot,
     { color: lin(0xf4f0e6), mr: [0, 0.6], emissive: emi(lin(0xf4f0e6), 0.5) });
-  d.box(bx + site.fx * 0.1 - along.x * bw * 0.34, y + bh * 0.02,
-    bz + site.fz * 0.1 - along.z * bw * 0.34,
-    facesX ? 0.05 : bw * 0.14, bh * 0.42, facesX ? bw * 0.14 : 0.05, 0,
+  const [lx, lz] = local(site, u - bw * 0.34, front - 0.24);
+  d.box(lx, y + bh * 0.02, lz, bw * 0.14, bh * 0.42, 0.05, site.rot,
     { color: lin(0xf4f0e6), mr: [0, 0.6], emissive: emi(lin(0xf4f0e6), 0.5) });
 }
 
@@ -858,16 +942,12 @@ function facadeScreen(
   h: number,
   rng: Rng,
 ): void {
-  const along = { x: -site.fz, z: site.fx };
-  const half = (Math.abs(site.fx) > 0.5 ? site.d : site.w) / 2;
-  const span = Math.abs(site.fx) > 0.5 ? site.d : site.w;
+  const span = site.w;
   const sw = Math.min(span * 0.42, rng.range(7, 12));
   const sh = sw * rng.range(1.25, 1.7);
   const y = groundH + rng.range(4, Math.max(6, (h - groundH) * 0.42));
-  const t = rng.range(-0.28, 0.28);
-  const sx = site.cx + site.fx * (half + 0.22) + along.x * t * span;
-  const sz = site.cz + site.fz * (half + 0.22) + along.z * t * span;
-  mediaScreen(d, sx, y, sz, sw, sh, site.fx, site.fz, rng);
+  const [sx, sz] = local(site, rng.range(-0.28, 0.28) * span, -site.d / 2 - 0.22);
+  mediaScreen(d, sx, y, sz, sw, sh, site.fx, site.fz, rng, site.rot);
 }
 
 /**
@@ -883,10 +963,12 @@ export function mediaScreen(
   /** Outward normal of the wall the screen is mounted on. */
   nx: number, nz: number,
   rng: Rng,
+  /** Rotation of the wall; defaults to the axis-aligned case. */
+  rot?: number,
 ): void {
-  const facesX = Math.abs(nx) > 0.5;
-  const sx = facesX ? 0.22 : w;
-  const sz = facesX ? w : 0.22;
+  const r = rot ?? Math.atan2(-nx, -nz);
+  const sx = w;
+  const sz = 0.22;
   const tint = rng.bool(0.5) ? DetailColor.screen : DetailColor.purple;
 
   // Housing sits behind; every emissive layer is stepped forward along the
@@ -894,25 +976,25 @@ export function mediaScreen(
   const at = (out: number): [number, number] => [x + nx * out, z + nz * out];
 
   const [hx, hz] = at(0);
-  d.box(hx, y + h / 2, hz, sx + 0.6, h + 0.6, sz + 0.6, 0, {
+  d.box(hx, y + h / 2, hz, sx + 0.6, h + 0.6, sz + 0.6, r, {
     color: DetailColor.metal, mr: MR.metal,
   });
   const [fx, fz] = at(0.36);
-  d.box(fx, y + h / 2, fz, sx, h, sz, 0, {
+  d.box(fx, y + h / 2, fz, sx, h, sz, r, {
     color: tint, mr: [0, 0.3], emissive: emi(tint, 0.55),
   });
   const [cx, cz] = at(0.5);
   // Hair, head, shoulders, caption: a head-and-shoulders portrait at facade scale.
-  d.box(cx, y + h * 0.74, cz, sx * 0.34, h * 0.10, sz * 0.34, 0, {
+  d.box(cx, y + h * 0.74, cz, sx * 0.34, h * 0.10, sz * 0.34, r, {
     color: lin(0x2c2530), mr: [0, 0.5], emissive: emi(lin(0x413848), 0.6),
   });
-  d.box(cx, y + h * 0.62, cz, sx * 0.30, h * 0.20, sz * 0.30, 0, {
+  d.box(cx, y + h * 0.62, cz, sx * 0.30, h * 0.20, sz * 0.30, r, {
     color: lin(0xd9b79b), mr: [0, 0.4], emissive: emi(lin(0xd9b79b), 1.15),
   });
-  d.box(cx, y + h * 0.36, cz, sx * 0.62, h * 0.28, sz * 0.62, 0, {
+  d.box(cx, y + h * 0.36, cz, sx * 0.62, h * 0.28, sz * 0.62, r, {
     color: lin(0x241d33), mr: [0, 0.4], emissive: emi(lin(0x3d3157), 0.8),
   });
-  d.box(cx, y + h * 0.10, cz, sx * 0.9, h * 0.07, sz * 0.9, 0, {
+  d.box(cx, y + h * 0.10, cz, sx * 0.9, h * 0.07, sz * 0.9, r, {
     color: DetailColor.sodium, mr: [0, 0.3], emissive: emi(DetailColor.sodium, 2.0),
   });
 }

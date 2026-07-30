@@ -39,7 +39,15 @@ export interface MapLandmark {
   x: number;
   z: number;
   radius: number;
-  kind: 'story' | 'plaza' | 'park';
+  /**
+   * `story` and `plaza`/`park` are the authored anchors the city was built
+   * around — they get a disc, a blip and a caption. `poi` is everything the
+   * OpenStreetMap import brought in (well over a hundred churches, schools,
+   * malls and office blocks): real, worth showing, but only as a small dot on
+   * a zoomed-in full map. Painting them like landmarks turned the minimap into
+   * a solid wash of overlapping discs.
+   */
+  kind: 'story' | 'plaza' | 'park' | 'poi';
 }
 
 export interface DistrictLabel {
@@ -72,6 +80,16 @@ export const DISTRICT_TINT: Record<DistrictKind, [number, number, number]> = {
 };
 
 const WASH_RES = 160;
+
+/**
+ * The tints above are chosen as *ink*, and ink on a black sheet reads darker
+ * than it measures. Metering the first full-map screenshot, the districts were
+ * separated by three or four levels out of 255 — invisible. This gain is the
+ * smallest one that makes the old town read warm, the corporate belt read
+ * cold and the panel-block cartiere read neutral without ever approaching the
+ * value of the pale carriageways drawn on top of them.
+ */
+const WASH_GAIN = 1.3;
 
 export class MapData {
   readonly segs: RoadSeg[] = [];
@@ -257,9 +275,9 @@ export class MapData {
         kinds[idx] = k;
         const t = DISTRICT_TINT[k] ?? DISTRICT_TINT.cartier;
         const o = idx * 4;
-        img.data[o] = t[0];
-        img.data[o + 1] = t[1];
-        img.data[o + 2] = t[2];
+        img.data[o] = Math.min(255, Math.round(t[0] * WASH_GAIN));
+        img.data[o + 1] = Math.min(255, Math.round(t[1] * WASH_GAIN));
+        img.data[o + 2] = Math.min(255, Math.round(t[2] * WASH_GAIN));
         img.data[o + 3] = 255;
       }
     }
@@ -321,17 +339,24 @@ export class MapData {
           ? 'story'
           : /cismigiu|parc/i.test(lm.id)
             ? 'park'
-            : 'plaza';
+            : lm.id.startsWith('osm:')
+              ? 'poi'
+              : 'plaza';
       this.landmarks.push({
         id: lm.id,
-        name: lm.name,
+        name: lm.name.replace(/^osm:/, ''),
         x: lm.position.x,
         z: lm.position.z,
         radius: lm.radius,
         kind,
       });
     }
-    this.landmarks.sort((a, b) => a.name.localeCompare(b.name, 'ro'));
+    // Anchors first, POIs last: the painter walks this list in order, so the
+    // handful of things that matter end up drawn on top of the crowd.
+    const rank: Record<MapLandmark['kind'], number> = { poi: 0, park: 1, plaza: 2, story: 3 };
+    this.landmarks.sort(
+      (a, b) => rank[a.kind] - rank[b.kind] || a.name.localeCompare(b.name, 'ro'),
+    );
   }
 }
 

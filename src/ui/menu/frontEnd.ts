@@ -264,22 +264,20 @@ export class FrontEnd {
     this.writeSession();
   }
 
+  /**
+   * The poller. It used to *build* the record here out of whatever the seam
+   * would tell it — act id, act title, level, lei — and that was the whole save
+   * system. `Services.Save` owns the record now (`src/core/save.ts`), including
+   * XP, unlocks, discovered landmarks, position, heading, time of day and
+   * weather. This keeps the front-end's own copy fresh so the CONTINUE row can
+   * describe the slot without touching storage on every frame.
+   */
   private writeSession(): void {
     const ctx = this.ctx;
     if (!ctx) return;
-    const missions = ctx.tryGet(Services.Missions);
-    const base = this.session ?? emptySession();
-    const rec: SessionRecord = {
-      actId: missions?.currentId ?? base.actId,
-      actTitle: missions?.currentTitle || base.actTitle,
-      completed: missions ? [...missions.completed] : base.completed,
-      level: ctx.tryGet(Services.Progression)?.level ?? base.level,
-      lei: ctx.tryGet(Services.Player)?.lei ?? base.lei,
-      savedAt: Date.now(),
-      playSeconds: this.playSeconds,
-    };
-    this.session = rec;
-    saveSession(rec);
+    const save = ctx.tryGet(Services.Save);
+    if (!save) return;
+    this.session = save.save('front-end');
   }
 
   /* ---------------------------------------------------------------- */
@@ -797,18 +795,22 @@ export class FrontEnd {
     ctx.input.enabled = true;
     ctx.tryGet(Services.Hud)?.setVisible(true);
 
-    if (mode === 'continue' && this.session?.actId) {
-      // Best effort: the seam can start an act, and the story hook can mark the
-      // earlier ones done. Neither can restore lei or XP — see session.ts.
-      const story = (window as unknown as { __GTA_STORY__?: { unlockTo?: (id: string) => void } }).__GTA_STORY__;
+    const save = ctx.tryGet(Services.Save);
+
+    if (mode === 'continue' && isResumable(this.session)) {
+      // CONTINUE actually continues now: acts finished, XP, level, unlocks,
+      // discovered landmarks, lei, where you stood and what time it was.
       try {
-        story?.unlockTo?.(this.session.actId);
-        ctx.tryGet(Services.Missions)?.start(this.session.actId);
-      } catch {
-        /* a stale act id must not break the resume */
+        save?.restore(this.session);
+        this.playSeconds = this.session.playSeconds;
+      } catch (err) {
+        // A slot from an older build must never strand the player on a black
+        // screen — drop into the world as a new game instead.
+        console.warn('[front-end] resume failed, starting fresh:', err);
       }
     } else if (mode === 'new') {
       this.playSeconds = 0;
+      save?.clear();
       this.session = emptySession();
     }
 

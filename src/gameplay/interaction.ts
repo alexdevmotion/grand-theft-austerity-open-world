@@ -16,49 +16,23 @@
  *   world so it can be found from across a plaza, plus a keycap prompt at the
  *   bottom of the screen once you are close enough to press it.
  *
- * WHY IT IS NOT A `System`
- *   `src/game.ts` is frozen, so nothing new can be registered there. The pause
- *   menu solved the same problem by hanging off the HUD; this hangs off
- *   `MissionSystem`, which constructs it, ticks it and shares it with the
- *   activity system through `Services`-free direct handoff inside
- *   `src/gameplay/`.
+ * ONE REGISTRY, REACHED THROUGH THE SEAM
+ *   It is registered in `src/game.ts` at order 216 and published as
+ *   `Services.Interaction`. It used to be constructed by `MissionSystem` and
+ *   handed to the activity system through a module-level `sharedInteraction()`
+ *   singleton, because `game.ts` was frozen — a second, undocumented seam
+ *   running alongside the registry that `services.ts` exists to be. That is
+ *   gone: consumers call `ctx.tryGet(Services.Interaction)` like everything
+ *   else. It must stay a singleton *instance* (two registries would fight over
+ *   the same `interact` press) and the registry is what enforces that now.
  */
 
 import * as THREE from 'three';
-import type { GameContext } from '../core/engine';
+import type { GameContext, System } from '../core/engine';
 import { CG, probeGroups, type PhysicsWorld } from '../physics/physics';
-import { Services } from '../core/services';
+import { Services, type InteractableKind, type InteractableSpec, type InteractionService } from '../core/services';
 
-export type InteractableKind = 'story' | 'activity' | 'world';
-
-export interface InteractableSpec {
-  id: string;
-  /** Romanian, imperative: "Vorbește cu Nicușor". */
-  label: string;
-  position: THREE.Vector3;
-  /** How close you must be. Default 3.4 m. */
-  radius?: number;
-  kind?: InteractableKind;
-  /** Must be out of the car. Default true. */
-  onFoot?: boolean;
-  /** Must be *driving*. Default false. */
-  inVehicle?: boolean;
-  /**
-   * Minimum cosine between the camera's forward and the direction to the
-   * marker. Default 0.15 (~81 degrees off-axis) — generous enough to be
-   * forgiving, tight enough that you cannot trigger something behind you.
-   */
-  facing?: number;
-  /** Trace the eye line and refuse when a wall is in the way. Default true. */
-  requireLos?: boolean;
-  /** Fire on entry instead of waiting for E. */
-  auto?: boolean;
-  /** No marker geometry, no prompt — a silent trigger volume. */
-  silent?: boolean;
-  /** Marker tint. Defaults by kind. */
-  color?: number;
-  onTrigger: (ctx: GameContext) => void;
-}
+export type { InteractableKind, InteractableSpec } from '../core/services';
 
 interface Interactable extends InteractableSpec {
   radius: number;
@@ -98,22 +72,6 @@ export function interactionClaimed(): boolean {
   return claim.active;
 }
 
-/**
- * The one live interaction system. `MissionSystem` constructs it (game.ts is
- * frozen and cannot register a new System) and the activity system borrows it
- * from here rather than owning a second one — two registries would fight over
- * the same `interact` press.
- */
-let _shared: InteractionSystem | null = null;
-
-export function setSharedInteraction(s: InteractionSystem | null): void {
-  _shared = s;
-}
-
-export function sharedInteraction(): InteractionSystem | null {
-  return _shared;
-}
-
 /* ------------------------------------------------------------------ */
 
 const _eye = new THREE.Vector3();
@@ -121,7 +79,12 @@ const _to = new THREE.Vector3();
 const _fwd = new THREE.Vector3();
 const _tmp = new THREE.Vector3();
 
-export class InteractionSystem {
+export class InteractionSystem implements System, InteractionService {
+  readonly name = 'interaction';
+  /** Ahead of missions (220) and activities (230): both fill the registry in
+   *  their own `init`, so this one has to exist first. */
+  readonly order = 216;
+
   private ctx!: GameContext;
   private phys: PhysicsWorld | null = null;
   private list: Interactable[] = [];
@@ -140,6 +103,7 @@ export class InteractionSystem {
 
   init(ctx: GameContext): void {
     this.ctx = ctx;
+    ctx.provide(Services.Interaction, this);
     this.phys = ctx.tryGet(Services.Physics) ?? null;
     this.root.name = 'interactables';
     this.root.matrixAutoUpdate = true;

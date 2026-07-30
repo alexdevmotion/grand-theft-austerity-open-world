@@ -29,18 +29,35 @@ requestAnimationFrame
   └─ input.postUpdate()
 ```
 
-Fixed step is 1/60 with a 5-step backlog cap. `System.order` decides both init
-and update sequence:
+Fixed step is 1/60 with a 5-step backlog cap. `System.order` decides init and
+update sequence — **and nothing else**:
 
 | Range | Phase |
 | --- | --- |
-| 0–9 | debug hooks, physics init |
-| 10–99 | world: sky, lighting, weather, city, props |
+| 0–9 | debug hooks, front-end overlay, physics init |
+| 10–99 | world: sky, lighting, weather, city, interiors, props |
 | 100–199 | simulation: vehicles, peds, traffic, police |
-| 200–299 | gameplay: player, wanted, progression, missions, activities |
+| 200–299 | gameplay: player, wanted, progression, interaction, cast, Builders House, missions, activities, save |
 | 300–399 | camera |
-| 400–899 | presentation: audio, HUD |
+| 400–899 | presentation: audio, HUD, minimap, pause menu |
 | 900+ | post-processing |
+
+### What survives a pause
+
+`System.ticksWhenPaused` — an explicit boolean, declared by the system or
+stated at the assembly point:
+
+```ts
+.add(new PauseMenu())              // declares `readonly ticksWhenPaused = true`
+.add(new AudioSystem(), { ticksWhenPaused: true })   // stated for a file we don't own
+```
+
+This used to be inferred from `order >= 400`, which made one number mean two
+unrelated things and forced anything that had to outlive a pause into the
+presentation band whether it belonged there or not — the front-end sat at 430
+for exactly that reason, long after order 2 was where it belonged.
+
+`Engine.systemNames` and `Engine.pausedSystemNames` report both, live.
 
 ## The service seam — read this before writing code
 

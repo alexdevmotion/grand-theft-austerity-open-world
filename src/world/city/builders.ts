@@ -125,7 +125,17 @@ export class FacadeBuilder {
     if (roof) this.cap(footprint, y1, p);
   }
 
-  /** Flat roof cap. Fan-triangulated — footprints are convex or L-shaped. */
+  /**
+   * Flat roof cap.
+   *
+   * Fan-triangulated for the generated footprints (rectangles and the L-plan,
+   * both star-shaped about vertex 0). REAL OSM FOOTPRINTS ARE NEITHER: a
+   * Bucharest perimeter block is a ragged 20-gon with re-entrant corners, and a
+   * fan over one of those throws triangles clean outside the building — roofs
+   * that spill over the pavement and z-fight the street. Anything past a
+   * quadrilateral goes through the ear clipper instead, which preserves the
+   * input winding so the cap keeps facing up either way.
+   */
   cap(footprint: ReadonlyArray<Vec2>, y: number, p: FacadeParams): void {
     if (footprint.length < 3) return;
     const base = this.pos.length / 3;
@@ -136,8 +146,14 @@ export class FacadeBuilder {
       this.f1.push(p.style, p.floorH, p.bayW, p.seed);
       this.f2.push(p.buildingH, p.groundH, p.lit, p.tint);
     }
-    for (let i = 1; i < footprint.length - 1; i++) {
-      this.idx.push(base, base + i, base + i + 1);
+    if (footprint.length <= 4) {
+      for (let i = 1; i < footprint.length - 1; i++) {
+        this.idx.push(base, base + i, base + i + 1);
+      }
+      return;
+    }
+    for (const t of triangulate(footprint)) {
+      this.idx.push(base + t[0], base + t[1], base + t[2]);
     }
   }
 
@@ -207,6 +223,39 @@ export class SurfaceBuilder {
       this.s1.push(p.kind, p.a, p.b, p.seed);
     }
     this.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  }
+
+  /** Single triangle, world-metre UVs. */
+  tri(a: Vec2, b: Vec2, c: Vec2, y: number, p: SurfParams): void {
+    const base = this.pos.length / 3;
+    for (const v of [a, b, c]) {
+      this.pos.push(v.x, y, v.z);
+      this.nrm.push(0, 1, 0);
+      this.uv.push(v.x, v.z);
+      this.s1.push(p.kind, p.a, p.b, p.seed);
+    }
+    this.idx.push(base, base + 1, base + 2);
+  }
+
+  /**
+   * Arbitrary horizontal polygon — real park outlines, square paving, junction
+   * patches. Ear-clipped; the winding of the input decides which way it faces,
+   * and `poly` normalises it to the same handedness `rect` uses so a park never
+   * comes out invisible from above.
+   */
+  poly(points: ReadonlyArray<Vec2>, y: number, p: SurfParams): void {
+    if (points.length < 3) return;
+    const ring = signedArea(points) > 0 ? points.slice().reverse() : points;
+    const base = this.pos.length / 3;
+    for (const v of ring) {
+      this.pos.push(v.x, y, v.z);
+      this.nrm.push(0, 1, 0);
+      this.uv.push(v.x, v.z);
+      this.s1.push(p.kind, p.a, p.b, p.seed);
+    }
+    for (const t of triangulate(ring)) {
+      this.idx.push(base + t[0], base + t[1], base + t[2]);
+    }
   }
 
   /**
@@ -558,6 +607,39 @@ export class DetailBuilder {
     }
   }
 
+  /**
+   * Parapet / cornice following an ARBITRARY footprint.
+   *
+   * `ring` only knows how to band a world-axis-aligned rectangle, which is all
+   * the generated grid ever needed. Real Bucharest blocks sit on streets that
+   * run at every angle — Calea Victoriei alone swings through sixty degrees —
+   * and an axis-aligned parapet on a skewed building floats off two of its
+   * corners and cuts through the other two.
+   *
+   * Emitted as a strip rather than a box per edge: outer face, top, inner face,
+   * six triangles per edge against `ring`'s twelve, so a 14-sided perimeter
+   * block costs about what a rectangle used to.
+   */
+  ringPoly(
+    points: ReadonlyArray<Vec2>,
+    y: number, thickness: number, height: number, o: DetailOpts,
+  ): void {
+    const n = points.length;
+    if (n < 3) return;
+    const inner = insetPolygon(points, thickness);
+    const top = y + height;
+    for (let i = 0; i < n; i++) {
+      const a = points[i];
+      const b = points[(i + 1) % n];
+      const ia = inner[i];
+      const ib = inner[(i + 1) % n];
+      // Outer face, top band, inner face.
+      this.quad([a.x, y, a.z], [b.x, y, b.z], [b.x, top, b.z], [a.x, top, a.z], o);
+      this.quad([a.x, top, a.z], [b.x, top, b.z], [ib.x, top, ib.z], [ia.x, top, ia.z], o);
+      this.quad([ia.x, top, ia.z], [ib.x, top, ib.z], [ib.x, y, ib.z], [ia.x, y, ia.z], o);
+    }
+  }
+
   /** Ring of boxes forming a parapet / cornice around a rectangle. */
   ring(
     x0: number, z0: number, x1: number, z1: number,
@@ -591,6 +673,81 @@ export class DetailBuilder {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* Polygon utilities — needed once real OSM outlines entered the city   */
+/* ------------------------------------------------------------------ */
+
+/** Shoelace area. Negative for the clockwise-from-above winding used here. */
+export function signedArea(p: ReadonlyArray<Vec2>): number {
+  let a = 0;
+  for (let i = 0, n = p.length; i < n; i++) {
+    const c = p[i];
+    const d = p[(i + 1) % n];
+    a += c.x * d.z - d.x * c.z;
+  }
+  return a / 2;
+}
+
+const _tmpShape: THREE.Vector2[] = [];
+
+/**
+ * Ear-clip an arbitrary simple polygon into index triples.
+ * Winding is preserved, so callers keep control of which way the face points.
+ */
+export function triangulate(p: ReadonlyArray<Vec2>): number[][] {
+  _tmpShape.length = 0;
+  for (const v of p) _tmpShape.push(new THREE.Vector2(v.x, v.z));
+  const tris = THREE.ShapeUtils.triangulateShape(_tmpShape, []);
+  // Degenerate rings (collinear, self-touching) come back empty; fall back to a
+  // fan so the caller still gets a closed surface rather than a hole.
+  if (!tris.length) {
+    const out: number[][] = [];
+    for (let i = 1; i < p.length - 1; i++) out.push([0, i, i + 1]);
+    return out;
+  }
+  return tris;
+}
+
+/**
+ * Offset a polygon inward by `d`, by moving each vertex along the bisector of
+ * its two edge normals. Good enough for parapet bands; it does not attempt to
+ * resolve self-intersection on very sharp spurs, so `d` should stay small
+ * relative to the shortest edge.
+ */
+export function insetPolygon(p: ReadonlyArray<Vec2>, d: number): Vec2[] {
+  const n = p.length;
+  const cw = signedArea(p) < 0;
+  const out: Vec2[] = [];
+  for (let i = 0; i < n; i++) {
+    const prev = p[(i - 1 + n) % n];
+    const cur = p[i];
+    const next = p[(i + 1) % n];
+    const n1 = edgeNormal(prev, cur, cw);
+    const n2 = edgeNormal(cur, next, cw);
+    let bx = n1.x + n2.x;
+    let bz = n1.z + n2.z;
+    const l = Math.hypot(bx, bz);
+    if (l < 1e-4) { out.push({ x: cur.x, z: cur.z }); continue; }
+    bx /= l; bz /= l;
+    // Scale so the offset edge sits exactly `d` in, however sharp the corner.
+    const cos = Math.max(0.35, bx * n1.x + bz * n1.z);
+    out.push({ x: cur.x + bx * (d / cos), z: cur.z + bz * (d / cos) });
+  }
+  return out;
+}
+
+/** Inward unit normal of edge a->b for the given winding. */
+function edgeNormal(a: Vec2, b: Vec2, clockwise: boolean): Vec2 {
+  const dx = b.x - a.x;
+  const dz = b.z - a.z;
+  const l = Math.hypot(dx, dz) || 1;
+  // For the clockwise-from-above winding this file uses, the inward normal is
+  // the RIGHT-hand perpendicular: check it against rectFootprint's west edge,
+  // which runs -z to +z at x = -hw and must point back toward +x.
+  const s = clockwise ? -1 : 1;
+  return { x: (-dz / l) * s, z: (dx / l) * s };
+}
+
 /** Rectangle footprint, clockwise viewed from above. */
 export function rectFootprint(cx: number, cz: number, w: number, d: number, rot = 0): Vec2[] {
   const hw = w / 2;
@@ -606,15 +763,19 @@ export function rectFootprint(cx: number, cz: number, w: number, d: number, rot 
 /** L-shaped footprint (clockwise) — cuts a notch out of the +x/+z corner. */
 export function lFootprint(
   cx: number, cz: number, w: number, d: number, notchW: number, notchD: number,
+  rot = 0,
 ): Vec2[] {
   const hw = w / 2;
   const hd = d / 2;
-  return [
-    { x: cx - hw, z: cz - hd },
-    { x: cx - hw, z: cz + hd },
-    { x: cx + hw - notchW, z: cz + hd },
-    { x: cx + hw - notchW, z: cz + hd - notchD },
-    { x: cx + hw, z: cz + hd - notchD },
-    { x: cx + hw, z: cz - hd },
+  const cs = Math.cos(rot);
+  const sn = Math.sin(rot);
+  const local: Array<[number, number]> = [
+    [-hw, -hd],
+    [-hw, hd],
+    [hw - notchW, hd],
+    [hw - notchW, hd - notchD],
+    [hw, hd - notchD],
+    [hw, -hd],
   ];
+  return local.map(([x, z]) => ({ x: cx + x * cs + z * sn, z: cz - x * sn + z * cs }));
 }

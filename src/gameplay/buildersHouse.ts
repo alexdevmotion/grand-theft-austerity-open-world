@@ -22,14 +22,34 @@
  * decorative floor plate sits at y 0.4 and the analytic ground under the tower
  * is 0, so without this the player stands shin-deep in his own reception.
  *
- * PREFERRED FIX (report, do not edit): do this in `buildBuildersHouse`
- * (src/world/city/landmarks.ts:125) by pushing the four wall boxes instead of
- * one tower box. Then this file can be deleted.
+ * STATUS: `buildBuildersHouse` now pushes the ground-floor wall boxes itself,
+ * which is the fix this file has always asked for. `carveLobbyDoorway` is
+ * therefore a FALLBACK — `BuildersHouseSystem` probes the shell first and only
+ * operates on it when the probe says the door is shut. When the city stops
+ * shipping single-cuboid towers for good, the carve can be deleted and only the
+ * probe kept.
+ *
+ * THE PROBE IS THE POINT. The carve matched the tower collider by centre and
+ * half-extents within 0.75 m; when that match failed it printed a `console.warn`
+ * nobody read and Act IV's climax silently became a wall. `probeDoorway` does
+ * not trust anyone's return value: it fires real rays through the opening at
+ * knee, chest and head height, measures the widest continuously clear band, and
+ * checks there is floor under your feet on the far side. The result is asserted
+ * at the end of init and published in `__GTA_STORY__.state().doorway`.
  */
 
 import * as THREE from 'three';
-import { GROUP, type PhysicsWorld } from '../physics/physics';
-import { DOORWAY, LOBBY, TOWER, TOWER_SOUTH_Z } from '../content/places';
+import type { GameContext, System } from '../core/engine';
+import { CG, GROUP, probeGroups, type PhysicsWorld } from '../physics/physics';
+import { Services, type BuildersHouseService, type DoorwayReport } from '../core/services';
+import {
+  DOORWAY,
+  LOBBY,
+  LOBBY_DOOR_INSIDE,
+  LOBBY_DOOR_OUTSIDE,
+  TOWER,
+  TOWER_SOUTH_Z,
+} from '../content/places';
 
 export interface CarveResult {
   carved: boolean;
@@ -131,6 +151,293 @@ export function carveLobbyDoorway(phys: PhysicsWorld): CarveResult {
   return { carved: true, reason: 'ok', added };
 }
 
+/* ------------------------------------------------------------------ */
+/* The assertion                                                       */
+/* ------------------------------------------------------------------ */
+
+/** Heights above the lobby floor a walking player occupies. */
+const PROBE_HEIGHTS = [0.45, 1.0, 1.65];
+/** Lateral sample spacing across the opening. */
+const PROBE_STEP = 0.1;
+/** How far either side of the doorway centreline to look. */
+const PROBE_HALF = DOORWAY.width / 2 + 0.4;
+/**
+ * Clear width a player needs. The character capsule is 0.32 m radius, so 0.64 m
+ * of body plus enough margin that the controller's depenetration does not fight
+ * the reveal on every step through.
+ */
+const MIN_CLEAR_WIDTH = 0.95;
+
+export interface DoorwayProbe {
+  passable: boolean;
+  reason: string;
+  /** Widest continuously clear band through the opening, metres. */
+  clearWidth: number;
+  /** World X of the middle of that band — where to aim a player. */
+  clearCentreX: number;
+}
+
+/**
+ * Can a player actually get from the forecourt to the reception desk?
+ *
+ * Rays from just outside the door to just inside it, sampled every 10 cm across
+ * the opening at knee, chest and head height, then the WIDEST CONTINUOUSLY
+ * CLEAR BAND is measured. It is deliberately not "are all lanes clear": a real
+ * entrance has a centre mullion, and a 3.4 m opening split into two 1.45 m
+ * halves is perfectly walkable. What is not walkable is an opening whose widest
+ * gap is narrower than the player — and that is the failure this catches, the
+ * one that used to ship as a silent `console.warn`.
+ *
+ * Plus a downward ray on the inside, because a doorway you fall through is not
+ * a doorway either.
+ */
+export function probeDoorway(phys: PhysicsWorld): DoorwayProbe {
+  const fail = (reason: string): DoorwayProbe => ({ passable: false, reason, clearWidth: 0, clearCentreX: DOORWAY.x });
+  if (!phys.world) return fail('no physics world');
+
+  const from = new THREE.Vector3();
+  const dir = new THREE.Vector3(0, 0, 1);
+  const span = LOBBY_DOOR_INSIDE.z - LOBBY_DOOR_OUTSIDE.z; // ~6.2 m through the reveal
+  const solid = probeGroups(CG.STATIC);
+
+  const samples = Math.floor((PROBE_HALF * 2) / PROBE_STEP) + 1;
+  let best = 0;
+  let bestEnd = -1;
+  let run = 0;
+
+  for (let i = 0; i < samples; i++) {
+    const x = DOORWAY.x - PROBE_HALF + i * PROBE_STEP;
+    let clear = true;
+    for (const h of PROBE_HEIGHTS) {
+      from.set(x, LOBBY.floorY + h, LOBBY_DOOR_OUTSIDE.z);
+      if (phys.raycast(from, dir, span, solid)) {
+        clear = false;
+        break;
+      }
+    }
+    if (clear) {
+      run++;
+      if (run > best) {
+        best = run;
+        bestEnd = i;
+      }
+    } else {
+      run = 0;
+    }
+  }
+
+  const clearWidth = best > 0 ? (best - 1) * PROBE_STEP : 0;
+  const clearCentreX = best > 0
+    ? DOORWAY.x - PROBE_HALF + (bestEnd - (best - 1) / 2) * PROBE_STEP
+    : DOORWAY.x;
+
+  if (clearWidth < MIN_CLEAR_WIDTH) {
+    return {
+      passable: false,
+      reason: `widest clear gap is ${clearWidth.toFixed(2)} m, needs ${MIN_CLEAR_WIDTH} m`,
+      clearWidth,
+      clearCentreX,
+    };
+  }
+
+  from.set(clearCentreX, LOBBY.floorY + 2.0, LOBBY_DOOR_INSIDE.z);
+  const floor = phys.raycast(from, new THREE.Vector3(0, -1, 0), 4.0, probeGroups(CG.STATIC | CG.TERRAIN));
+  if (!floor) {
+    return { passable: false, reason: 'no floor collider inside the lobby', clearWidth, clearCentreX };
+  }
+
+  return {
+    passable: true,
+    reason: `${clearWidth.toFixed(2)} m clear at x ${clearCentreX.toFixed(2)}`,
+    clearWidth,
+    clearCentreX,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* The system                                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Builders House as a registered system: it guarantees you can walk in, and it
+ * answers `Services.BuildersHouse`.
+ *
+ * It used to be a field on `MissionSystem`, constructed and ticked by hand
+ * because `game.ts` was closed. It is a system now; missions ask the seam for
+ * it like everything else.
+ *
+ * IT NO LONGER DRESSES THE ROOM. `src/world/interiors/lobby.ts` builds the
+ * Builders House lobby properly — both states, real fittings, a streamed light
+ * pool — and `InteriorSystem` owns switching it to `liberated`. The stopgap
+ * `LobbyInterior` below built a *second* room in the same 30x24 volume: two
+ * floors, two ceilings, two sets of walls z-fighting each other. So liberation
+ * is forwarded to the interiors service and this system keeps the one job the
+ * interiors system cannot do — proving the door is open.
+ */
+export class BuildersHouseSystem implements System, BuildersHouseService {
+  readonly name = 'buildersHouse';
+  /** After physics (5), the city (20) and the interiors (25); before missions. */
+  readonly order = 218;
+
+  private ctx!: GameContext;
+  private phys: PhysicsWorld | null = null;
+  private report: DoorwayReport = {
+    carved: false,
+    passable: false,
+    reason: 'not initialised',
+    added: 0,
+  };
+  /** The init-time probe is provisional; this is the one that is believed. */
+  private confirmed = false;
+
+  get doorway(): DoorwayReport {
+    return this.report;
+  }
+  get liberated(): boolean {
+    return this.ctx?.tryGet(Services.Interiors)?.liberated ?? false;
+  }
+
+  liberate(): void {
+    this.ctx?.tryGet(Services.Interiors)?.liberate();
+  }
+
+  init(ctx: GameContext): void {
+    this.ctx = ctx;
+    ctx.provide(Services.BuildersHouse, this);
+
+    const phys = ctx.tryGet(Services.Physics) ?? null;
+    this.phys = phys;
+    if (!phys) {
+      this.report = { carved: false, passable: false, reason: 'physics not registered', added: 0 };
+      this.confirmed = true;
+      this.assert();
+      return;
+    }
+
+    // Look, but do not operate. See `check()`.
+    const probe = probeDoorway(phys);
+    this.report = {
+      carved: probe.passable,
+      passable: probe.passable,
+      added: 0,
+      reason: `provisional (init) — ${probe.reason}`,
+    };
+  }
+
+  /**
+   * ASK BEFORE OPERATING. `buildBuildersHouse` now pushes the ground-floor wall
+   * boxes itself — the fix this file always asked for — so the runtime carve is
+   * a fallback, not a step. Running it unconditionally would find no single
+   * tower cuboid, report "not found", and make a working doorway look broken.
+   */
+  private check(): void {
+    const phys = this.phys;
+    if (!phys) return;
+
+    const probe = probeDoorway(phys);
+    if (probe.passable) {
+      this.report = { carved: true, passable: true, added: 0, reason: `open — ${probe.reason}` };
+      return;
+    }
+
+    const carve = carveLobbyDoorway(phys);
+    const after = probeDoorway(phys);
+    this.report = {
+      carved: carve.carved,
+      passable: after.passable,
+      added: carve.added,
+      reason: carve.carved
+        ? `carved at runtime — ${after.reason}`
+        : `shell is shut and the carve could not open it: ${carve.reason} (${probe.reason})`,
+    };
+  }
+
+  /**
+   * HARD ASSERTION. Act IV ends inside this room; if the door is shut the
+   * campaign cannot be finished and every other symptom is subtle. So this is
+   * loud, and `?strict=1` turns it into a boot failure for CI and the harness.
+   */
+  private assert(): void {
+    if (this.report.passable) return;
+    const msg =
+      `[buildersHouse] DOORWAY NOT PASSABLE — Act IV cannot be completed. ${this.report.reason}. ` +
+      `Fix at source: the ground-floor south wall of buildBuildersHouse ` +
+      `(src/world/city/landmarks.ts) must leave a gap at least ` +
+      `${MIN_CLEAR_WIDTH} m wide and ${DOORWAY.height} m tall at x ≈ ${DOORWAY.x}.`;
+    console.error(msg);
+    if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('strict') === '1') {
+      throw new Error(msg);
+    }
+  }
+
+  /**
+   * WHY THE ANSWER IS NOT SETTLED AT INIT — MEASURED, NOT ASSUMED.
+   *
+   * At init the horizontal sweep through the door already reads
+   * `#####..............#####..............#####` — two 1.3 m clear bands
+   * either side of the entrance mullion, i.e. a perfectly walkable doorway that
+   * `buildBuildersHouse` builds correctly. What is missing at that moment is the
+   * lobby FLOOR: `InteriorSystem` streams its shells by camera distance, so the
+   * floor collider does not exist until the room is near. An init-time verdict
+   * is therefore provisional in both directions — it can cry wolf over geometry
+   * that has not arrived, and it can pass over a hole not yet filled in.
+   *
+   * So the verdict that is believed, asserted, and acted on with the runtime
+   * carve is the one taken the first time the player is close enough for it to
+   * matter. One extra probe per session, then never again.
+   */
+  private static readonly CONFIRM_RADIUS = 140;
+  /** Re-probe this often while inside the radius. */
+  private static readonly CONFIRM_INTERVAL = 0.5;
+  /**
+   * How long the room gets to finish arriving before the verdict is final.
+   * `InteriorSystem` streams its shells over several frames, so probing on the
+   * first frame inside the radius reliably reports "no floor" for a floor that
+   * lands a moment later — which is a false alarm on the loudest error in the
+   * game. It only cries wolf if the room is still not there after this.
+   */
+  private static readonly CONFIRM_GRACE = 8;
+
+  private nearTime = 0;
+  private probeClock = 0;
+
+  update(dt: number, ctx: GameContext): void {
+    if (this.confirmed) return;
+    const p = ctx.tryGet(Services.Player)?.position;
+    if (!p) return;
+    if (Math.hypot(p.x - TOWER.cx, p.z - TOWER.cz) > BuildersHouseSystem.CONFIRM_RADIUS) return;
+
+    this.nearTime += dt;
+    this.probeClock += dt;
+    if (this.probeClock < BuildersHouseSystem.CONFIRM_INTERVAL) return;
+    this.probeClock = 0;
+
+    const phys = this.phys;
+    if (!phys) return;
+    const probe = probeDoorway(phys);
+    if (probe.passable) {
+      this.report = { carved: true, passable: true, added: 0, reason: `open — ${probe.reason}` };
+      this.confirmed = true;
+      return;
+    }
+    this.report = {
+      ...this.report,
+      passable: false,
+      reason: `waiting for the room — ${probe.reason}`,
+    };
+    if (this.nearTime < BuildersHouseSystem.CONFIRM_GRACE) return;
+
+    // Out of patience: try the runtime carve, then settle the verdict.
+    this.confirmed = true;
+    this.check();
+    this.assert();
+  }
+
+  dispose(): void {
+    /* nothing owned: the room belongs to the interiors system */
+  }
+}
+
 /** True when `p` is inside the lobby volume. */
 export function insideLobby(x: number, z: number): boolean {
   return (
@@ -140,166 +447,15 @@ export function insideLobby(x: number, z: number): boolean {
 }
 
 /* ------------------------------------------------------------------ */
-/* Lobby dressing                                                      */
+/* WHAT USED TO BE HERE                                                */
+/*                                                                     */
+/* `LobbyInterior` — a stopgap that built walls, a ceiling, upended    */
+/* chairs, litter, a closure notice, pendant strips, a tricolour and   */
+/* three point lights into the Builders House volume, because nothing  */
+/* else did. Something else does now: `src/world/interiors/lobby.ts`   */
+/* builds the same room in both states with a real fitout kit and a    */
+/* streamed light pool, and `InteriorSystem` owns the sealed ->        */
+/* liberated switch. Keeping both meant two rooms in one volume,       */
+/* z-fighting, and doubled draw calls for the finale. Deleted rather   */
+/* than left behind a flag: two owners of one room is the bug.         */
 /* ------------------------------------------------------------------ */
-
-/**
- * `buildLobby` draws a floor, a glowing back wall, a desk and pendant lights —
- * everything you need to look at a lobby from the plaza, and not enough to
- * stand in one: there are no side walls, no ceiling and no reason for the room
- * to feel neglected. This adds the parts a player *inside* the room needs, in
- * both of the states the story asks for.
- *
- *   sealed      dark, closure notices, upended chairs, scattered paper
- *   liberated   lights up, tricolour wash, the room the afterparty happens in
- */
-export class LobbyInterior {
-  readonly group = new THREE.Group();
-  private lights: THREE.PointLight[] = [];
-  private glowMats: THREE.MeshStandardMaterial[] = [];
-  private sealMats: THREE.MeshStandardMaterial[] = [];
-  private _liberated = false;
-  private t = 0;
-
-  constructor(scene: THREE.Scene) {
-    this.group.name = 'buildersHouseLobby';
-    this.build();
-    scene.add(this.group);
-  }
-
-  get liberated(): boolean {
-    return this._liberated;
-  }
-
-  private mat(color: number, rough = 0.9, emissive = 0, metal = 0): THREE.MeshStandardMaterial {
-    const m = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(color).convertSRGBToLinear(),
-      roughness: rough,
-      metalness: metal,
-    });
-    if (emissive > 0) {
-      m.emissive = new THREE.Color(color).convertSRGBToLinear();
-      m.emissiveIntensity = emissive;
-    }
-    return m;
-  }
-
-  private box(
-    mat: THREE.Material,
-    cx: number, cy: number, cz: number,
-    ex: number, ey: number, ez: number,
-    yaw = 0,
-  ): THREE.Mesh {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(ex, ey, ez), mat);
-    m.position.set(cx, cy, cz);
-    m.rotation.y = yaw;
-    m.castShadow = false;
-    m.receiveShadow = true;
-    this.group.add(m);
-    return m;
-  }
-
-  private build(): void {
-    const cx = LOBBY.cx;
-    const cz = LOBBY.cz;
-    const hx = TOWER.w / 2 - 1.5;
-    const hz = TOWER.d / 2 - 1.5;
-    const h = LOBBY.ceilingY;
-
-    const concrete = this.mat(0x2b2733, 0.94);
-    const trim = this.mat(0x191622, 0.85, 0, 0.2);
-
-    // Side and front walls, front split by the doorway.
-    this.box(concrete, cx - hx, h / 2, cz, 0.3, h, hz * 2);
-    this.box(concrete, cx + hx, h / 2, cz, 0.3, h, hz * 2);
-    const doorHalf = DOORWAY.width / 2;
-    const pier = hx - doorHalf;
-    this.box(concrete, cx - doorHalf - pier / 2, h / 2, TOWER_SOUTH_Z + 0.9, pier, h, 0.3);
-    this.box(concrete, cx + doorHalf + pier / 2, h / 2, TOWER_SOUTH_Z + 0.9, pier, h, 0.3);
-    this.box(trim, cx, DOORWAY.height + (h - DOORWAY.height) / 2, TOWER_SOUTH_Z + 0.9,
-      doorHalf * 2, h - DOORWAY.height, 0.34);
-    // Ceiling.
-    this.box(concrete, cx, h - 0.12, cz, hx * 2, 0.24, hz * 2);
-
-    /* ---- neglect: the closed-down state ---- */
-    const paper = this.mat(0xcfc7b4, 1);
-    const wood = this.mat(0x5c4a38, 0.95);
-    for (let i = 0; i < 9; i++) {
-      const a = i * 2.399;
-      this.box(paper, cx + Math.sin(a) * hx * 0.7, LOBBY.floorY + 0.01,
-        cz + Math.cos(a * 1.7) * hz * 0.6, 0.28, 0.006, 0.4, a);
-    }
-    for (let i = 0; i < 4; i++) {
-      const x = cx - hx * 0.55 + i * hx * 0.36;
-      const z = cz - hz * 0.15 + (i % 2) * 1.7;
-      // Chairs on their sides.
-      this.box(wood, x, LOBBY.floorY + 0.22, z, 0.46, 0.44, 0.46, i * 0.7);
-      this.box(wood, x + 0.24, LOBBY.floorY + 0.5, z, 0.06, 0.5, 0.44, i * 0.7);
-    }
-
-    // Ministry closure notice, taped inside the glass beside the door.
-    const seal = this.mat(0xd9333a, 0.7, 0.9);
-    this.sealMats.push(seal);
-    this.box(seal, cx + doorHalf + 1.3, 2.2, TOWER_SOUTH_Z + 0.72, 1.5, 2.0, 0.05);
-    this.box(this.mat(0xe8e2d6, 0.9), cx + doorHalf + 1.3, 2.2, TOWER_SOUTH_Z + 0.68, 1.2, 0.3, 0.05);
-
-    /* ---- the lights that come on at liberation ---- */
-    const glow = this.mat(0xffd8a8, 0.35, 0.0);
-    this.glowMats.push(glow);
-    for (let i = 0; i < 5; i++) {
-      const x = cx - hx * 0.7 + (i / 4) * hx * 1.4;
-      this.box(glow, x, h - 0.5, cz - hz * 0.2, 1.4, 0.14, 0.5);
-    }
-    // Tricolour banner over the reception, dark until the house is taken back.
-    const bands = [0x0b2f9e, 0xfcd116, 0xce1126];
-    for (let i = 0; i < 3; i++) {
-      const m = this.mat(bands[i], 0.8, 0);
-      this.glowMats.push(m);
-      this.box(m, cx + (i - 1) * 1.5, 5.4, cz + hz - 0.5, 1.4, 3.2, 0.06);
-    }
-
-    for (let i = 0; i < 2; i++) {
-      const l = new THREE.PointLight(0xffd0a0, 0, 26, 2);
-      l.position.set(cx + (i === 0 ? -6 : 6), h - 1.4, cz - 1);
-      l.castShadow = false;
-      this.group.add(l);
-      this.lights.push(l);
-    }
-    // One dim working light so the sealed room is not pitch black.
-    const dim = new THREE.PointLight(0x8a6cd0, 3.5, 22, 2);
-    dim.position.set(cx, h - 2.2, cz + 2);
-    this.group.add(dim);
-    this.lights.push(dim);
-  }
-
-  liberate(): void {
-    this._liberated = true;
-    for (const m of this.glowMats) {
-      m.emissive = m.color.clone();
-      m.emissiveIntensity = 2.4;
-    }
-    for (const m of this.sealMats) m.visible = false;
-    this.lights[0].intensity = 42;
-    this.lights[1].intensity = 42;
-    this.lights[2].color.set(0xff5aa0);
-    this.lights[2].intensity = 16;
-  }
-
-  /** The afterparty lights breathe; before that nothing moves. */
-  update(dt: number): void {
-    if (!this._liberated) return;
-    this.t += dt;
-    const a = 34 + Math.sin(this.t * 3.1) * 10;
-    const b = 34 + Math.sin(this.t * 2.3 + 1.7) * 10;
-    this.lights[0].intensity = a;
-    this.lights[1].intensity = b;
-  }
-
-  dispose(): void {
-    this.group.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (m.geometry) m.geometry.dispose();
-    });
-    this.group.removeFromParent();
-  }
-}

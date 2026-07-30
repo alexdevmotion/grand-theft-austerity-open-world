@@ -1,10 +1,12 @@
 /**
  * PAUSE MENU — Escape freezes the sim, unlocks the pointer and puts a real
- * menu on screen: Resume / Settings / Controls.
+ * menu on screen: Resume / Save / Settings / Controls.
  *
- * OWNED BY: the UI agent. Driven by `HudSystem` (order 420) because the engine
- * only ticks systems with `order >= 400` while `time.paused` is true, so the
- * menu keeps animating and keeps reading input after the world has stopped.
+ * OWNED BY: the UI agent. It used to be a field on `HudSystem`, because the
+ * engine decided what survived a pause from `order >= 400` and the HUD was the
+ * nearest thing that qualified. `System.ticksWhenPaused` says it directly now,
+ * so this is a registered system that declares the one property it actually
+ * needs and lives at its own order.
  *
  * CONTROLS PAGE — WHY IT IS PROBED, NOT TYPED OUT
  * -----------------------------------------------
@@ -21,7 +23,7 @@
  * to `ActionName` fails `tsc` until it has a label. The list cannot drift.
  */
 
-import type { GameContext } from '../core/engine';
+import type { GameContext, System } from '../core/engine';
 import type { ActionName } from '../core/input';
 import { Services, type RenderService } from '../core/services';
 
@@ -120,12 +122,19 @@ const STORAGE_KEY = 'gta.settings.v1';
 
 type Page = 'main' | 'settings' | 'controls';
 
-export class PauseMenu {
+export class PauseMenu implements System {
+  readonly name = 'pauseMenu';
+  /** Presentation band, just behind the HUD it draws over. */
+  readonly order = 440;
+  /** The whole point of this system: it is what you use once the world stops. */
+  readonly ticksWhenPaused = true;
+
   private ctx!: GameContext;
   private root!: HTMLDivElement;
   private bodyEl!: HTMLDivElement;
   private crumbEl!: HTMLDivElement;
   private open = false;
+  private saveFlash = 0;
   private page: Page = 'main';
   private selected = 0;
   /** True while synthetic key/mouse events are being fired at `Input`. */
@@ -172,6 +181,11 @@ export class PauseMenu {
     this.open = true;
     this.page = 'main';
     this.selected = 0;
+    this.saveFlash = 0;
+    // Opening the menu is the moment a player expects their run to be safe.
+    // Write BEFORE pausing, so `playSeconds` and the world state are the ones
+    // they were actually at.
+    this.autosave();
     this.ctx.time.paused = true;
     // The pointer must come back or the menu is unusable. Escape already
     // releases the lock in every browser; this covers the programmatic path.
@@ -194,8 +208,50 @@ export class PauseMenu {
     this.persist();
   }
 
-  /** Called every frame by the HUD, paused or not. */
-  update(dt: number): void {
+  /* ---------------------------------------------------------------- */
+  /* Saving                                                            */
+  /* ---------------------------------------------------------------- */
+
+  /** Quiet write on open — never blocks, never complains. */
+  private autosave(): void {
+    try {
+      this.ctx.tryGet(Services.Save)?.save('auto');
+    } catch (err) {
+      console.warn('[pause] autosave failed:', err);
+    }
+  }
+
+  /** The explicit SALVEAZĂ row: same write, with feedback. */
+  private saveNow(): void {
+    const save = this.ctx.tryGet(Services.Save);
+    if (!save) {
+      this.saveFlash = -1;
+      this.render();
+      return;
+    }
+    try {
+      save.save('manual');
+      this.saveFlash = 1;
+    } catch {
+      this.saveFlash = -1;
+    }
+    this.render();
+  }
+
+  private saveLabel(): string {
+    if (this.saveFlash > 0) return 'progres salvat';
+    if (this.saveFlash < 0) return 'salvarea nu este disponibilă';
+    const slot = this.ctx.tryGet(Services.Save)?.peek();
+    if (!slot) return 'scrie progresul în browser';
+    const mins = Math.floor(slot.playSeconds / 60);
+    return `nivel ${slot.level} · ${Math.round(slot.lei).toLocaleString('ro-RO')} lei · ${mins} min`;
+  }
+
+  /** Called every frame by the engine, paused or not. */
+  update(dt: number, _ctx?: GameContext): void {
+    // Escape only ever *opens* the menu from here; once it is up this class
+    // owns the key on its own capture-phase listener, with gameplay input off.
+    if (!this.open && this.ctx?.input.actionPressed('pause')) this.show();
     if (!this.open) return;
     this.time += dt;
     // Cheap broadcast flicker on the title, driven off wall time so it keeps
@@ -318,7 +374,7 @@ export class PauseMenu {
   }
 
   private rowCount(): number {
-    if (this.page === 'main') return 3;
+    if (this.page === 'main') return 4;
     if (this.page === 'settings') return 5;
     return 1;
   }
@@ -332,7 +388,8 @@ export class PauseMenu {
   private activate(): void {
     if (this.page === 'main') {
       if (this.selected === 0) this.close();
-      else if (this.selected === 1) this.goto('settings');
+      else if (this.selected === 1) this.saveNow();
+      else if (this.selected === 2) this.goto('settings');
       else this.goto('controls');
       return;
     }
@@ -438,12 +495,13 @@ export class PauseMenu {
   private mainHtml(): string {
     const items = [
       ['REIA JOCUL', 'înapoi în București'],
+      ['SALVEAZĂ', this.saveLabel()],
       ['SETĂRI', 'imagine, sunet, mouse'],
       ['COMENZI', 'toate tastele'],
     ];
     return `<div class="pm-list">${items
       .map(
-        ([t, s], i) => `<button class="pm-item" data-row="${i}">
+        ([t, s], i) => `<button class="pm-item${i === 1 && this.saveFlash > 0 ? ' pm-ok' : ''}" data-row="${i}">
             <span class="pm-item-t">${t}</span><span class="pm-item-s">${s}</span>
           </button>`,
       )
@@ -662,6 +720,8 @@ const TEMPLATE = `
     border-left-color:#ff3d7f; transform:translateX(3px);
   }
   .gta-pause .pm-back { margin-top:12px; }
+  .gta-pause .pm-ok .pm-item-s { color:#4ad6a0; }
+  .gta-pause .pm-ok { border-left-color:#4ad6a0; }
 
   .gta-pause .pm-segs { display:flex; gap:4px; }
   .gta-pause .pm-seg {

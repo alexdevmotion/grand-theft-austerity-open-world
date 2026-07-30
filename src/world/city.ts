@@ -38,9 +38,23 @@ import { srgb } from '../render/materials';
 
 import { DetailBuilder, FacadeBuilder, SurfaceBuilder } from './city/builders';
 import { createCityMaterials, type CityMaterials } from './city/materials';
-import { HALF, planDistrictAt } from './city/districts';
-import { KERB_H, blockBounds, buildRoads, type LaneSegment } from './city/roads';
-import { buildBlock, type PlacedBuilding } from './city/buildings';
+import { AXIS_X, AXIS_Z, HALF, planDistrictAt } from './city/districts';
+import {
+  KERB_H,
+  blockBounds,
+  buildOsmStreets,
+  buildRoads,
+  dressAuthoredAxes,
+  fillOsmGround,
+  type LaneSegment,
+} from './city/roads';
+import {
+  buildBlock,
+  buildOsmFootprints,
+  buildOsmInfill,
+  type PlacedBuilding,
+} from './city/buildings';
+import { Cell, OSM_FIT, buildOsmCity, type OsmCity } from './city/osm';
 import {
   LANDMARK_VOIDS,
   PLAZAS,
@@ -96,11 +110,19 @@ export class CitySystem implements System, CityService {
   /** Alive road segments, as node-id pairs, for spawn sampling. */
   private segments: Array<[number, number]> = [];
 
+  /** The imported real city. Null only if the survey failed to parse. */
+  private osm: OsmCity | null = null;
+  /** Node lookup for `nearestNode` — the grid index no longer covers it. */
+  private nodeBins = new Map<number, number[]>();
+  private static readonly NODE_BIN = 48;
+
   /** Raised walkable slabs (plaza decks, landmark forecourts), world-space. */
   private raisedSlabs: Array<{ x0: number; z0: number; x1: number; z1: number; top: number }> = [];
 
   private drawDistance = 1600;
   private night = 0;
+  private osmInfill = 0;
+  private groundRects = 0;
   private readonly camPos = new THREE.Vector3();
   private stats = { facadeTris: 0, surfaceTris: 0, detailTris: 0, buildings: 0 };
 
@@ -119,6 +141,10 @@ export class CitySystem implements System, CityService {
         // otherwise report 0, which is what put characters inside the stone.
         const slab = self.slabTopAt(x, z);
         if (slab !== null) return slab;
+        // Inside the imported extent there are no block rectangles to test —
+        // the ground is a kerb above the carriageway and nothing else, which
+        // the occupancy mask answers directly.
+        if (self.osm?.covered(x, z)) return self.osm.isCarriageway(x, z) ? 0 : KERB_H;
         return self.onPavement(x, z) ? KERB_H : 0;
       },
       isBlocked(x, z) {
@@ -147,10 +173,12 @@ export class CitySystem implements System, CityService {
     this.buildGroundPlane();
 
     const t0 = performance.now();
+    this.importBucharest();
     this.generateStreets();
     this.generateBlocks();
     this.generateLandmarks();
     this.bake();
+    this.binNodes();
     const ms = performance.now() - t0;
 
     console.info(
@@ -159,6 +187,15 @@ export class CitySystem implements System, CityService {
       `${(this.stats.surfaceTris / 1000).toFixed(0)}k surface + ` +
       `${(this.stats.detailTris / 1000).toFixed(0)}k detail tris in ${ms.toFixed(0)} ms`,
     );
+    if (this.osm) {
+      const s = this.osm.stats;
+      console.info(
+        `[city/osm] Bucharest at ${(OSM_FIT.scale * 100).toFixed(0)}%: ` +
+        `${s.roadKm.toFixed(1)} km of real street, ${s.nodes} nodes, ${s.edges} edges, ` +
+        `${s.footprints} real footprints, ${this.osmInfill} infilled, ` +
+        `${s.parks} parks, ${this.osm.squares.length} squares`,
+      );
+    }
 
     (window as unknown as { __GTA_CITY__: unknown }).__GTA_CITY__ = {
       stats: () => ({ ...this.stats, chunks: this.chunks.length, lanes: this.lanes.length }),
@@ -171,6 +208,35 @@ export class CitySystem implements System, CityService {
           o.visible = which === 'all' || o.name.endsWith(which);
         });
       },
+      /**
+       * The imported survey, for verification: `sample(x, z)` says what the
+       * generator believes is at a point, and `coverage()` reports how much of
+       * the map the real layout took over.
+       */
+      osm: () => (this.osm ? {
+        fit: OSM_FIT,
+        stats: { ...this.osm.stats, infill: this.osmInfill, groundRects: this.groundRects },
+        squares: this.osm.squares.map((s) => ({ name: s.name, x: Math.round(s.x), z: Math.round(s.z) })),
+        sample: (x: number, z: number) => ({
+          covered: this.osm!.covered(x, z),
+          road: this.osm!.isCarriageway(x, z),
+          mask: this.osm!.mask.at(x, z),
+          district: this.district(x, z),
+          plan: planDistrictAt(x, z),
+          ground: this.spatial.groundHeight(x, z),
+        }),
+        coverage: () => {
+          let hit = 0;
+          let total = 0;
+          for (let x = -HALF; x < HALF; x += 24) {
+            for (let z = -HALF; z < HALF; z += 24) {
+              total++;
+              if (this.osm!.covered(x, z)) hit++;
+            }
+          }
+          return hit / total;
+        },
+      } : null),
       night: (v: number) => this.setNight(v),
       wet: (v: number) => this.mats.setWetness(v),
       drawDistance: (v: number) => { this.drawDistance = v; },
@@ -231,15 +297,188 @@ export class CitySystem implements System, CityService {
   /* generation                                                        */
   /* ---------------------------------------------------------------- */
 
+  /* ---------------------------------------------------------------- */
+  /* the real city                                                     */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Import curated OpenStreetMap Bucharest and splice it into the graph.
+   *
+   * The survey supplies the layout; the grid keeps the two authored axes and
+   * everything outside the imported extent. The two graphs are then STITCHED:
+   * without it a car that drove off the end of the monumental axis would find
+   * itself on an island, because the real network and the grid never shared a
+   * node even where they cross.
+   *
+   * See `city/osm.ts` for the scale decision and what it cost.
+   */
+  private importBucharest(): void {
+    // `?osm=0` builds the pre-import generated city, for A/B comparison.
+    if (new URLSearchParams(location.search).get('osm') === '0') {
+      console.info('[city/osm] disabled by ?osm=0 — generated grid only');
+      return;
+    }
+    const reserved = [
+      ...LANDMARK_VOIDS.map((v) => ({ x0: v.x0, z0: v.z0, x1: v.x1, z1: v.z1 })),
+      // Exactly the deck `buildPlaza` lays, plus a kerb. Any more and the
+      // imported street wall stands off the plaza with a moat of nothing
+      // between, which is how a square stops reading as a square.
+      ...PLAZAS.map((p) => ({
+        x0: p.x - p.radius - 1.5, z0: p.z - p.radius - 1.5,
+        x1: p.x + p.radius + 1.5, z1: p.z + p.radius + 1.5,
+      })),
+    ];
+
+    let osm: OsmCity;
+    try {
+      osm = buildOsmCity({ reserved, rng: this.rng.fork('osm') });
+    } catch (err) {
+      console.error('[city/osm] import failed, falling back to the grid', err);
+      return;
+    }
+    this.osm = osm;
+
+    const base = this.roadNodes.length;
+    for (const n of osm.nodes) {
+      this.roadNodes.push({
+        id: this.roadNodes.length,
+        position: new THREE.Vector3(n.x, 0, n.z),
+        links: [],
+        lanes: n.rank === 2 ? 3 : n.rank === 1 ? 2 : 1,
+        isIntersection: n.edges.length > 2,
+        hasTrafficLight: n.rank === 2 && n.edges.length > 2,
+      });
+    }
+
+    const laneW = 3.6;
+    for (const e of osm.edges) {
+      const a = base + e.a;
+      const b = base + e.b;
+      const na = this.roadNodes[a];
+      const nb = this.roadNodes[b];
+      na.links.push(b);
+      nb.links.push(a);
+      this.segments.push([a, b]);
+      if (e.width <= 0) continue;      // pedestrianised: walkable, not drivable
+
+      const dx = nb.position.x - na.position.x;
+      const dz = nb.position.z - na.position.z;
+      const len = Math.hypot(dx, dz) || 1;
+      const px = -dz / len;
+      const pz = dx / len;
+      const lanes = Math.max(1, Math.min(3, e.lanes));
+      for (let l = 0; l < lanes; l++) {
+        const off = (l + 0.5) * laneW;
+        this.lanes.push({
+          fromNode: a, toNode: b, lane: l,
+          ax: na.position.x - px * off, az: na.position.z - pz * off,
+          bx: nb.position.x - px * off, bz: nb.position.z - pz * off,
+          width: laneW,
+        });
+        if (!e.oneway) {
+          this.lanes.push({
+            fromNode: b, toNode: a, lane: l,
+            ax: nb.position.x + px * off, az: nb.position.z + pz * off,
+            bx: na.position.x + px * off, bz: na.position.z + pz * off,
+            width: laneW,
+          });
+        }
+      }
+    }
+
+    this.stitchToAxes(base, osm);
+
+    for (const p of osm.places) {
+      const id = `osm:${p.name}`;
+      if (this.landmarks.has(id)) continue;
+      this.landmarks.set(id, {
+        id, name: p.name,
+        position: new THREE.Vector3(p.x, 0, p.z),
+        radius: p.radius,
+      });
+    }
+    for (const s of osm.squares) {
+      const id = `osm:${s.name}`;
+      if (this.landmarks.has(id)) continue;
+      this.landmarks.set(id, {
+        id, name: s.name,
+        position: new THREE.Vector3(s.x, 0, s.z),
+        radius: s.radius,
+      });
+    }
+  }
+
+  /**
+   * Join the imported network to the two grid axes wherever they pass close.
+   * Both graphs are drivable and they physically cross; without an explicit
+   * link A* treats them as separate road systems.
+   */
+  private stitchToAxes(base: number, osm: OsmCity): void {
+    const gridNode = (x: number, z: number): number => {
+      const i = Math.round((x + HALF) / blockSize);
+      const j = Math.round((z + HALF) / blockSize);
+      return this.nodeGrid.get(`${i},${j}`) ?? -1;
+    };
+    const join = (g: number, me: number, maxDist: number): void => {
+      if (g < 0) return;
+      if (this.roadNodes[g].links.includes(me)) return;
+      if (this.roadNodes[g].position.distanceToSquared(this.roadNodes[me].position) > maxDist * maxDist) {
+        return;
+      }
+      this.roadNodes[g].links.push(me);
+      this.roadNodes[me].links.push(g);
+      this.segments.push([g, me]);
+    };
+
+    for (let k = 0; k < osm.nodes.length; k++) {
+      const n = osm.nodes[k];
+      const me = base + k;
+      const nearX = Math.abs(n.x - AXIS_X) < 34;
+      const nearZ = Math.abs(n.z - AXIS_Z) < 34;
+      if (nearX || nearZ) {
+        join(gridNode(nearX ? AXIS_X : n.x, nearZ ? AXIS_Z : n.z), me, 70);
+        continue;
+      }
+      /*
+       * THE SEAM. Where the survey runs out, the generated grid takes over —
+       * on this map that is the eastern strip and the far south-west, because
+       * the OSM extent is not square. The two networks physically abut but
+       * shared no node, so a car could drive to the boundary and find the rest
+       * of the city unreachable: A* returned nothing and the traffic system
+       * quietly gave up on half the map. Any real node that sits just OUTSIDE
+       * the covered area gets welded to the grid crossing it is standing on.
+       */
+      if (!osm.covered(n.x, n.z)) continue;
+      const gx = Math.round((n.x + HALF) / blockSize) * blockSize - HALF;
+      const gz = Math.round((n.z + HALF) / blockSize) * blockSize - HALF;
+      if (osm.covered(gx, gz)) continue;      // that crossing was replaced
+      join(gridNode(gx, gz), me, 64);
+    }
+  }
+
+  /** Uniform bins over every node, so `nearestNode` stays O(1). */
+  private binNodes(): void {
+    this.nodeBins.clear();
+    const c = CitySystem.NODE_BIN;
+    for (const n of this.roadNodes) {
+      if (!n.links.length) continue;
+      const key = Math.floor(n.position.x / c) * 100003 + Math.floor(n.position.z / c);
+      let list = this.nodeBins.get(key);
+      if (!list) this.nodeBins.set(key, (list = []));
+      list.push(n.id);
+    }
+  }
+
   private generateStreets(): void {
     const phys = this.findPhysics();
     const rng = this.rng.fork('streets');
 
     buildRoads({
+      covered: (x, z) => this.osm !== null && this.osm.covered(x, z),
       sink: this.sink,
       rng,
       isVoid: (x, z) => isLandmarkVoid(x, z),
-      districtAt: (x, z) => planDistrictAt(x, z),
+      districtAt: (x, z) => this.district(x, z),
       addKerbCollider: (cx, cz, hx, hz, top) => {
         phys?.addStaticBox(
           new THREE.Vector3(hx, top / 2 + 0.1, hz),
@@ -261,11 +500,71 @@ export class CitySystem implements System, CityService {
         }
       },
     });
+
+    if (this.osm) {
+      const osm = this.osm;
+      buildOsmStreets({
+        sink: this.sink,
+        rng: rng.fork('osm-streets'),
+        city: osm,
+        districtAt: (x, z) => this.district(x, z),
+        addWalkCollider: (cx, cz, hx, hz, rot, top) => {
+          phys?.addStaticBox(
+            new THREE.Vector3(hx, top / 2 + 0.1, hz),
+            new THREE.Vector3(cx, top / 2 - 0.1, cz),
+            rot ? new THREE.Quaternion().setFromAxisAngle(UP, -rot) : undefined,
+            GROUP.terrain,
+          );
+        },
+      });
+      dressAuthoredAxes(
+        this.sink, rng.fork('axes'),
+        (x, z) => osm.covered(x, z),
+        (x, z) => isLandmarkVoid(x, z),
+        (cx, cz, hx, hz, _rot, top) => {
+          phys?.addStaticBox(
+            new THREE.Vector3(hx, top / 2 + 0.1, hz),
+            new THREE.Vector3(cx, top / 2 - 0.1, cz),
+            undefined, GROUP.terrain,
+          );
+        },
+      );
+      const fill = fillOsmGround(
+        this.sink, osm, (x, z) => this.district(x, z), rng.fork('ground'),
+        (cx, cz, hx, hz, top) => {
+          phys?.addStaticBox(
+            new THREE.Vector3(hx, top / 2 + 0.1, hz),
+            new THREE.Vector3(cx, top / 2 - 0.1, cz),
+            undefined, GROUP.terrain,
+          );
+        },
+      );
+      this.groundRects = fill.rects;
+    }
   }
 
   private generateBlocks(): void {
     const phys = this.findPhysics();
     const rng = this.rng.fork('blocks');
+
+    // The real city first: its footprints claim their ground in the occupancy
+    // mask, and the infill then fills what the curation sampled away.
+    if (this.osm) {
+      const before = this.buildings.length;
+      const osmOpts = {
+        city: this.osm,
+        rng: rng.fork('osm-buildings'),
+        facade: (x: number, z: number) => this.chunkFor(x, z).facade,
+        detail: (x: number, z: number) => this.chunkFor(x, z).detail,
+        districtAt: (x: number, z: number) => this.district(x, z),
+        out: this.buildings,
+      };
+      buildOsmFootprints(osmOpts);
+      const real = this.buildings.length - before;
+      buildOsmInfill(osmOpts);
+      this.osmInfill = this.buildings.length - before - real;
+      this.addColliders(phys, before);
+    }
 
     for (let i = 0; i < gridBlocks; i++) {
       for (let j = 0; j < gridBlocks; j++) {
@@ -273,8 +572,9 @@ export class CitySystem implements System, CityService {
         const cx = (b.bx0 + b.bx1) / 2;
         const cz = (b.bz0 + b.bz1) / 2;
         if (isLandmarkVoid(cx, cz)) continue;
+        if (this.osm?.covered(cx, cz)) continue;
 
-        const district = planDistrictAt(cx, cz);
+        const district = this.district(cx, cz);
         const before = this.buildings.length;
         buildBlock({
           block: { bx0: b.bx0, bz0: b.bz0, bx1: b.bx1, bz1: b.bz1 },
@@ -286,13 +586,7 @@ export class CitySystem implements System, CityService {
           out: this.buildings,
         });
 
-        for (let k = before; k < this.buildings.length; k++) {
-          const bd = this.buildings[k];
-          phys?.addStaticBox(
-            new THREE.Vector3(bd.hx, bd.height / 2, bd.hz),
-            new THREE.Vector3(bd.x, bd.height / 2, bd.z),
-          );
-        }
+        this.addColliders(phys, before);
 
         // Visible interiors for the corporate frontage around the hero
         // crossroads — the reference frame is shot from ten metres away.
@@ -310,6 +604,26 @@ export class CitySystem implements System, CityService {
     }
     this.stats.buildings = this.buildings.length;
     this.hashBuildings();
+  }
+
+  /**
+   * Static colliders for buildings placed since `from`.
+   *
+   * The half-extents are the ones the grammar reports, and a real Bucharest
+   * plot sits at whatever angle its street does — so the box has to carry the
+   * rotation too, or every skewed block gets a collider a third bigger than
+   * itself sticking out into the carriageway.
+   */
+  private addColliders(phys: PhysicsWorld | null, from: number): void {
+    if (!phys) return;
+    for (let k = from; k < this.buildings.length; k++) {
+      const bd = this.buildings[k];
+      phys.addStaticBox(
+        new THREE.Vector3(bd.hx, bd.height / 2, bd.hz),
+        new THREE.Vector3(bd.x, bd.height / 2, bd.z),
+        bd.rot ? new THREE.Quaternion().setFromAxisAngle(UP, -bd.rot) : undefined,
+      );
+    }
   }
 
   private generateLandmarks(): void {
@@ -511,10 +825,15 @@ export class CitySystem implements System, CityService {
     const cell = CitySystem.HASH_CELL;
     for (let k = 0; k < this.buildings.length; k++) {
       const b = this.buildings[k];
-      const i0 = Math.floor((b.x - b.hx) / cell);
-      const i1 = Math.floor((b.x + b.hx) / cell);
-      const j0 = Math.floor((b.z - b.hz) / cell);
-      const j1 = Math.floor((b.z + b.hz) / cell);
+      // Rotated plots hash by their circumscribed radius; the exact oriented
+      // test then rejects the corners.
+      const r = b.rot ? Math.hypot(b.hx, b.hz) : 0;
+      const rx = r || b.hx;
+      const rz = r || b.hz;
+      const i0 = Math.floor((b.x - rx) / cell);
+      const i1 = Math.floor((b.x + rx) / cell);
+      const j0 = Math.floor((b.z - rz) / cell);
+      const j1 = Math.floor((b.z + rz) / cell);
       for (let i = i0; i <= i1; i++) {
         for (let j = j0; j <= j1; j++) {
           const key = i * 100003 + j;
@@ -533,7 +852,13 @@ export class CitySystem implements System, CityService {
     if (!list) return false;
     for (const k of list) {
       const b = this.buildings[k];
-      if (Math.abs(x - b.x) < b.hx && Math.abs(z - b.z) < b.hz) return true;
+      const ox = x - b.x;
+      const oz = z - b.z;
+      if (b.rot) {
+        const c = Math.cos(b.rot);
+        const s = Math.sin(b.rot);
+        if (Math.abs(ox * c - oz * s) < b.hx && Math.abs(ox * s + oz * c) < b.hz) return true;
+      } else if (Math.abs(ox) < b.hx && Math.abs(oz) < b.hz) return true;
     }
     return false;
   }
@@ -600,7 +925,35 @@ export class CitySystem implements System, CityService {
   /* ---------------------------------------------------------------- */
 
   districtAt(x: number, z: number): DistrictKind {
-    return planDistrictAt(x, z);
+    return this.district(x, z);
+  }
+
+  /**
+   * The authored zoning plan, RECONCILED WITH THE SURVEY.
+   *
+   * `planDistrictAt` was written for a city that was entirely invented: past
+   * the authored rectangles it falls back to noise, dropping "park" pockets
+   * wherever a fractal says so and calling the rest cartier. Over imported
+   * ground that is simply false, and it showed: Piața Victoriei — the north
+   * gate of Bucharest, ringed by the Government and the Antipa museum — came
+   * out as a grass field with four panel blocks on it, because the noise had
+   * decided that corner of the map was parkland.
+   *
+   * So inside the imported extent the survey gets the casting vote on the two
+   * things it actually knows: where the green is, and where the boulevards
+   * are. The authored districts — the government quarter, the corporate
+   * pocket, Lipscani, the industrial belt — are untouched, because those are
+   * the game's own art direction and the story is staged in them.
+   */
+  private district(x: number, z: number): DistrictKind {
+    const base = planDistrictAt(x, z);
+    const osm = this.osm;
+    if (!osm || !osm.covered(x, z)) return base;
+    if (osm.mask.has(x, z, Cell.green)) return 'parc';
+    const onBoulevard = osm.mask.has(x, z, Cell.major);
+    if (base === 'parc') return onBoulevard ? 'bulevard' : 'cartier';
+    if (base === 'cartier' && onBoulevard) return 'bulevard';
+    return base;
   }
 
   randomRoadPoint(out: THREE.Vector3): void {
@@ -612,12 +965,40 @@ export class CitySystem implements System, CityService {
     out.lerpVectors(this.roadNodes[a].position, this.roadNodes[b].position, this.rng.next());
   }
 
+  /**
+   * Nearest CONNECTED road node.
+   *
+   * This used to be an index into the grid, which is exact and free — and
+   * wrong the moment the real street layout arrived, because the nearest road
+   * to a point in the middle of Bucharest is now almost never a grid crossing,
+   * and half the grid crossings inside the imported extent no longer have a
+   * single live link. Link-less nodes are skipped: returning one strands
+   * whatever was spawned there on an island with no route out.
+   */
   nearestNode(p: THREE.Vector3): number {
-    const i = Math.round((p.x + HALF) / blockSize);
-    const j = Math.round((p.z + HALF) / blockSize);
-    const ci = Math.max(0, Math.min(gridBlocks, i));
-    const cj = Math.max(0, Math.min(gridBlocks, j));
-    return this.nodeGrid.get(`${ci},${cj}`) ?? -1;
+    const c = CitySystem.NODE_BIN;
+    const bi = Math.floor(p.x / c);
+    const bj = Math.floor(p.z / c);
+    let best = -1;
+    let bestD = Infinity;
+    for (let ring = 0; ring <= 8; ring++) {
+      for (let di = -ring; di <= ring; di++) {
+        for (let dj = -ring; dj <= ring; dj++) {
+          // Only the newly added shell of the expanding square.
+          if (ring > 0 && Math.abs(di) !== ring && Math.abs(dj) !== ring) continue;
+          const list = this.nodeBins.get((bi + di) * 100003 + (bj + dj));
+          if (!list) continue;
+          for (const id of list) {
+            const d = this.roadNodes[id].position.distanceToSquared(p);
+            if (d < bestD) { bestD = d; best = id; }
+          }
+        }
+      }
+      // One more ring after the first hit, so a node just over the bin edge
+      // still wins.
+      if (best >= 0 && bestD < (ring * c) ** 2) break;
+    }
+    return best;
   }
 
   findPath(fromNode: number, toNode: number): number[] {
@@ -675,6 +1056,7 @@ export class CitySystem implements System, CityService {
 /* helpers                                                             */
 /* ------------------------------------------------------------------ */
 
+const UP = new THREE.Vector3(0, 1, 0);
 const PURPLE = srgb(0x7b3fd4);
 const MAGENTA = srgb(0xc04ad0);
 

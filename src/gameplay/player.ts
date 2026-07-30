@@ -303,6 +303,14 @@ export class PlayerSystem implements System, PlayerService {
   private _lei = 3400;
   private spawnPoint = new THREE.Vector3(0, 2, 0);
   private enterCooldown = 0;
+  /**
+   * Vehicle the player was driving when it wrecked, so the consequence fires
+   * exactly once rather than every frame the wreck keeps reporting itself.
+   */
+  private wreckedId: string | null = null;
+  /** Running totals, for the harness and for the pause-menu statistics. */
+  private _earned = 0;
+  private _spent = 0;
 
   private actor: CharacterActor | null = null;
   private planarSpeed = 0;
@@ -446,6 +454,16 @@ export class PlayerSystem implements System, PlayerService {
         aiming: this._aiming,
       }),
       boarding: () => (this.board ? { mode: this.board.mode, t: this.board.t, dur: this.board.dur } : null),
+      /** The economy, which now has an outflow. */
+      economy: () => ({
+        lei: this._lei,
+        earned: Math.round(this._earned),
+        spent: Math.round(this._spent),
+        health: this.character.health,
+      }),
+      spend: (n: number) => this.spend(n, 'debug'),
+      hurt: (n: number) => this.applyDamage(n),
+      heal: (n: number) => this.heal(n, 'debug'),
     };
   }
 
@@ -741,6 +759,11 @@ export class PlayerSystem implements System, PlayerService {
 
   private driveUpdate(dt: number, ctx: GameContext): void {
     const v = this._vehicle!;
+    // A wreck ends the drive: it throws him out, hurts and costs money.
+    if (v.isWrecked) {
+      this.checkWreck(v);
+      return;
+    }
     const input = ctx.input;
     // Nobody pulls away while a leg is still outside the car.
     const boarding = this.board !== null;
@@ -996,9 +1019,112 @@ export class PlayerSystem implements System, PlayerService {
 
   addLei(delta: number, reason: string): void {
     this._lei = Math.max(0, this._lei + delta);
+    if (delta > 0) this._earned += delta;
+    else this._spent += -delta;
     this.ctx.events.emit('economy:changed', { lei: this._lei, delta, reason });
   }
+
+  /* ------------------------------------------------------------------ *
+   * MONEY THAT LEAVES.
+   *
+   * `addLei` was the whole economy and it was never called with a negative
+   * number anywhere in the game, so lei were a score, not a currency. These
+   * two are the other half of it, and they are deliberately different:
+   *
+   *   `spend`      an all-or-nothing purchase. Refuses when you are short, so
+   *                a shop can price something out of your reach and mean it.
+   *   `chargeUpTo` a bill you do not get to decline — a fine, a tow, the
+   *                Ministry's "administrative fee". Takes what is there and
+   *                reports what it actually got, which is what lets the
+   *                detention loop hold you longer when you cannot pay.
+   * ------------------------------------------------------------------ */
+
+  /** True when the purchase went through. Nothing is deducted when it fails. */
+  spend(amount: number, reason: string): boolean {
+    const cost = Math.max(0, Math.round(amount));
+    if (cost > this._lei) return false;
+    if (cost > 0) this.addLei(-cost, reason);
+    return true;
+  }
+
+  /** Take up to `amount`. Returns what was actually taken. */
+  chargeUpTo(amount: number, reason: string): number {
+    const take = Math.min(this._lei, Math.max(0, Math.round(amount)));
+    if (take > 0) this.addLei(-take, reason);
+    return take;
+  }
+
+  get earned(): number {
+    return this._earned;
+  }
+  get spent(): number {
+    return this._spent;
+  }
+
+  /** Street food, a night in detention, a medic. Never past max health. */
+  heal(amount: number, reason = 'refacere'): number {
+    const before = this.character.health;
+    this.character.health = Math.min(
+      this.character.maxHealth,
+      this.character.health + Math.max(0, amount),
+    );
+    const gained = this.character.health - before;
+    if (gained > 0) {
+      this.ctx.events.emit('player:damaged', { amount: -gained, health: this.character.health });
+      void reason;
+    }
+    return gained;
+  }
+
+  /**
+   * Put the player down somewhere on his feet and in one piece. The detention
+   * loop's release step, kept here because it is the only place that knows how
+   * to unwind a death-in-progress, a ragdoll and a half-finished boarding
+   * sequence all at once.
+   */
+  release(p: THREE.Vector3, headingRad = 0, health = this.character.maxHealth): void {
+    if (this._vehicle) this.exitVehicle();
+    this.deathTimer = 0;
+    this.character.health = THREE.MathUtils.clamp(health, 1, this.character.maxHealth);
+    this.actor?.revive();
+    this.character.state = 'idle';
+    this.teleport(p, headingRad);
+    this.character.playState('idle');
+  }
+
+  /**
+   * THE CAR YOU JUST DESTROYED WAS YOURS.
+   *
+   * Wrecking a vehicle used to be free: the body stopped working and the
+   * player walked away with the same money he had a second earlier. Now the
+   * wreck throws him out, hurts, and bills him for the recovery — which is
+   * also what gives the garage in `activities.ts` something to repair before
+   * it gets to this point.
+   */
+  private checkWreck(v: VehicleHandle): void {
+    if (!v.isWrecked || this.wreckedId === v.id) return;
+    this.wreckedId = v.id;
+
+    const fee = WRECK_TOW_FEE;
+    this.exitVehicle();
+    this.applyDamage(WRECK_DAMAGE, 'civilian', v.position.clone());
+    this.ctx.tryGet(Services.Camera)?.shake(0.55, 0.6);
+    const paid = this.chargeUpTo(fee, `daune:${v.kind}`);
+    this.ctx.tryGet(Services.Hud)?.toast(
+      paid >= fee
+        ? `Mașina e praf · tractare și daune −${paid} lei`
+        : `Mașina e praf · ai plătit ${paid} din ${fee} lei. Restul ți-l reține Ministerul.`,
+      'bad',
+      4200,
+    );
+    this.ctx.events.emit('audio:oneShot', { id: 'crash', volume: 0.8 });
+  }
 }
+
+/** Recovery, towing and "taxa de mediu" on a vehicle you destroyed. */
+const WRECK_TOW_FEE = 640;
+/** What being inside it when it went costs you. */
+const WRECK_DAMAGE = 24;
 
 const UP = new THREE.Vector3(0, 1, 0);
 

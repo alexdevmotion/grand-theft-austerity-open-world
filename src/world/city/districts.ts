@@ -27,8 +27,17 @@ export const AXIS_Z = -HALF + 13 * blockSize; // 0
 export const PARLIAMENT = { x: AXIS_X, z: -960, w: 276, d: 176 };
 /** Builders House holds the SE corner of the main crossroads. */
 export const BUILDERS = { x: -46, z: 46 };
-/** Cișmigiu-like park. */
-export const PARK = { x0: -640, z0: 190, x1: -280, z1: 500 };
+/**
+ * Cișmigiu.
+ *
+ * These bounds are no longer invented: they are the real park's outline off
+ * the survey, projected through `OSM_FIT` (`Parcul Cișmigiu` spans
+ * x -811..-518, z -277..55 in world metres). The zoning plan and the drawn
+ * green space have to agree — while the authored rectangle sat 400 m away from
+ * the real one, the generator was refusing to build on a "park" that was
+ * ordinary city and covering the real park in courtyard gravel.
+ */
+export const PARK = { x0: -815, z0: -285, x1: -514, z1: 62 };
 
 interface Rect {
   x0: number;
@@ -53,8 +62,16 @@ const PLAN: Rect[] = [
    * around Builders House so the story landmark still has its quarter.
    */
   { x0: -175, z0: -70, x1: 70, z1: 165, kind: 'glassCorporate' },
-  // Old town, immediately east of the corporate spine.
-  { x0: 190, z0: -140, x1: 600, z1: 330, kind: 'centruVechi' },
+  /*
+   * LIPSCANI. Moved onto the real old town, which the survey puts at
+   * x -535..58, z 155..426 — south-west of the crossroads, between Calea
+   * Victoriei and Bulevardul Brătianu, exactly where it is in life. The
+   * authored rectangle used to sit east of the corporate spine, which after
+   * the import meant the stucco-and-cobbles grammar was being applied to
+   * 1960s blocks off Calea Moșilor while the actual medieval core came out as
+   * boulevard infill.
+   */
+  { x0: -545, z0: 145, x1: 70, z1: 435, kind: 'centruVechi' },
   // Grand boulevards fill the inner ring.
   { x0: -760, z0: -640, x1: 700, z1: 560, kind: 'bulevard' },
   // Industrial belt: the south-east corner and the east edge.

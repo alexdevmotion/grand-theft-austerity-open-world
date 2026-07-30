@@ -1,102 +1,46 @@
 /**
- * CONTINUE — the last-session record behind the front-end's second menu row.
+ * CONTINUE — the front-end's view of the save slot.
  *
- * WHY IT LIVES HERE AND WHAT IT HONESTLY IS
- * -----------------------------------------
- * There is no save system in the service seam: `MissionService` exposes
- * `start(id)` and a readonly `completed` set, `ProgressionService` exposes
- * `addXp`, `PlayerService` exposes `addLei`. None of them can be *restored*.
- * So CONTINUE does the most it can do without inventing state it cannot put
- * back: it remembers which act you were on (plus the acts you had finished, and
- * the level/lei you had reached, purely to describe the slot on screen), and on
- * resume it re-enters the world and restarts that act.
+ * WHAT CHANGED
+ * ------------
+ * This file used to *be* the save system, and it was honest about how little
+ * that amounted to: it remembered which act you were on, and CONTINUE restarted
+ * that act. Level, XP, unlocks, money, position and time of day all evaporated
+ * on reload, because the service seam had no way to put them back.
  *
- * The record is written by the menu system while you play — it polls the same
- * read-only service getters the HUD uses — so it never needs a hook that does
- * not exist. See the report accompanying this work: a real
- * `MissionService.restore(state)` is the missing piece.
+ * The seam has them now (`MissionService.restore`, `ProgressionService.restore`)
+ * and the real save lives in `src/core/save.ts`, registered as a system and
+ * published as `Services.Save`. This file is what it always should have been:
+ * the *presentation* of that record — is there something to continue, and what
+ * does the yellow sub-label under CONTINUE say.
+ *
+ * The record shape, the storage slot and the parsing are re-exported from the
+ * core module under their old names so the front-end keeps compiling against
+ * one vocabulary; there is exactly one implementation behind them.
  */
 
-const STORAGE_KEY = 'gta.session.v1';
+import {
+  clearSave,
+  emptySave,
+  isResumable as isResumableSave,
+  loadSave,
+  parseSave,
+  writeSave,
+} from '../../core/save';
+import type { SaveRecord } from '../../core/services';
 
-export interface SessionRecord {
-  /** Campaign act id, or null when the player only free-roamed. */
-  actId: string | null;
-  /** Human act title as the mission system reported it. */
-  actTitle: string;
-  /** Act ids already finished, most recent last. */
-  completed: string[];
-  level: number;
-  lei: number;
-  /** Wall-clock ms when the record was written. */
-  savedAt: number;
-  /** Seconds of play in the session that wrote this record. */
-  playSeconds: number;
-}
+/** The front-end's name for the save record. Same object, same slot. */
+export type SessionRecord = SaveRecord;
 
-export function emptySession(): SessionRecord {
-  return {
-    actId: null,
-    actTitle: '',
-    completed: [],
-    level: 1,
-    lei: 0,
-    savedAt: 0,
-    playSeconds: 0,
-  };
-}
-
-/** Parse defensively: a corrupt or half-written slot must never break boot. */
-export function parseSession(raw: string | null): SessionRecord | null {
-  if (!raw) return null;
-  let v: unknown;
-  try {
-    v = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (typeof v !== 'object' || v === null) return null;
-  const o = v as Partial<SessionRecord>;
-  if (typeof o.savedAt !== 'number' || !(o.savedAt > 0)) return null;
-  return {
-    actId: typeof o.actId === 'string' ? o.actId : null,
-    actTitle: typeof o.actTitle === 'string' ? o.actTitle : '',
-    completed: Array.isArray(o.completed) ? o.completed.filter((x): x is string => typeof x === 'string') : [],
-    level: numOr(o.level, 1),
-    lei: numOr(o.lei, 0),
-    savedAt: o.savedAt,
-    playSeconds: numOr(o.playSeconds, 0),
-  };
-}
-
-export function loadSession(): SessionRecord | null {
-  try {
-    return parseSession(localStorage.getItem(STORAGE_KEY));
-  } catch {
-    return null;
-  }
-}
-
-export function saveSession(r: SessionRecord): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(r));
-  } catch {
-    /* private mode — the slot just does not survive the session */
-  }
-}
-
-export function clearSession(): void {
-  try {
-    localStorage.removeItem(STORAGE_KEY);
-  } catch {
-    /* ignore */
-  }
-}
+export const emptySession = emptySave;
+export const parseSession = parseSave;
+export const loadSession = loadSave;
+export const saveSession = writeSave;
+export const clearSession = clearSave;
 
 /** `true` when the record describes something worth resuming. */
 export function isResumable(r: SessionRecord | null): r is SessionRecord {
-  if (!r) return false;
-  return !!r.actId || r.completed.length > 0 || r.playSeconds > 45 || r.level > 1;
+  return isResumableSave(r);
 }
 
 /** "ACTUL II · NIVEL 3 · 12 MIN" — the yellow sub-label for the CONTINUE row. */
@@ -137,8 +81,4 @@ function agoLabel(ms: number): string {
   const h = min / 60;
   if (h < 24) return `${Math.round(h)} H ÎN URMĂ`;
   return `${Math.round(h / 24)} ZILE ÎN URMĂ`;
-}
-
-function numOr(v: unknown, d: number): number {
-  return typeof v === 'number' && Number.isFinite(v) ? v : d;
 }

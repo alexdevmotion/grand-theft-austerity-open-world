@@ -7,6 +7,7 @@ export interface GameEvents {
   'mission:advance': { id: string };
   'mission:complete': { id: string };
   'mission:failed': { id: string; reason: string };
+  'mission:restored': { completed: string[]; currentId: string | null };
   'objective:changed': { title: string; subtitle?: string; target?: Vector3 };
 
   /** Political Instability — the wanted system. */
@@ -33,6 +34,10 @@ export interface GameEvents {
   'progression:xp': { amount: number; total: number; reason: string };
   'progression:levelUp': { level: number; unlock: string };
   'economy:changed': { lei: number; delta: number; reason: string };
+
+  /** Saves. */
+  'save:written': { reason: string; savedAt: number };
+  'save:restored': { savedAt: number };
 
   /** Presentation. */
   'ui:toast': { text: string; kind?: 'info' | 'good' | 'bad'; ms?: number };

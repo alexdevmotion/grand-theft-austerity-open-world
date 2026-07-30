@@ -17,6 +17,7 @@ import type { DetailBuilder, FacadeBuilder } from './builders';
 import { DISTRICTS } from './districts';
 import { FacadeStyle } from './materials';
 import { buildBuilding, type BuildingSite } from './facades';
+import { Cell, type OsmCity } from './osm';
 
 export interface BlockRect {
   /** Building line — the pavement's inner edge. */
@@ -32,6 +33,8 @@ export interface PlacedBuilding {
   hx: number;
   hz: number;
   height: number;
+  /** Rotation about Y. Real Bucharest plots sit at every angle. */
+  rot?: number;
 }
 
 export interface BlockBuildOptions {
@@ -192,7 +195,16 @@ function emit(
 ): void {
   const spec = DISTRICTS[opt.district];
   const heroDist = Math.hypot(cx - (opt.heroX ?? HERO_X), cz - (opt.heroZ ?? HERO_Z));
-  const site: BuildingSite = { cx, cz, w, d, rot: 0, fx, fz, heroDist };
+  // `w` is always the frontage and `d` always the depth — see BuildingSite.
+  // The grid used to swap them for east/west-facing plots and leave rot at 0,
+  // which is what put every detail pass on the wrong axis.
+  const site: BuildingSite = {
+    cx, cz,
+    w: Math.abs(fx) > 0.5 ? d : w,
+    d: Math.abs(fx) > 0.5 ? w : d,
+    rot: Math.atan2(-fx, -fz),
+    fx, fz, heroDist,
+  };
 
   /*
    * STYLE MIXING — the eras jammed against each other.
@@ -204,18 +216,31 @@ function emit(
    * in one style reads as a masterplan, and Bucharest has never had one that
    * survived contact with the next regime.
    */
+  const forceStyle = pickStyle(opt.district, opt.rng);
+
+  const built = buildBuilding(
+    site, spec, opt.rng,
+    opt.facade(cx, cz), opt.detail(cx, cz),
+    { forceStyle },
+  );
+  opt.out.push({
+    x: built.cx, z: built.cz, hx: built.hx, hz: built.hz, height: built.height, rot: site.rot,
+  });
+}
+
+function pickStyle(district: DistrictKind, rng: Rng): number | undefined {
   let forceStyle: number | undefined;
-  if (opt.district === 'glassCorporate') {
+  if (district === 'glassCorporate') {
     // The reference frame is precisely a dark glass tower standing against
     // warm travertine — a quarter that is 100% curtain wall has no such
     // contrast anywhere in it.
-    const r = opt.rng.next();
+    const r = rng.next();
     if (r < 0.22) forceStyle = FacadeStyle.guvern;          // travertine slab
     else if (r < 0.40) forceStyle = FacadeStyle.interbelic; // older infill
-  } else if (opt.district === 'bulevard') {
+  } else if (district === 'bulevard') {
     // Magheru's actual composition: interbelic dominates, communist infill is
     // common, and the other eras appear as interruptions.
-    forceStyle = opt.rng.weighted(
+    forceStyle = rng.weighted(
       [
         FacadeStyle.interbelic,
         FacadeStyle.bulevard,
@@ -225,16 +250,199 @@ function emit(
       ],
       [10, 5.5, 1.6, 1.0, 0.7],
     );
-  } else if (opt.district === 'centruVechi' && opt.rng.bool(0.16)) {
+  } else if (district === 'centruVechi' && rng.bool(0.16)) {
     forceStyle = FacadeStyle.interbelic;   // an interwar infill on a lost plot
-  } else if (opt.district === 'cartier' && opt.rng.bool(0.10)) {
+  } else if (district === 'cartier' && rng.bool(0.10)) {
     forceStyle = FacadeStyle.interbelic;   // the pre-war fringe the blocs ate
   }
+  return forceStyle;
+}
 
-  const built = buildBuilding(
-    site, spec, opt.rng,
-    opt.facade(cx, cz), opt.detail(cx, cz),
-    { forceStyle },
-  );
-  opt.out.push({ x: cx, z: cz, hx: built.hx, hz: built.hz, height: built.height });
+/* ------------------------------------------------------------------ */
+/* THE REAL STREET WALL                                                */
+/* ------------------------------------------------------------------ */
+
+export interface OsmBuildOptions {
+  city: OsmCity;
+  rng: Rng;
+  facade(x: number, z: number): FacadeBuilder;
+  detail(x: number, z: number): DetailBuilder;
+  districtAt(x: number, z: number): DistrictKind;
+  out: PlacedBuilding[];
+}
+
+/**
+ * Build the CURATED REAL FOOTPRINTS.
+ *
+ * Each one arrives as a world-space outline with a storey count off the
+ * survey. The outline drives the massing and the parapet, the storey count
+ * drives the height, and everything else — the grammar, the era mixing, the
+ * balconies, the signage, the rooftop mess — is still the game's own.
+ */
+export function buildOsmFootprints(opt: OsmBuildOptions): void {
+  for (const fp of opt.city.footprints) {
+    const district = opt.districtAt(fp.cx, fp.cz);
+    const spec = DISTRICTS[district];
+    const heroDist = Math.hypot(fp.cx - HERO_X, fp.cz - HERO_Z);
+
+    // The OBB's long side is the frontage; the facing vector says which of its
+    // two normals looks at the street, so rot must line +x up with that face.
+    const facingIsLocalZ = Math.abs(fp.fx * Math.sin(fp.rot) + fp.fz * Math.cos(fp.rot)) > 0.5;
+    const site: BuildingSite = {
+      cx: fp.cx, cz: fp.cz,
+      w: facingIsLocalZ ? fp.w : fp.d,
+      d: facingIsLocalZ ? fp.d : fp.w,
+      rot: Math.atan2(-fp.fx, -fp.fz),
+      fx: fp.fx, fz: fp.fz,
+      heroDist,
+    };
+
+    const built = buildBuilding(
+      site, spec, opt.rng,
+      opt.facade(fp.cx, fp.cz), opt.detail(fp.cx, fp.cz),
+      {
+        forceStyle: styleForKind(fp.kind, fp.levels, district, opt.rng),
+        footprint: fp.ring,
+        levels: fp.levels,
+      },
+    );
+    opt.out.push({
+      x: built.cx, z: built.cz, hx: built.hx, hz: built.hz, height: built.height, rot: site.rot,
+    });
+  }
+}
+
+/**
+ * What the survey knows about a building that the district plan does not.
+ * A church is not a bulevard block whatever street it stands on.
+ */
+function styleForKind(
+  kind: string, levels: number, district: DistrictKind, rng: Rng,
+): number | undefined {
+  switch (kind) {
+    case 'church': case 'cathedral': case 'chapel':
+      return FacadeStyle.centruVechi;
+    case 'industrial': case 'warehouse': case 'garages': case 'garage':
+      return FacadeStyle.industrial;
+    case 'office': case 'commercial': case 'retail': case 'hotel':
+      return levels >= 9 ? FacadeStyle.glassCorporate
+        : rng.bool(0.4) ? FacadeStyle.guvern : FacadeStyle.interbelic;
+    case 'public': case 'civic': case 'government': case 'university': case 'hospital':
+      return FacadeStyle.guvern;
+    case 'apartments': case 'dormitory':
+      return levels >= 8 ? FacadeStyle.cartier
+        : rng.bool(0.55) ? FacadeStyle.interbelic : FacadeStyle.bulevard;
+    default:
+      return pickStyle(district, rng);
+  }
+}
+
+/**
+ * INFILL ALONG THE REAL FRONTAGES.
+ *
+ * The curation kept 1,100 of Bucharest's 6,855 central footprints — landmarks,
+ * monumental blocks and square frontages in full, the rest sampled. Sampled is
+ * exactly right for a game, but built literally it leaves a city of detached
+ * buildings with holes between them, and Bucharest's centre is a CONTINUOUS
+ * STREET WALL. So every real street is walked and the gaps in its frontage are
+ * filled with generated plots that take their storey count from the real
+ * buildings nearest them — the layout is surveyed, the density is grammar.
+ */
+export function buildOsmInfill(opt: OsmBuildOptions): void {
+  const { city, rng } = opt;
+  const blocking = Cell.road | Cell.built | Cell.green | Cell.reserved | Cell.square;
+
+  for (const e of city.edges) {
+    const a = city.nodes[e.a];
+    const b = city.nodes[e.b];
+    const dx = b.x - a.x;
+    const dz = b.z - a.z;
+    const len = Math.hypot(dx, dz);
+    if (len < 18) continue;
+    // Density taper. Every metre of imported street wants a street wall, but
+    // 128 km of it at full density is ten thousand buildings and four times
+    // the triangle budget. Near the hero crossroads nothing is skipped; out at
+    // the edge of the map only the through-routes keep a continuous frontage.
+    const eHero = Math.hypot((a.x + b.x) / 2 - HERO_X, (a.z + b.z) / 2 - HERO_Z);
+    if (e.rank === 0 && eHero > 700 && rng.bool(Math.min(0.55, (eHero - 700) / 900))) continue;
+    const ux = dx / len;
+    const uz = dz / len;
+    const px = -uz;
+    const pz = ux;
+    // local +x along the street, local +z toward the left-hand kerb.
+    const rotLeft = Math.atan2(-uz, ux);
+
+    for (const side of [-1, 1]) {
+      const district = opt.districtAt(
+        (a.x + b.x) / 2 + px * side * 20, (a.z + b.z) / 2 + pz * side * 20,
+      );
+      const spec = DISTRICTS[district];
+      if (district === 'parc') continue;
+      // Building line: back of the pavement plus a small setback.
+      const line = e.width / 2 + e.walk + 0.6;
+      let t = rng.range(0, 8);
+      let guard = 0;
+      while (t < len - 8 && guard++ < 40) {
+        const front = Math.min(
+          rng.range(spec.frontage[0], spec.frontage[1]) * 0.78,
+          len - t,
+        );
+        if (front < 9) break;
+        // Half the district's usual gap rate. A perimeter street wall is meant
+        // to be continuous; the gaps in the imported half of the city come from
+        // the plots the survey already occupies, not from the grammar.
+        if (rng.bool(spec.gap * 0.5)) { t += front; continue; }
+        // On the left-hand side local +z already points away from the street;
+        // on the right it has to be turned round.
+        const siteRot = side > 0 ? rotLeft : rotLeft + Math.PI;
+        const mid = t + front / 2;
+
+        /*
+         * SHRINK TO FIT, don't give up.
+         *
+         * The compressed map puts parallel streets 25 m apart where the real
+         * ones are 40, so a full-depth plot routinely overlaps the carriageway
+         * behind it. Rejecting the plot outright — which is what the first
+         * version did — left 91% of the frontage empty and the imported half of
+         * the city full of holes. Trying progressively shallower and narrower
+         * plots fills the same frontage with the buildings that DO fit, which
+         * is also how a real block behind a main road actually works.
+         */
+        const wantDepth = rng.range(spec.depth[0], spec.depth[1]) * 0.8;
+        let placed = false;
+        for (const [ds, fs] of [[1, 1], [0.66, 1], [0.42, 1], [0.42, 0.6]] as Array<[number, number]>) {
+          const depth = wantDepth * ds;
+          const wide = front * fs;
+          if (depth < 5.5 || wide < 8) break;
+          const cx = a.x + ux * mid + px * side * (line + depth / 2);
+          const cz = a.z + uz * mid + pz * side * (line + depth / 2);
+          if (city.mask.rectHits(cx, cz, wide, depth, siteRot, blocking)) continue;
+
+          const levels = city.levelsNear(cx, cz);
+          const heroDist = Math.hypot(cx - HERO_X, cz - HERO_Z);
+          const site: BuildingSite = {
+            cx, cz, w: wide, d: depth, rot: siteRot,
+            fx: -Math.sin(siteRot), fz: -Math.cos(siteRot),
+            heroDist,
+          };
+          const built = buildBuilding(
+            site, spec, rng, opt.facade(cx, cz), opt.detail(cx, cz),
+            {
+              forceStyle: pickStyle(district, rng),
+              levels: levels > 0 ? Math.round(levels) : undefined,
+            },
+          );
+          city.mask.stampRect(cx, cz, wide, depth, siteRot, Cell.built);
+          opt.out.push({
+            x: built.cx, z: built.cz, hx: built.hx, hz: built.hz,
+            height: built.height, rot: siteRot,
+          });
+          placed = true;
+          break;
+        }
+        void placed;
+        t += front + rng.range(0, 2.0);
+      }
+    }
+  }
 }

@@ -39,8 +39,19 @@ export interface GameContext {
 export interface System {
   readonly name: string;
   /** Lower runs first. Convention: world 0-99, sim 100-199, gameplay 200-299,
-   *  camera 300, presentation 400+. */
+   *  camera 300, presentation 400+. `order` decides sequence and NOTHING else. */
   readonly order?: number;
+  /**
+   * Keep calling `update()` while `time.paused` is true.
+   *
+   * Menus, the HUD and the audio bus need this; simulation must never have it.
+   * This used to be inferred from `order >= 400`, which made a single number
+   * mean two unrelated things — and forced the pause menu to live at 430 and
+   * the front-end at 430 purely to stay alive, long after they belonged there.
+   * `Engine.add(system, { ticksWhenPaused: true })` can set it from the
+   * assembly point for systems whose own file cannot be edited.
+   */
+  readonly ticksWhenPaused?: boolean;
   init?(ctx: GameContext): void | Promise<void>;
   /** Fixed-rate simulation (physics, AI). May be called 0..N times per frame. */
   fixedUpdate?(dt: number, ctx: GameContext): void;
@@ -81,6 +92,8 @@ export class Engine implements GameContext {
   renderOverride: ((ctx: GameContext) => void) | null = null;
 
   private systems: System[] = [];
+  /** Subset of `systems` whose `update()` survives `time.paused`. */
+  private pausedTickers = new Set<System>();
   private services = new Map<string, unknown>();
   private accumulator = 0;
   private lastTime = 0;
@@ -124,10 +137,28 @@ export class Engine implements GameContext {
 
   /* ---- systems ---- */
 
-  add(system: System): this {
+  /**
+   * Register a system. `opts.ticksWhenPaused` overrides the system's own
+   * declaration — that is the escape hatch for systems whose file is owned by
+   * someone else, so the assembly point can still state the fact out loud.
+   */
+  add(system: System, opts?: { ticksWhenPaused?: boolean }): this {
     this.systems.push(system);
+    if (opts?.ticksWhenPaused ?? system.ticksWhenPaused ?? false) {
+      this.pausedTickers.add(system);
+    }
     this.systems.sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
     return this;
+  }
+
+  /** Diagnostics: which systems keep running with the world stopped. */
+  get pausedSystemNames(): string[] {
+    return this.systems.filter((s) => this.pausedTickers.has(s)).map((s) => s.name);
+  }
+
+  /** Diagnostics: every registered system, in run order. */
+  get systemNames(): string[] {
+    return this.systems.map((s) => s.name);
   }
 
   async initSystems(onProgress?: (done: number, total: number, name: string) => void): Promise<void> {
@@ -193,9 +224,9 @@ export class Engine implements GameContext {
 
       for (const s of this.systems) s.update?.(dt, this);
     } else {
-      // Paused: still tick UI-ish systems so menus animate.
+      // Paused: only the systems that explicitly asked to survive a pause.
       for (const s of this.systems) {
-        if (s.order !== undefined && s.order >= 400) s.update?.(dt, this);
+        if (this.pausedTickers.has(s)) s.update?.(dt, this);
       }
     }
 
@@ -229,6 +260,7 @@ export class Engine implements GameContext {
     this.stop();
     for (const s of this.systems) s.dispose?.();
     this.systems.length = 0;
+    this.pausedTickers.clear();
     this.input.dispose();
     this.resizeObserver?.disconnect();
     this.events.clear();

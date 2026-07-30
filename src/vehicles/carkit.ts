@@ -989,8 +989,8 @@ function rearEnd(c: Ctx): void {
       b.box(0.17, th * 0.15, 0.05, T(lx, c.y(ly - th * 0.34), zR + 0.020, 0, sx * 0.16, 0), {
         color: LENS_CLEAR, rough: 0.09, metal: 0.02, coat: 0.9, uv: UV.tailLens, light: L.reverse,
       });
-      // wrap onto the quarter panel
-      b.box(0.05, th * 0.72, 0.13, T(sx * (hw + 0.004), c.y(ly + th * 0.06), zR + 0.10), {
+      // wrap onto the quarter panel — shallow, or it reads as a fin
+      b.box(0.028, th * 0.60, 0.085, T(sx * (hw + 0.006), c.y(ly + th * 0.10), zR + 0.075), {
         color: LENS_RED, rough: 0.1, metal: 0.02, coat: 0.9, uv: UV.tailLens, light: L.tail,
       });
     }

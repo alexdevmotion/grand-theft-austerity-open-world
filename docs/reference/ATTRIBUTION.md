@@ -70,3 +70,28 @@ The concept repo contains **no sound effects at all** — no engine, tyres,
 collisions, sirens, horns, footsteps, rain or city ambience. Every one of those
 has to be synthesised procedurally with the WebAudio API. The imported files
 cover voice and the finale music only.
+
+## Map data
+
+`src/content/bucharest.json` is derived from **OpenStreetMap**, © OpenStreetMap
+contributors, licensed **ODbL 1.0** — https://www.openstreetmap.org/copyright
+
+It contains *data*, not art: building footprints with storey counts, street
+centrelines with classification, tram routes, parks and squares for central
+Bucharest, projected to metres on a local tangent plane centred on Piața
+Universității. Every mesh in the game is still generated procedurally from that
+data in the game's own style, so nothing third-party is shipped as geometry or
+texture.
+
+ODbL requires attribution wherever the derived work is shown — the credits
+screen must carry "© OpenStreetMap contributors".
+
+Regenerate with `node tools/fetch-osm.mjs` then `node tools/curate-osm.mjs`.
+
+### Deliberately NOT used
+
+Scraped 3D building models (Sketchfab and similar) and Google's photogrammetric
+3D tiles. The former are a mix of CC-BY, non-commercial and all-rights-reserved
+and would need clearing model by model; the latter are forbidden by Google's
+terms. Both would also import baked lighting and arbitrary topology, which would
+read as imported furniture against a procedurally generated, stylised city.

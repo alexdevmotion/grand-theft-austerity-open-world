@@ -1164,9 +1164,34 @@ export class VehicleSystem implements System, VehicleService {
     v.lamps = new VehicleLamps(v.uniforms, v.kind === 'police');
   }
 
+  /**
+   * Remove a vehicle from the world.
+   *
+   * REFUSES TO DESPAWN AN OCCUPIED VEHICLE. This used to remove the rigid body
+   * unconditionally, which meant any caller could delete the car the player was
+   * sitting in. `PlayerSystem._vehicle` then still pointed at a freed Rapier
+   * body, and the next write threw "recursive use of an object detected which
+   * would lead to unsafe aliasing in rust" — which poisons the whole physics
+   * world, not just that body. The player could not move and could not get out,
+   * `PhysicsWorld.fixedUpdate` began throwing, and the page was replaced by the
+   * fatal-error screen.
+   *
+   * The repro was ordinary play, not an edge case: steal a Ministry van at 4
+   * stars, escape, and `PoliceSystem.retire()` deletes the van you are driving.
+   * `Roadblock.dispose()` had the same path.
+   *
+   * `TrafficSystem` already guarded this correctly at its own call site
+   * (`src/ai/traffic.ts`), but a rule enforced at three call sites and missed at
+   * two is not a rule. It belongs here, where no caller can get it wrong.
+   */
   despawn(id: string): void {
     const v = this.vehicles.get(id);
     if (!v) return;
+    if (v.occupants.length > 0) {
+      // Occupied: hand it over rather than delete it. Whoever owns the
+      // occupant is now responsible for the vehicle's lifetime.
+      return;
+    }
     v.unbindAudio(this.ctx);
     this.ctx.scene.remove(v.object);
     this.byCollider.delete(v.collider.handle);

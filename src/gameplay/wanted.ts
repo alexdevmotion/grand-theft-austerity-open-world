@@ -179,6 +179,8 @@ export class WantedSystem implements System, WantedService {
   private heat = 0;
   private _stars = 0;
   private cooldown = 0;
+  /** Seconds since any Ministry unit last had eyes on the player. */
+  private sinceSeen = 0;
   private ctx!: GameContext;
   private _pursuers = 0;
 
@@ -345,8 +347,37 @@ export class WantedSystem implements System, WantedService {
     // Level 4's `cool_head` unlock (src/gameplay/progression.ts): the whole
     // point of it is that a chase you used to lose becomes one you can break,
     // so it moves the decay rate rather than anything cosmetic.
-    const decay = ctx.tryGet(Services.Progression)?.has('cool_head') ? 24 * 1.45 : 24;
-    this.heat = Math.max(0, this.heat - dt * decay);
+    const base = ctx.tryGet(Services.Progression)?.has('cool_head') ? 24 * 1.45 : 24;
+
+    /*
+     * HEAT ONLY FALLS WHILE YOU ARE NOT BEING WATCHED.
+     *
+     * This used to decay unconditionally, every frame you were not detained,
+     * with no test of line of sight or distance. Measured: four stars, parked,
+     * three pursuit vans closing to 42 m — stars went 4 -> 0 in twenty-two
+     * seconds. There was nothing to escape from, because standing still WAS
+     * the escape. That is the whole wanted system with its teeth pulled.
+     *
+     * Now the Ministry has to lose you first. While any unit can see you the
+     * heat holds; once nobody can, it decays, and faster the further you get
+     * from where they last had you.
+     */
+    const police = (window as unknown as { __GTA_POLICE__?: { stats(): { visible: boolean; lostFor: number } } }).__GTA_POLICE__;
+    const seen = police?.stats().visible ?? false;
+    const lostFor = police?.stats().lostFor ?? 999;
+
+    if (seen) {
+      // In contact: no decay at all. Break line of sight or get taken.
+      this.sinceSeen = 0;
+      return;
+    }
+    this.sinceSeen += dt;
+    // A short grace after breaking contact so a corner does not instantly
+    // clear you — they sweep the last known position first.
+    if (this.sinceSeen < 4 && lostFor < 4) return;
+
+    const awayBonus = Math.min(1.6, 1 + this.sinceSeen / 18);
+    this.heat = Math.max(0, this.heat - dt * base * awayBonus);
     this.recomputeStars();
   }
 

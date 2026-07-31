@@ -760,8 +760,12 @@ export class PoliceSystem implements System {
 
   private radio(text: string): void {
     if (!text) return;
+    // ONE widget, not two. This also called HudService.subtitle, so every
+    // dispatch line was drawn twice and stacked — once in the radio strap and
+    // once in the subtitle line. `radio:line` is the channel the HUD's radio
+    // strap listens on, and src/audio/audioSystem.ts already notes that police
+    // dispatch writes its own subtitle.
     this.ctx.events.emit('radio:line', { text });
-    this.ctx.tryGet(Services.Hud)?.subtitle('RADIO', text, 4200);
   }
 
   private toast(text: string, kind: 'info' | 'good' | 'bad'): void {

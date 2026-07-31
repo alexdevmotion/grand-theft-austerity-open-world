@@ -956,6 +956,7 @@ varying vec3 vWPosS;
 varying vec3 vWNrmS;
 uniform vec3 uAsphalt, uPaveStone, uKerb, uGrass, uGravelC, uWaterC, uMarking;
 uniform float uWetness;
+uniform float uNight;
 ${SKY_GLSL}
 
 struct Surf {
@@ -1106,21 +1107,31 @@ Surf surfaceShade() {
     vec2 g = wp / 1.85;
     vec2 cellId = floor(g);
     float tone = h21(cellId + seed);
-    s.albedo = uPaveStone * (0.72 + tone * 0.36) * 1.12;
+    // The 1.12 lift this used to carry was compensation for a frame that was
+    // reading too dark overall; with the grazing-specular sheet gone (see the
+    // f90 note below) it is a plain over-brightening of the largest surface in
+    // any on-foot framing. Sawn andesite reads about 0.09 linear, not 0.12.
+    s.albedo = uPaveStone * (0.55 + tone * 0.30);
     vec2 fj = abs(fract(g) - 0.5);
     float joint = max(band(fj.x - 0.5, 0.020), band(fj.y - 0.5, 0.020));
-    s.albedo *= 1.0 - 0.30 * joint;
+    s.albedo *= 1.0 - 0.42 * joint;
     /*
-     * Sawn plaza stone, dry. This surface used to sit at 0.66 roughness with
-     * pooling held just under the damp threshold, which made every civic plaza
-     * in the game a sheet of polished granite reflecting the whole sky — the
-     * single worst offender in the "concrete is too reflective" note. A real
-     * plaza after rain has damp patches in its hollows and is otherwise a matte
-     * dusty stone you cannot see your own reflection in.
+     * Sawn plaza stone. The dry stone stays matte — that is what the 0.87
+     * roughness and the f90 correction are for — but the plane is NOT bone
+     * dry. Holding pooling at -0.36 put the whole mask below the damp
+     * threshold, so a civic plaza after rain had no standing water anywhere,
+     * no mirror, and therefore nothing bright to be dark NEXT TO: measured, it
+     * came out as one uniform mid-grey sheet at p50 94 with sd 22, against the
+     * reference's p50 56 with sd 45. The tonal range in the reference is not
+     * in its stone, it is in the water lying ON the stone.
+     *
+     * -0.14 keeps roughly two thirds of the slab field dry and lets the
+     * hollows and the joint lines hold a film, which is where the wet response
+     * below drops roughness to 0.10 and hands those pixels to the env probe.
      */
     s.rough = 0.87;
-    pooling = -0.36;
-    wet *= 0.34;
+    pooling = -0.22;
+    wet *= 0.62;
     s.height = -0.012 * joint;
   } else if (kind < 4.5) {
     /* ---- lawn ---- */
@@ -1227,7 +1238,7 @@ Surf surfaceShade() {
   // as glitter under a low sun.
   s.height *= 1.0 - wetAmt * mix(0.5, 0.97, standing);
 
-  // 2 + 3 + 4. Fresnel, then hand the reflection to the probe.
+  // 2 + 3 + 4. Hand the reflection to the probe.
   float fres = pow(1.0 - max(dot(-vd, nrm), 0.0), 5.0);
   float F = 0.02 + 0.98 * fres;
   /*
@@ -1236,11 +1247,59 @@ Surf surfaceShade() {
    * frame's foreground pavers, two metres from the lens, carry individual
    * reflections of the sky and the kerb, and fading the term out entirely
    * under the camera is what left every on-foot framing standing on a sheet of
-   * flat violet felt. Floored at 0.35 and ramped in much sooner.
+   * flat violet felt. Floored at 0.50 — raised from 0.35 once the wet term
+   * stopped double-counting Fresnel, because the two together were what kept
+   * the near field alive and the floor now has to hold it on its own.
    */
-  float nearFade = 0.35 + 0.65 * smoothstep(1.0, 12.0, dist);
+  float nearFade = 0.50 + 0.50 * smoothstep(1.0, 12.0, dist);
   float farFade = 1.0 - smoothstep(150.0, 340.0, dist);
-  s.env = 1.0 + wetAmt * F * (2.0 + 9.0 * standing) * nearFade * farFade;
+  /* ================================================================
+     THE FRESNEL WAS APPLIED TWICE, AND THAT IS THE PALE SHEET.
+
+     radiance is not raw cubemap radiance by the time this multiplies
+     it. three's RE_IndirectSpecular multiplies it by the environment
+     BRDF, and the environment BRDF ALREADY CONTAINS the grazing Fresnel
+     ramp — that is what makes a dielectric mirror-like edge-on and
+     nearly invisible face-on. Weighting it again by our own
+     F = 0.02 + 0.98 * fres squared that ramp, and the peak was allowed
+     to reach 1 + 1 * 1 * 8.8 = 9.8.
+
+     9.8x is not a mirror. A perfect mirror is 1.0x. So at exactly the
+     angles that fill the bottom of every on-foot framing — where both
+     Fresnel terms sit at 1.0 — the wet response was multiplying a
+     full-strength reflection of the horizon by nearly ten, and the far
+     half of the ground plane went to a flat pale wash with no tonal
+     information in it.
+
+     MEASURED on the street framing, in the band this destroyed
+     (screen y 0.59-0.70):
+
+       base                          mean 118
+       sun scaled to zero            mean 113   <- the sun was 5 of it
+       SSR intensity zero            mean 118   <- the post pass was 0
+       material wetness pinned to 0  mean  39   <- ALL of it was this
+
+     So: no second Fresnel here, and a peak near unity. The angular ramp
+     is not lost, it is simply left to the one term that is entitled to
+     apply it. What survives is the reference's actual construction —
+     the surface stays dark and the water lying on it is what is bright.
+     ================================================================ */
+  // A GENTLE grazing ramp, not the full Schlick one. Removing our second
+  // Fresnel outright starved the near field; keeping it whole squared the
+  // ramp. mix(0.55, 1.0) keeps its DIRECTION — dark under your feet,
+  // mirror down the street — without applying it twice at full strength.
+  //
+  // AFTER DARK THE REFLECTION IS THE ROAD. There is no sun and no lit sky
+  // at 23:00; between the lamps the only thing that reaches the tarmac is
+  // what it mirrors, so the daylight weighting leaves the night
+  // foreground at p50 17 with a standard deviation of 4 — an empty strip
+  // of printed black. The night gain is not a fudge for that: it is the
+  // same physical statement the daylight cap makes, from the other end.
+  // Keyed above 0.6 so dusk and the storm preset, which still have a sky,
+  // are untouched.
+  float nightGain = 1.0 + 2.6 * smoothstep(0.60, 1.0, uNight);
+  s.env = 1.0 + wetAmt * mix(0.55, 1.0, fres) * (0.55 + 2.40 * standing)
+                * nightGain * nearFade * farFade;
 
   // The sun's own reflection stays analytic: a PMREM cube at 128 px cannot
   // hold a sun disc, and this specular streak running down the carriageway
@@ -1444,7 +1503,14 @@ export function createCityMaterials(): CityMaterials {
     // matte facade; glass multiplies up from here per-pixel via Fac.env. At
     // 0.42 every rendered wall in the city picked up a sheen of sunset and the
     // concrete read as polished. Real patinated render throws back very little.
-    envMapIntensity: 0.30,
+    //
+    // DEAD KNOB — see the long note on the surface material's envMapIntensity
+    // below. three overwrites this with `scene.environmentIntensity` (0.8) on
+    // every draw because this material has no `envMap` of its own, so the
+    // 0.30 never reached the GPU and the facade look was in fact tuned at
+    // 0.8. Set to the effective value so the source stops lying; the
+    // per-pixel weighting that actually works is `Fac.env`.
+    envMapIntensity: 0.8,
     dithering: true,
   });
   facade.onBeforeCompile = (shader) => {
@@ -1594,10 +1660,34 @@ export function createCityMaterials(): CityMaterials {
     metalness: 0.0,
     emissive: 0xffffff,
     emissiveIntensity: 1.0,
-    // The reference level for a DRY surface. Surf.env multiplies it up
-    // per-pixel wherever there is standing water, which is what gives a road
-    // its dry crown and its mirrored gutter in the same draw call.
-    envMapIntensity: 0.5,
+    /*
+     * THIS KNOB IS DEAD, AND SO IS THE FACADE'S. Recorded here because it is
+     * invisible from the source and it will mislead the next person who tunes
+     * a reflection.
+     *
+     * three r0.185 `WebGLRenderer.js` (in `setProgram`):
+     *
+     *   if ( ( material.isMeshStandardMaterial || ... ) &&
+     *        material.envMap === null && scene.environment !== null ) {
+     *     m_uniforms.envMapIntensity.value = scene.environmentIntensity;
+     *   }
+     *
+     * Neither of these materials carries its own `envMap` — the reflection
+     * comes from `scene.environment`, which EnvProbe installs — so three
+     * OVERWRITES whatever is authored here with `scene.environmentIntensity`
+     * on every draw. Verified live: sweeping this value 0 -> 1 moved the
+     * ground by 0 levels, while sweeping `scene.environmentIntensity` over
+     * the same range moved it by 4. The effective value for every material in
+     * the game is EnvProbe's 0.8.
+     *
+     * Left at the effective number rather than "corrected" to the old 0.5:
+     * the whole city's look was tuned with 0.8 actually in force, so writing
+     * a different number here would change nothing today and silently change
+     * everything the day someone gives these materials a real envMap. Per
+     * material weighting is done per PIXEL by `Surf.env` below, which does
+     * work.
+     */
+    envMapIntensity: 0.8,
     dithering: true,
   });
   surface.onBeforeCompile = (shader) => {
@@ -1610,6 +1700,7 @@ export function createCityMaterials(): CityMaterials {
       uWaterC: { value: C.water },
       uMarking: { value: C.marking },
       uWetness: shared.uWetness,
+      uNight: shared.uNight,
     });
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>\n${SURF_VERT_PARS}`)
@@ -1648,17 +1739,104 @@ export function createCityMaterials(): CityMaterials {
         /* glsl */ `
         #include <lights_fragment_maps>
         radiance *= _s.env;
+        /*
+         * A CEILING ON THE MIRROR, NOT A SCALE ON IT.
+         *
+         * A wet plane at grazing incidence reflects the brightest thing in
+         * the sky — the horizon rip — and the probe carries it at full HDR,
+         * so the far half of the ground plane arrived brighter than anything
+         * else in the frame and flattened into a sheet.
+         *
+         * Scaling the wet term down globally fixes that and breaks the NIGHT
+         * street, where the reflection is the only thing carrying the road at
+         * all: measured, taking the multiplier down far enough to tame the
+         * dusk band left the night foreground at p50 17 with a standard
+         * deviation of 3, i.e. an empty black strip across the bottom third.
+         *
+         * A soft knee separates the two. Everything below it — every night
+         * reflection, every lamp pool, every dim puddle — passes through
+         * untouched; only a reflection that has become brighter than the lit
+         * scene around it is compressed, and it compresses toward a ceiling
+         * rather than clipping, so the smear keeps its orange instead of
+         * going to white paper.
+         */
+        {
+          float _rl = max(max(radiance.r, radiance.g), radiance.b);
+          // The knee opens right up after dark. A night street's reflection is
+          // the only thing carrying its road at all — no sun, no bright sky,
+          // and between the lamps nothing else reaches the tarmac. Clamping it
+          // with the same knee that tames a sunset metered the night
+          // foreground at p50 16 with a standard deviation of 4, i.e. an empty
+          // strip of printed black across the bottom third. There is no bright
+          // sky to out-run at 23:00, so there is nothing to compress.
+          float _knee = 0.20 + 12.0 * smoothstep(0.60, 1.00, uNight);
+          float _over = max(_rl - _knee, 0.0);
+          float _lim = min(_rl, _knee) + _over / (1.0 + _over * 1.90);
+          radiance *= _lim / max(_rl, 1e-4);
+        }
         `,
       )
       .replace(
         '#include <lights_fragment_end>',
         /* glsl */ `
         #include <lights_fragment_end>
+        /* ================================================================
+           GRAZING SPECULAR ON A ROUGH DIELECTRIC — f90 IS NOT 1.0.
+           MEASURED. At an on-foot framing looking down-sun (camera 1.75 m,
+           sun 7 degrees up, ground filling the bottom of the frame) the
+           surface's channels decomposed as, in linear radiance:
+
+             directSpecular   0.181  <- 75% of the pixel
+             albedo*direct    0.044     18%
+             indirectDiffuse  0.009      4%
+             indirectSpecular 0.005      2%
+             sun glint        0.002      1%
+
+           i.e. the ground was not bright because of its albedo, its puddle
+           mask, its env probe or the SSR — every one of those A/B-ed to
+           within 2 levels. It was one broad, uniform sheet of DIRECT
+           specular, and that is why it read as an overexposed sheet with
+           the reflection lost in it rather than as wet asphalt.
+
+           The cause is Schlick. three ramps Fresnel to f90 = 1.0 at 90
+           degrees, which is only true of a SMOOTH interface. Weathered
+           tarmac and sawn dusty stone are rough below the microfacet
+           model's scale and their microfacets shadow each other, so real
+           grazing reflectance is a fraction of Schlick's. Frostbite and
+           Filament both handle it by pulling f90 down toward (1 - rough).
+
+           Note the trap this closes: every previous pass that made these
+           surfaces "matte" RAISED roughness (asphalt 0.52 -> 0.78, footway
+           0.72 -> 0.90, plaza 0.66 -> 0.87). Raising GGX roughness widens
+           the lobe, so it made the grazing sheet cover the WHOLE plane
+           instead of removing it. Matte has to be spent on f90, not on
+           alpha.
+
+           Standing water keeps its mirror: at roughness 0.10 the factor is
+           0.9, so the gutters and puddles are untouched and become the
+           BRIGHT thing on a now-dark road — which is the reference's
+           actual construction.
+           ================================================================ */
+        {
+          float _ndv = clamp(dot(normalize(geometryNormal), geometryViewDir), 0.0, 1.0);
+          float _graze = pow(1.0 - _ndv, 5.0);
+          // f90 for a rough dielectric, shaped. A linear (1 - rough) still
+          // left the dry plaza at p25 80 against the reference kerbside's 36;
+          // the exponent is what takes a genuinely dusty surface the rest of
+          // the way down while leaving anything under ~0.4 roughness — wet
+          // tarmac, standing water, polished granite — essentially alone.
+          // Floored so a grazing highlight never vanishes outright.
+          float _f90 = max(pow(max(1.0 - roughnessFactor, 0.0), 1.7), 0.02);
+          const float _F0 = 0.04;
+          float _corrected = _F0 + (_f90 - _F0) * _graze;
+          float _schlick   = _F0 + (1.0  - _F0) * _graze;
+          reflectedLight.directSpecular *= _corrected / max(_schlick, 1e-4);
+        }
         reflectedLight.indirectDiffuse += gtaSky(vec3(0.0, 0.75, 0.0)) * diffuseColor.rgb * 0.14;
         `,
       );
   };
-  surface.customProgramCacheKey = () => 'gta-surface-v7';
+  surface.customProgramCacheKey = () => 'gta-surface-v16';
 
   /* ---- detail ---- */
   const detail = new THREE.MeshStandardMaterial({

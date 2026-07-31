@@ -105,9 +105,77 @@ export const HERO_FACE: FaceParams = {
   freckles: 0,
 };
 
+/**
+ * A deliberately average face. The crowd's instanced imposters share ONE
+ * painted head, so it must not carry anything that reads as an individual:
+ * no stubble, no freckles, no makeup, no dramatic brow.
+ */
+export const CROWD_FACE: FaceParams = {
+  age: 0.38,
+  browHeight: 0.5,
+  browThick: 0.55,
+  eyeSpacing: 0.5,
+  eyeSize: 0.55,
+  noseWidth: 0.5,
+  noseLength: 0.5,
+  mouthWidth: 0.5,
+  lipFull: 0.4,
+  jaw: 0.5,
+  stubble: 0,
+  beard: 0,
+  brow: 0.85,
+  eyeColor: 0x3a2a1c,
+  tired: 0.35,
+  cheek: 0.3,
+  makeup: 0,
+  freckles: 0,
+};
+
 /* ------------------------------------------------------------------ */
 /* Painting                                                            */
 /* ------------------------------------------------------------------ */
+
+/**
+ * Where the features land inside the face square, as fractions of it.
+ *
+ * `paintFace` is the only thing that draws them and this is the only thing
+ * that decides where — so a test can ask "does the head geometry actually put
+ * a visible, front-facing surface under the eye landmark" without owning a
+ * copy of the numbers that would drift the moment the face is retouched.
+ *
+ * Horizontal is measured from the centre of the square (0.5), vertical from
+ * the crown (0) to below the chin (1), matching `headUv`'s `t`.
+ */
+export interface FaceLandmarks {
+  yHair: number; yBrow: number; yEye: number;
+  yNose: number; yMouth: number; yChin: number;
+  /** Eye centre offset from the midline, in square fractions. */
+  eyeDx: number;
+  eyeRx: number;
+  eyeRy: number;
+  /** Half-width of the front of the face in the square: theta = ±55°. */
+  faceHalf: number;
+}
+
+export function faceLandmarks(f: FaceParams): FaceLandmarks {
+  return {
+    // Matched to the geometry: the hair shell meets the skull at ~0.33 from the
+    // crown, the eye line sits at half the jaw-to-crown span.
+    yHair: 0.300 + f.browHeight * 0.035,
+    yBrow: 0.458 + f.browHeight * 0.028,
+    yEye: 0.516,
+    yNose: 0.618 + f.noseLength * 0.035,
+    yMouth: 0.735 + f.lipFull * 0.012,
+    yChin: 0.918,
+    eyeDx: (0.052 + f.eyeSpacing * 0.018) * 2,
+    eyeRx: (0.030 + f.eyeSize * 0.010) * 2,
+    eyeRy: (0.012 + f.eyeSize * 0.006) * 2 * (1 - f.tired * 0.28),
+    faceHalf: 0.25 * Math.pow(55 / 180, WARP) * 2,
+  };
+}
+
+/** The landmarks the crowd's shared imposter face is painted with. */
+export const FACE_LANDMARKS: FaceLandmarks = faceLandmarks(CROWD_FACE);
 
 function rgb(hex: number, a = 1): string {
   return `rgba(${(hex >> 16) & 255},${(hex >> 8) & 255},${hex & 255},${a})`;
@@ -140,9 +208,9 @@ export function paintFace(
   const S = size;
   const cx = x0 + S * 0.5;
   const P = (u: number, v: number): [number, number] => [x0 + S * u, y0 + S * v];
+  const L = faceLandmarks(f);
   // Half-width of the visible front of the face in atlas units (theta = +-55deg).
-  const faceHalf = 0.25 * Math.pow(55 / 180, WARP) * 2;
-
+  const faceHalf = L.faceHalf;
   const shadow = mixHex(skin, 0x2a1420, 0.42);
   const deep = mixHex(skin, 0x180a14, 0.6);
   const blush = mixHex(skin, 0xc4564e, 0.3);
@@ -190,18 +258,7 @@ export function paintFace(
   }
 
   /* ---- landmark heights (fraction of the crown->chin span) ---- */
-  // Matched to the geometry: the hair shell meets the skull at ~0.33 from the
-  // crown, the eye line sits at half the jaw-to-crown span.
-  const yHair = 0.300 + f.browHeight * 0.035;
-  const yBrow = 0.458 + f.browHeight * 0.028;
-  const yEye = 0.516;
-  const yNose = 0.618 + f.noseLength * 0.035;
-  const yMouth = 0.735 + f.lipFull * 0.012;
-  const yChin = 0.918;
-
-  const eyeDx = (0.052 + f.eyeSpacing * 0.018) * 2;
-  const eyeRx = (0.030 + f.eyeSize * 0.010) * 2;
-  const eyeRy = (0.012 + f.eyeSize * 0.006) * 2 * (1 - f.tired * 0.28);
+  const { yHair, yBrow, yEye, yNose, yMouth, yChin, eyeDx, eyeRx, eyeRy } = L;
 
   /* ---- brow ridge shading (the tired, heavy look) ---- */
   const ridge = g.createLinearGradient(0, y0 + S * (yBrow - 0.05), 0, y0 + S * (yEye + 0.05));

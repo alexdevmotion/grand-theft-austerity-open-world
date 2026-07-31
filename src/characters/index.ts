@@ -63,7 +63,11 @@ export {
 
 export {
   rollFace,
+  paintFace,
+  headUv,
+  FACE_LANDMARKS,
   HERO_FACE,
+  CROWD_FACE,
   type FaceParams,
 } from './faces';
 

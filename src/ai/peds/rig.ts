@@ -15,6 +15,8 @@
 
 import * as THREE from 'three';
 import { Palette } from '../../artDirection';
+import { CROWD_FACE, headUv, paintFace } from '../../characters';
+import { Rng } from '../../core/rng';
 
 /* ------------------------------------------------------------------ */
 /* appearance                                                          */
@@ -492,6 +494,104 @@ export interface CrowdRenderStats {
   triangles: number;
 }
 
+/* ------------------------------------------------------------------ */
+/* the imposter head                                                   */
+/* ------------------------------------------------------------------ */
+
+/** Size of the shared crowd face texture, in pixels. */
+export const CROWD_FACE_TEX = 128;
+
+/**
+ * THE IMPOSTER HEAD, AND WHY IT HAS UVs.
+ *
+ * The crowd is two-tier: the nearest `actorBudget` people are skinned actors
+ * carrying a painted face atlas, the rest are instanced imposters. The
+ * imposter head used to be `IcosahedronGeometry(0.5, 1)` drawn with the same
+ * flat material as the limbs — no map, no face, a blank ovoid. That, and not
+ * the atlas or the UV path on the skinned tier, is the whole of the "crowd
+ * faces render as featureless ovals" report: on a busy square with 80 peds the
+ * 26-strong skinned budget runs out at about eight metres, and everyone past
+ * it is one of these.
+ *
+ * So the imposter gets the SAME projection as the skinned head: `headUv` from
+ * `src/characters/faces.ts`, the one function that decides where on a head the
+ * eyes go. The only difference is that the imposter's texture is the face
+ * square on its own rather than a corner of a full appearance atlas, so the
+ * u/v that `headUv` returns is rescaled from the atlas's 0.5..1 into 0..1.
+ *
+ * A UV sphere, not the icosahedron: `SphereGeometry` duplicates its seam
+ * column, and starting it at -PI/2 puts that seam at the BACK of the head. An
+ * icosahedron has no seam to put anywhere, so the triangle that straddles the
+ * wrap interpolates u backwards across the entire face and smears the whole
+ * painting down one side of the skull.
+ */
+export function buildImposterHeadGeometry(): THREE.BufferGeometry {
+  const geo = new THREE.SphereGeometry(0.5, 16, 11, -Math.PI / 2, Math.PI * 2);
+  const uv = geo.getAttribute('uv') as THREE.BufferAttribute;
+  const out = { u: 0, v: 0 };
+  for (let i = 0; i < uv.count; i++) {
+    // SphereGeometry's own unwrap: x runs 0..1 from the back seam with 0.5 dead
+    // ahead, y runs 1 at the crown to 0 under the chin.
+    const theta = (uv.getX(i) - 0.5) * Math.PI * 2;
+    headUv(theta, 1 - uv.getY(i), out);
+    uv.setXY(i, (out.u - 0.5) * 2, (out.v - 0.5) * 2);
+  }
+  uv.needsUpdate = true;
+  geo.name = 'ped-head';
+  return geo;
+}
+
+/**
+ * The one face every imposter wears, painted by the same `paintFace` the
+ * skinned tier uses so the two tiers cannot drift apart.
+ *
+ * It is painted on WHITE and then normalised so the plain cheek comes out at
+ * 1.0, because the head instances carry the pedestrian's skin tone in
+ * `instanceColor` and three multiplies map x instanceColor. Without the
+ * normalisation every imposter head would be the base skin darkened by
+ * whatever `paintFace` happens to lay down as its form shading, and the head
+ * would not match the hands and neck beside it.
+ */
+export function buildCrowdFaceTexture(): THREE.CanvasTexture {
+  const S = CROWD_FACE_TEX;
+  const c = document.createElement('canvas');
+  c.width = S;
+  c.height = S;
+  const g = c.getContext('2d')!;
+  paintFace(g, 0, 0, S, CROWD_FACE, 0xffffff, 0x8a7a6a, new Rng('crowd-face'));
+
+  // Normalise against a patch of plain cheek: off the nose, below the eye,
+  // inside the +-55 degree front of the face and clear of every feature.
+  const px = Math.round(S * 0.66);
+  const py = Math.round(S * 0.60);
+  const ref = g.getImageData(px, py, Math.max(2, Math.round(S * 0.05)), Math.max(2, Math.round(S * 0.05))).data;
+  let r = 0, gr = 0, b = 0;
+  for (let i = 0; i < ref.length; i += 4) { r += ref[i]; gr += ref[i + 1]; b += ref[i + 2]; }
+  const n = ref.length / 4;
+  const gain = [255 / Math.max(1, r / n), 255 / Math.max(1, gr / n), 255 / Math.max(1, b / n)];
+
+  const img = g.getImageData(0, 0, S, S);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    d[i] = Math.min(255, d[i] * gain[0]);
+    d[i + 1] = Math.min(255, d[i + 1] * gain[1]);
+    d[i + 2] = Math.min(255, d[i + 2] * gain[2]);
+  }
+  g.putImageData(img, 0, 0);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  // Mipped, unlike the skinned tier's atlas: an imposter head is 10-25 px on
+  // screen, and an unmipped 128 px face at that scale aliases into confetti.
+  tex.generateMipmaps = true;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.anisotropy = 4;
+  return tex;
+}
+
 export class CrowdRenderer {
   readonly root = new THREE.Group();
 
@@ -501,11 +601,15 @@ export class CrowdRenderer {
   private boxFar!: Pool;
   private headNear!: Pool;
   private headFar!: Pool;
+  /** Hats, beanies and hair shells: head-shaped, but they must not wear a face. */
+  private blobNear!: Pool;
+  private blobFar!: Pool;
   private glow!: Pool;
 
   private near = true;
   private mats: THREE.Material[] = [];
   private geos: THREE.BufferGeometry[] = [];
+  private faceTex!: THREE.CanvasTexture;
 
   /** Metres beyond which a ped stops casting shadows / loses detail. */
   shadowRadius = 42;
@@ -521,9 +625,10 @@ export class CrowdRenderer {
 
     const capsule = new THREE.CapsuleGeometry(0.5, 1.0, 2, 6);
     const box = new THREE.BoxGeometry(1, 1, 1);
-    const head = new THREE.IcosahedronGeometry(0.5, 1);
+    const head = buildImposterHeadGeometry();
+    const blob = new THREE.IcosahedronGeometry(0.5, 1);
     const glowGeo = new THREE.BoxGeometry(1, 1, 1);
-    this.geos.push(capsule, box, head, glowGeo);
+    this.geos.push(capsule, box, head, blob, glowGeo);
 
     const skinMat = () =>
       new THREE.MeshStandardMaterial({
@@ -538,6 +643,16 @@ export class CrowdRenderer {
     bodyFar.envMapIntensity = 1.05;
     this.mats.push(bodyNear, bodyFar);
 
+    // One texture, two materials — the face pools differ from the body pools
+    // only by the map, so they still light identically to the hands and neck.
+    this.faceTex = buildCrowdFaceTexture();
+    const faceNear = skinMat();
+    faceNear.map = this.faceTex;
+    const faceFar = skinMat();
+    faceFar.map = this.faceTex;
+    faceFar.envMapIntensity = 1.05;
+    this.mats.push(faceNear, faceFar);
+
     const glowMat = new THREE.MeshBasicMaterial({ toneMapped: false });
     this.mats.push(glowMat);
 
@@ -545,13 +660,20 @@ export class CrowdRenderer {
     // matter; far pools skip the shadow cascades entirely.
     const nearCap = Math.min(maxPeds, 44) * 17;
     const farCap = maxPeds * 15;
+    // Exactly one head and at most one hat per pedestrian, and EVERY pedestrian
+    // may be inside the near band at once — a crowded square puts the whole
+    // population inside 42 m. A cap of `min(maxPeds, 44)` here drops the
+    // overflow silently, which renders as headless people.
+    const headCap = maxPeds;
 
     this.capsNear = this.pool(capsule, bodyNear, nearCap, castShadows, 'peds-caps-near');
     this.boxNear = this.pool(box, bodyNear, Math.ceil(nearCap * 0.55), castShadows, 'peds-box-near');
-    this.headNear = this.pool(head, bodyNear, Math.min(maxPeds, 44) * 2, castShadows, 'peds-head-near');
+    this.headNear = this.pool(head, faceNear, headCap, castShadows, 'peds-head-near');
+    this.blobNear = this.pool(blob, bodyNear, headCap, castShadows, 'peds-blob-near');
     this.capsFar = this.pool(capsule, bodyFar, farCap, false, 'peds-caps-far');
     this.boxFar = this.pool(box, bodyFar, Math.ceil(farCap * 0.4), false, 'peds-box-far');
-    this.headFar = this.pool(head, bodyFar, maxPeds * 2, false, 'peds-head-far');
+    this.headFar = this.pool(head, faceFar, headCap, false, 'peds-head-far');
+    this.blobFar = this.pool(blob, bodyFar, headCap, false, 'peds-blob-far');
     this.glow = this.pool(glowGeo, glowMat, maxPeds * 2, false, 'peds-glow');
   }
 
@@ -580,6 +702,7 @@ export class CrowdRenderer {
     this.capsNear.mesh.castShadow = on;
     this.boxNear.mesh.castShadow = on;
     this.headNear.mesh.castShadow = on;
+    this.blobNear.mesh.castShadow = on;
   }
 
   begin(): void {
@@ -589,6 +712,8 @@ export class CrowdRenderer {
     this.boxFar.n = 0;
     this.headNear.n = 0;
     this.headFar.n = 0;
+    this.blobNear.n = 0;
+    this.blobFar.n = 0;
     this.glow.n = 0;
     this.stats.drawn = 0;
     this.stats.instances = 0;
@@ -658,10 +783,18 @@ export class CrowdRenderer {
     this.push(this.near ? this.boxNear : this.boxFar, color);
   }
 
+  /** The face-mapped head. `q` must carry the head's yaw — the face is on +Z. */
   private sphere(centre: THREE.Vector3, q: THREE.Quaternion, d: number, color: THREE.Color): void {
     _scale.set(d, d * 1.16, d * 0.98);
     _m.compose(centre, q, _scale);
     this.push(this.near ? this.headNear : this.headFar, color);
+  }
+
+  /** A head-shaped lump with no face on it: hard hats, beanies, hair shells. */
+  private blob(centre: THREE.Vector3, q: THREE.Quaternion, d: number, color: THREE.Color): void {
+    _scale.set(d, d * 1.16, d * 0.98);
+    _m.compose(centre, q, _scale);
+    this.push(this.near ? this.blobNear : this.blobFar, color);
   }
 
   private emissive(centre: THREE.Vector3, q: THREE.Quaternion, s: number, color: THREE.Color): void {
@@ -794,19 +927,19 @@ export class CrowdRenderer {
         _dir.set(0, -d.headR * 0.22, d.headR * 1.35).applyQuaternion(_q).add(_mid);
         this.cube(_dir, _q, d.headR * 1.75, d.headR * 0.16, d.headR * 0.95, app.hatColor);
       } else if (app.headwear === 2) {
-        this.sphere(_mid, _q, d.headR * 2.26, app.hatColor);
+        this.blob(_mid, _q, d.headR * 2.26, app.hatColor);
       } else if (app.headwear === 3) {
-        this.sphere(_mid, _q, d.headR * 2.12, app.hatColor);
+        this.blob(_mid, _q, d.headR * 2.12, app.hatColor);
       } else {
         // Long hair: a shell plus a fall down the back of the neck.
-        this.sphere(_mid, _q, d.headR * 2.2, app.hair);
+        this.blob(_mid, _q, d.headR * 2.2, app.hair);
         _dir.set(0, -d.headR * 1.25, -d.headR * 0.72).applyQuaternion(_q).add(_mid);
         this.cube(_dir, _q, d.headR * 1.7, d.headR * 1.9, d.headR * 0.7, app.hair);
       }
     } else if (lod < 2) {
       _mid.copy(_b);
       _mid.y += d.headR * 0.5;
-      this.sphere(_mid, _q, d.headR * 1.94, app.hair);
+      this.blob(_mid, _q, d.headR * 1.94, app.hair);
     }
 
     /* ---- feet ---- */
@@ -959,7 +1092,7 @@ export class CrowdRenderer {
     let tris = 0;
     for (const p of [
       this.capsNear, this.capsFar, this.boxNear, this.boxFar,
-      this.headNear, this.headFar, this.glow,
+      this.headNear, this.headFar, this.blobNear, this.blobFar, this.glow,
     ]) {
       p.mesh.count = p.n;
       p.mesh.visible = p.n > 0;
@@ -975,6 +1108,7 @@ export class CrowdRenderer {
   dispose(): void {
     for (const g of this.geos) g.dispose();
     for (const m of this.mats) m.dispose();
+    this.faceTex?.dispose();
     this.root.clear();
     this.root.removeFromParent();
   }

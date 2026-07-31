@@ -50,6 +50,8 @@ export interface SkinUniforms {
   uTransPower: { value: number };
   uTransDistort: { value: number };
   uCavityStrength: { value: number };
+  /** How much of the pore normal reaches the DIFFUSE terminator. 0..1. */
+  uMicroDiffuse: { value: number };
 }
 
 export interface SkinMaterialOptions {
@@ -67,6 +69,13 @@ export interface SkinMaterialOptions {
   specLobeSpread?: number;
   microScale?: number;
   microStrength?: number;
+  /**
+   * Fraction of the pore normal that reaches the diffuse/scattering N·L.
+   * The specular lobes always get all of it. Keep this low: at a grazing key
+   * anything above ~0.35 puts the stair-stepped stipple back on the
+   * terminator (see `RE_Direct_Skin`).
+   */
+  microDiffuse?: number;
   transColor?: number;
   transScale?: number;
   transPower?: number;
@@ -111,12 +120,44 @@ uniform float uTransDistort;
 uniform float uCavityStrength;
 uniform float uRoughScale;
 uniform float uRoughBias;
+uniform float uMicroDiffuse;
+/** View-space GEOMETRIC normal, written by the micro-normal block below. */
+vec3 gSkinGeoNormalView;
 `;
 
 const SKIN_RE = /* glsl */`
 void RE_Direct_Skin( const in IncidentLight directLight, const in vec3 geometryPosition, const in vec3 geometryNormal, const in vec3 geometryViewDir, const in vec3 geometryClearcoatNormal, const in PhysicalMaterial material, inout ReflectedLight reflectedLight ) {
 
-	float dotNL = dot( geometryNormal, directLight.direction );
+	/* PORES BELONG IN THE SPECULAR, NOT IN THE TERMINATOR.
+	 *
+	 * geometryNormal here is the pore-perturbed normal, and it used to drive
+	 * the diffuse/scattering N·L as well as the specular. At the art-directed
+	 * dusk hour the key sits three degrees above the horizon, so on the side of
+	 * the face turning away from it N·L crosses zero over a couple of
+	 * centimetres — and a 0.74-strength micro-normal flips its sign from pixel
+	 * to pixel across exactly that strip. The result is the hard, stair-stepped
+	 * band that ran from the inner brow past the nose wing and was reported as a
+	 * shadow-cascade artifact.
+	 *
+	 * It is not one. Measured at 0.6 m in open sun on Nicusor's head, with the
+	 * key raking at 51 degrees, high-frequency energy across the terminator
+	 * strip (mean |dL| per pixel, 110x300 px):
+	 *
+	 *   baseline .................................. 13.27
+	 *   uMicroStrength locked to 0 ................  5.12
+	 *   uSssStrength locked to 1 .................. 12.96
+	 *   uTransScale locked to 0 ................... 13.23
+	 *   dithering off ............................. 13.24
+	 *   head.receiveShadow = false ................ 13.42   <- the shadow map
+	 *                                                          contributes NOTHING
+	 *
+	 * So the fix is to stop the pore normal from deciding which side of the
+	 * terminator a pixel is on. Diffuse and scattering read a normal that is
+	 * mostly geometric; the two specular lobes keep the full perturbation, which
+	 * is where pores are actually visible on a real face. */
+	float dotNLmicro = dot( geometryNormal, directLight.direction );
+	float dotNLgeo   = dot( gSkinGeoNormalView, directLight.direction );
+	float dotNL = mix( dotNLgeo, dotNLmicro, uMicroDiffuse );
 
 	// Pre-integrated scattering (Penner 2011): the table already holds the
 	// diffusion profile integrated over a ring of surface at this curvature, so
@@ -133,7 +174,7 @@ void RE_Direct_Skin( const in IncidentLight directLight, const in vec3 geometryP
 	// polished plastic: real skin has a tight oily layer over a broad one.
 	PhysicalMaterial broad = material;
 	broad.roughness = clamp( material.roughness * uSpecLobeSpread, 0.05, 1.0 );
-	vec3 specIrr = max( dotNL, 0.0 ) * directLight.color;
+	vec3 specIrr = max( dotNLmicro, 0.0 ) * directLight.color;
 	vec3 spec =
 		BRDF_GGX_Multiscatter( directLight.direction, geometryViewDir, geometryNormal, material ) * ( 1.0 - uSpecLobeMix ) +
 		BRDF_GGX_Multiscatter( directLight.direction, geometryViewDir, geometryNormal, broad ) * uSpecLobeMix;
@@ -147,6 +188,9 @@ void RE_Direct_Skin( const in IncidentLight directLight, const in vec3 geometryP
 
 /** Triplanar micro-normal, blended in object space so no UV layout is needed. */
 const MICRO = /* glsl */`
+	// Unconditional: RE_Direct_Skin reads this every light, whether or not the
+	// pore normal is switched on at this LOD.
+	gSkinGeoNormalView = normalize( ( viewMatrix * vec4( normalize( vSkinWorldNormal ), 0.0 ) ).xyz );
 	if ( uMicroStrength > 0.0001 ) {
 		vec3 gn = normalize( vSkinWorldNormal );
 		vec3 an = abs( gn );
@@ -226,6 +270,7 @@ export function createSkinMaterial(opts: SkinMaterialOptions = {}): SkinMaterial
     uTransPower: { value: opts.transPower ?? 4.0 },
     uTransDistort: { value: opts.transDistort ?? 0.35 },
     uCavityStrength: { value: 1.0 },
+    uMicroDiffuse: { value: opts.microDiffuse ?? 0.22 },
     uRoughScale: { value: opts.roughnessScale ?? 1.0 },
     uRoughBias: { value: opts.roughnessBias ?? 0.0 },
   };
@@ -294,7 +339,7 @@ export function createSkinMaterial(opts: SkinMaterialOptions = {}): SkinMaterial
   // option set: materials sharing a cache key share one program, and three only
   // runs `onBeforeCompile` for the first of them, so a constant key would make
   // every cast member inherit the first head's scattering and transmission.
-  const key = `gta-skin-v1|${uniforms.uSssStrength.value}|${uniforms.uSssTint.value.getHex()}` +
+  const key = `gta-skin-v2|${uniforms.uSssStrength.value}|${uniforms.uSssTint.value.getHex()}` +
     `|${uniforms.uMicroScale.value}|${uniforms.uTransColor.value.getHex()}`;
   mat.customProgramCacheKey = () => key;
 

@@ -48,7 +48,18 @@ export function createInteriorMaterial(): InteriorMaterial {
     dithering: true,
   }) as InteriorMaterial;
   m.name = 'interior';
-  m.envMapIntensity = 0.16;
+  /*
+   * THE ENVIRONMENT INDOORS IS THE SKY PROBE, AND THERE IS NO SKY IN HERE.
+   *
+   * At 0.16 a smooth surface still rendered a legible reflection of the
+   * skybox: a horizon line with sky above it, painted across every pane of
+   * glass in the room. On a long partition seen edge-on that is
+   * indistinguishable from a missing wall, which is exactly how the broadcast
+   * studio's gallery screen read in the playtest. Halved, and the fragment
+   * shader below refuses to go fully polished, so what is left is a sheen
+   * rather than a window.
+   */
+  m.envMapIntensity = 0.075;
 
   m.onBeforeCompile = (shader) => {
     shader.uniforms.uFill = uFill;
@@ -80,7 +91,10 @@ export function createInteriorMaterial(): InteriorMaterial {
         varying vec3 vEmi;
         varying vec3 vNrmI;`,
       )
-      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = clamp(vMR.y, 0.03, 1.0);')
+      // Floor of 0.12 rather than 0.03: a perfect mirror indoors can only
+      // reflect the sky probe, and a sky reflection on an interior surface
+      // reads as a hole in the building.
+      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = clamp(vMR.y, 0.12, 1.0);')
       .replace('#include <metalnessmap_fragment>', 'float metalnessFactor = clamp(vMR.x, 0.0, 1.0);')
       .replace('#include <emissivemap_fragment>', 'totalEmissiveRadiance = vEmi;')
       .replace(

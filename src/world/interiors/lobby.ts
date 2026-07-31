@@ -34,6 +34,18 @@ const lin = srgb;
 
 export type LobbyState = 'sealed' | 'liberated';
 
+/** `Finish.lobby` with the lights back on — see `fitLobby`. */
+const LOBBY_LIT = {
+  wall: [0x4e4759, 0.9],
+  floor: [0x453e50, 0.5],
+  ceiling: [0x3d3749, 0.94],
+  skirting: 0x2a2434,
+  frame: 0xa9b1ba,
+  glassTint: 0x2a1c46,
+  glassWarm: 0xff7a4a,
+  glassGain: 0.9,
+} as const;
+
 export function fitLobby(
   b: DetailBuilder, s: ShellSpec, rng: Rng, state: LobbyState = 'sealed',
 ): LightAnchor[] {
@@ -47,7 +59,15 @@ export function fitLobby(
   const h = s.ceilingY;
   const lights: LightAnchor[] = [];
 
-  drawShellRoom(b, s, Finish.lobby, { glazed: ['south'] });
+  /*
+   * The shell is repainted for the party. Not a gimmick: the sealed finish is
+   * a near-black violet, correct for a condemned hall lit by two work lamps
+   * and hopeless once nine pendants and a string of festoons are running —
+   * the fittings came on and the room they were in stayed the colour of a
+   * power cut. A lighter wall and ceiling is what "the lights are back" looks
+   * like from the far end of a 28 m room.
+   */
+  drawShellRoom(b, s, free ? LOBBY_LIT : Finish.lobby, { glazed: ['south'] });
 
   /* ---- terrazzo floor with a brass inlay grid ---- */
   b.box(s.cx, y + 0.012, s.cz, hx * 2 - 0.3, 0.024, hz * 2 - 0.3, 0,
@@ -81,8 +101,9 @@ export function fitLobby(
   const mezZ = z1 - 3.6;
   b.box(s.cx, y + 4.5, (mezZ + z1) / 2, hx * 2 - 0.4, 0.36, z1 - mezZ, 0,
     { color: lin(0x312c3a), mr: [0, 0.9] });
+  // Balustrade glass, deliberately not a mirror — see `glassPanel` in shell.ts.
   b.box(s.cx, y + 5.28, mezZ + 0.06, hx * 2 - 0.4, 1.2, 0.06, 0,
-    { color: lin(0x0f1526), mr: [0.85, 0.08], emissive: [0.01, 0.012, 0.026] });
+    { color: lin(0x0f1526), mr: [0.35, 0.2], emissive: [0.014, 0.016, 0.032] });
   b.box(s.cx, y + 5.92, mezZ + 0.06, hx * 2 - 0.4, 0.09, 0.14, 0, Mat.alu);
   // Stair up to it, against the east wall.
   stairFlight(b, x1 - 2.2, s.cz - 3.0, 0, 14, 0.3, 0.3, 1.5, y);
@@ -212,9 +233,73 @@ export function fitLobby(
 
   /* ================= LIBERATED — the afterparty ================= */
 
-  // The pendants come on.
+  /*
+   * WHY THIS SECTION IS MOSTLY EMISSIVE AND FLOOR POOLS.
+   *
+   * `docs/STORY.md` promises "dancing builders, restored lights, Romanian folk
+   * music and a slow interior camera pan". The music played and the room did
+   * not: a playtester walked into the finale and photographed a black hall
+   * with one visible person, some confetti and a glowing desk.
+   *
+   * The cause is arithmetic. This is a 28 x 22 m room and the whole game
+   * shares SIX point lights (`LIGHT_POOL`, interiorSystem.ts) — a fixed count,
+   * because a varying one re-links every shader in the scene. Six lights
+   * cannot light a hall this size; standing at the door, every fitting over
+   * the dance floor is out of range and the room reads as unlit.
+   *
+   * So the party is carried by things that cost no lights at all: a raised
+   * ambient fill for this state (`STATE_FILL`), emissive fittings, and a pool
+   * of light drawn on the floor under every one of them. The six real lights
+   * are then spent on the few metres the player is actually standing in.
+   */
+
+  // The pendants come on — and each one lays a pool of light on the floor,
+  // which is what makes a lit room read as lit from across the hall.
   for (let i = 0; i < 5; i++) {
-    lights.push(pendant(b, s.cx - 8 + i * 4, h - 0.1, s.cz - 1.5, 2.5, 0x2a2630, Glow.tungsten, 7));
+    const px = s.cx - 8 + i * 4;
+    lights.push(pendant(b, px, h - 0.1, s.cz - 1.5, 2.5, 0x2a2630, Glow.tungsten, 8));
+    lightPool(b, px, y, s.cz - 1.5, 3.1, 0xffc078, 0.3);
+  }
+  // A second run of pendants over the north half, so the room is lit end to
+  // end rather than along one line.
+  for (let i = 0; i < 4; i++) {
+    const px = s.cx - 6 + i * 4;
+    lights.push(pendant(b, px, h - 0.1, s.cz + 5.0, 2.9, 0x2a2630, Glow.tungsten, 7));
+    lightPool(b, px, y, s.cz + 5.0, 2.9, 0xffc078, 0.26);
+  }
+
+  /*
+   * THE DANCE FLOOR: a lit chequer between the columns.
+   *
+   * The gains are small ON PURPOSE. The first pass ran at 0.5 and the floor
+   * stopped being a floor — a 13 m slab of white light with the rest of the
+   * room silhouetted against it. A dance floor has to be the brightest thing
+   * at ANKLE height and nowhere near the brightest thing in the frame.
+   */
+  const dfx = s.cx;
+  const dfz = s.cz - 1.6;
+  for (let ix = -2; ix <= 2; ix++) {
+    for (let iz = -2; iz <= 2; iz++) {
+      const on = (ix + iz) % 2 === 0;
+      const cx2 = dfx + ix * 1.72;
+      const cz2 = dfz + iz * 1.72;
+      b.box(cx2, y + 0.032, cz2, 1.6, 0.01, 1.6, 0, on
+        ? glowOpts(Glow.magenta, 0.13)
+        : glowOpts(Glow.purple, 0.075));
+    }
+  }
+  lights.push(anchor(dfx, y + 0.9, dfz, 0xd45ad8, 4.2, 15, 3));
+
+  /* ---- uplighters washing the four columns ---- */
+  for (const cx2 of [s.cx - 7.6, s.cx + 7.6]) {
+    for (const cz2 of [s.cz - 4.4, s.cz + 4.4]) {
+      b.box(cx2, y + 0.14, cz2 + 0.52, 0.3, 0.28, 0.22, 0, Mat.darkSteel);
+      b.box(cx2, y + 0.26, cz2 + 0.44, 0.22, 0.06, 0.04, 0, glowOpts(Glow.magenta, 6));
+      // The wash on the column itself: a tall, dim emissive face is a far
+      // better use of a triangle than a sixth point light would be.
+      b.box(cx2, y + h * 0.42, cz2 + 0.33, 0.5, h * 0.8, 0.02, 0, glowOpts(Glow.purple, 0.42));
+      lightPool(b, cx2, y, cz2 + 0.7, 1.5, 0xc04ad0, 0.3);
+    }
   }
   // String lights zig-zagged across the room, the cheapest possible party.
   for (let r = 0; r < 3; r++) {
@@ -229,13 +314,17 @@ export function fitLobby(
         glowOpts(i % 3 === 0 ? Glow.magenta : i % 3 === 1 ? Glow.tungsten : Glow.purple, 6));
     }
   }
-  lights.push(anchor(s.cx, y + 5.6, s.cz, 0xffb0e0, 4.0, 20, 3));
+  lights.push(anchor(s.cx, y + 5.6, s.cz, 0xffb0e0, 5.0, 22, 4));
 
   // Tricolour over the lift core, and builders' banners either side.
-  tricolour(b, s.cx + 1.0, y + 5.4, z1 - 0.4, Math.PI, 4.5, 2.6, 0.8);
+  tricolour(b, s.cx + 1.0, y + 5.4, z1 - 0.4, Math.PI, 4.5, 2.6, 1.4);
   for (const bx of [x0 + 0.4, x1 - 0.4]) {
-    b.box(bx, y + 5.0, s.cz, 0.05, 3.2, 4.0, 0, glowOpts(Glow.purple, 0.7));
+    b.box(bx, y + 5.0, s.cz, 0.05, 3.2, 4.0, 0, glowOpts(Glow.purple, 0.9));
   }
+  // And one strung over the entrance, so the room announces itself the moment
+  // the door is in frame rather than after you have crossed it.
+  tricolour(b, s.cx, y + 4.2, z0 + 0.5, 0, 5.2, 1.3, 1.2);
+  lights.push(anchor(s.cx, y + 2.4, z0 + 2.4, 0xffb47a, 3.4, 12, 3));
 
   // PA stack and decks on the reception counter.
   for (const sgn of [-1, 1]) {
@@ -253,6 +342,8 @@ export function fitLobby(
     b.box(rx - 0.45 + i * 0.1, y + 1.26, rz - 0.2, 0.05, 0.03, 0.28, 0,
       glowOpts(i % 2 ? Glow.green : Glow.magenta, 3.0));
   }
+  // The decks are the loudest thing in the room; give them a real light.
+  lights.push(anchor(rx, y + 1.9, rz - 1.4, 0xff7ad0, 4.4, 12, 3));
 
   // Drinks table, plastic cups, a crate of beer.
   lowTable(b, s.cx + 6.0, s.cz + 1.0, 0, 2.2, 0.9, 0.78, Mat.woodPale);
@@ -262,11 +353,13 @@ export function fitLobby(
   }
   b.box(s.cx + 6.0, y + 0.16, s.cz + 2.0, 0.5, 0.32, 0.36, 0.3, { color: lin(0x2a4a6d), mr: [0, 0.85] });
 
-  // Confetti and spilled paper on the floor, but swept into drifts.
+  // Confetti and spilled paper on the floor, but swept into drifts. Drawn
+  // ABOVE the dance-floor tiles, which are themselves a millimetre proud of
+  // the terrazzo.
   for (let i = 0; i < 90; i++) {
     const px = s.cx + rng.range(-hx + 1, hx - 1);
     const pz = s.cz + rng.range(-hz + 1, hz - 1);
-    b.box(px, y + 0.024, pz, 0.06, 0.002, 0.05, rng.range(0, 3),
+    b.box(px, y + 0.044, pz, 0.06, 0.002, 0.05, rng.range(0, 3),
       { color: [lin(0xc04ad0), lin(0xfcd116), lin(0x002b7f), lin(0xce1126)][rng.int(0, 4)], mr: [0, 0.9] });
   }
   litterPapers(b, s.cx, s.cz - 6, hx - 3, 2.0, y + 0.03, 10, rng);

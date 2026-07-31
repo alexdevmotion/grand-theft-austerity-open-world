@@ -23,8 +23,12 @@ import {
   type CityService,
   type HudService,
   type PlayerService,
+  type RoadNode,
 } from '../core/services';
-import { ACTIVITIES, ACTIVITIES_BY_ID, KIND_LABEL, type ActivityDef } from '../content/activities';
+import {
+  ACTIVITIES, ACTIVITIES_BY_ID, KIND_LABEL,
+  type ActivityDef, type ActivityPoint,
+} from '../content/activities';
 import {
   MEDAL_LABEL,
   courierScore,
@@ -40,6 +44,110 @@ import { activityHud, resetActivityHud } from './hudState';
 const START_PREFIX = 'act:start:';
 const STEP_ID = 'act:step';
 const SHOP_PREFIX = 'shop:';
+
+/* ================================================================== *
+ * EVERY ACTIVITY POINT LIVES ON THE ROAD GRAPH.
+ *
+ * `src/content/activities.ts` authors its coordinates on the 92 m planning
+ * grid (`G(k) = -1196 + 92k`), which is where the road centrelines were
+ * *designed* to fall. The city that ships is an OSM import, curated: the real
+ * centrelines are metres off that grid in the middle of town and tens of
+ * metres off at the edges, and a checkpoint authored on the grid can therefore
+ * land inside a block.
+ *
+ * Measured, before this: of the 33 authored points, twelve were more than 10 m
+ * from the nearest drivable road segment, three were inside a building, and
+ * the start of "Cursă: Bulevardul Magheru" was 33 m off — which is how a
+ * playtester drove for 115 seconds without reaching checkpoint 1 and wedged
+ * the car against a block trying.
+ *
+ * So the grid is INTENT and the graph is TRUTH: every point is snapped onto
+ * the nearest drivable segment at boot, and `assertOnRoad` refuses to let a
+ * point that could not be snapped ship quietly.
+ * ================================================================== */
+
+/** A snapped point may not sit further than this from a drivable segment. */
+const MAX_OFF_ROAD = 3.0;
+/**
+ * How far the snap is allowed to MOVE a point before the authoring itself is
+ * considered wrong. A point 60 m from any road is not "slightly off the grid",
+ * it is in the middle of a block, and silently teleporting it across the city
+ * would hide that.
+ */
+const MAX_SNAP_TRAVEL = 60;
+
+export interface RoadSnap {
+  x: number;
+  z: number;
+  /** Distance from the snapped point to the segment it sits on (~0). */
+  offRoad: number;
+  /** How far the authored point had to move. */
+  travel: number;
+  /** True when a drivable segment was found at all. */
+  ok: boolean;
+}
+
+/**
+ * Nearest point on a DRIVABLE ROAD SEGMENT — not the nearest node.
+ *
+ * The difference matters and is the reason `spatial.snapToRoad` alone is not
+ * enough here: it returns `roadNodes[nearestNode(p)]`, and the graph contains
+ * nodes with no links at all. Measured at the start of "Cursă: Bulevardul
+ * Magheru", the nearest node is 0.0 m away and the nearest node you can
+ * actually drive along is 33 m away — the authored point sits exactly on an
+ * orphan. Snapping to a segment can only ever return somewhere a car can be.
+ *
+ * Pure and exported so `activities.test.ts` can pin it without a browser.
+ */
+export function snapToRoadGraph(
+  nodes: ReadonlyArray<RoadNode>, x: number, z: number,
+): RoadSnap {
+  let bestD2 = Infinity;
+  let bx = x;
+  let bz = z;
+  for (let i = 0; i < nodes.length; i++) {
+    const a = nodes[i];
+    for (const j of a.links) {
+      const b = nodes[j];
+      if (!b) continue;
+      // One direction only: a link is traversed from both ends.
+      if (j < i) continue;
+      const vx = b.position.x - a.position.x;
+      const vz = b.position.z - a.position.z;
+      const len2 = vx * vx + vz * vz;
+      let t = len2 > 1e-6 ? ((x - a.position.x) * vx + (z - a.position.z) * vz) / len2 : 0;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const px = a.position.x + vx * t;
+      const pz = a.position.z + vz * t;
+      const d2 = (px - x) * (px - x) + (pz - z) * (pz - z);
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        bx = px;
+        bz = pz;
+      }
+    }
+  }
+  if (!Number.isFinite(bestD2)) {
+    return { x, z, offRoad: Infinity, travel: 0, ok: false };
+  }
+  return { x: bx, z: bz, offRoad: 0, travel: Math.sqrt(bestD2), ok: true };
+}
+
+/** Distance from (x, z) to the nearest drivable segment. Diagnostics. */
+export function distanceToRoad(
+  nodes: ReadonlyArray<RoadNode>, x: number, z: number,
+): number {
+  return snapToRoadGraph(nodes, x, z).travel;
+}
+
+interface PlannedActivity {
+  start: { x: number; z: number };
+  points: ActivityPoint[];
+  /** Per-point diagnostics, in `points` order, with the start first. */
+  snaps: Array<{ label: string; travel: number; ok: boolean }>;
+  /** False when a consecutive pair of points has no route between them. */
+  routed: boolean;
+}
 
 /* ------------------------------------------------------------------ */
 /* The shops                                                           */
@@ -146,6 +254,9 @@ export class ActivitySystem implements System, ActivityService {
   private resultTimer = 0;
   /** Best score per activity, so a repeat has something to beat. */
   private best = new Map<string, number>();
+  /** Road-snapped geometry, one entry per activity. Built once, at boot. */
+  private plan = new Map<string, PlannedActivity>();
+  private planned = false;
 
   get available(): ReadonlyArray<Available> {
     return this._available;
@@ -161,6 +272,7 @@ export class ActivitySystem implements System, ActivityService {
   init(ctx: GameContext): void {
     this.ctx = ctx;
     ctx.provide(Services.Activities, this);
+    this.planRoutes();
     this.refreshAvailable();
 
     ctx.events.on('progression:levelUp', () => this.refreshAvailable());
@@ -359,6 +471,110 @@ export class ActivitySystem implements System, ActivityService {
   }
 
   /* ---------------------------------------------------------------- */
+  /* the road plan                                                     */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Snap every authored point onto the road graph, once, and check the result.
+   *
+   * Deliberately eager (init, then retried from `update` if the city has not
+   * finished generating): a race whose checkpoints are only corrected the
+   * moment you drive at them is a race that has already sent you at a wall.
+   */
+  private planRoutes(): void {
+    const city: CityService | undefined = this.ctx.tryGet(Services.City);
+    const nodes = city?.roadNodes;
+    if (!city || !nodes || nodes.length === 0) return;
+    this.planned = true;
+    this.plan.clear();
+
+    for (const def of ACTIVITIES) {
+      const snaps: PlannedActivity['snaps'] = [];
+      const take = (x: number, z: number, label: string): { x: number; z: number } => {
+        const s = snapToRoadGraph(nodes, x, z);
+        snaps.push({ label, travel: s.travel, ok: s.ok && s.travel <= MAX_SNAP_TRAVEL });
+        // A snap that would drag the point across half a district is reported
+        // and REFUSED: better a marker where the author put it, loudly wrong,
+        // than a marker silently moved somewhere nobody meant.
+        return s.ok && s.travel <= MAX_SNAP_TRAVEL ? { x: s.x, z: s.z } : { x, z };
+      };
+
+      const start = take(def.x, def.z, 'start');
+      const points = def.points.map((p, i) => {
+        const q = take(p.x, p.z, p.label ?? `punct ${i + 1}`);
+        return { ...p, x: q.x, z: q.z };
+      });
+
+      // Can a car actually get from one point to the next? The A* is over the
+      // same graph the traffic drives, so an empty path means the route is
+      // genuinely severed, not merely long.
+      let routed = true;
+      if (def.kind === 'race' || def.kind === 'courier') {
+        const chain = [start, ...points];
+        for (let i = 0; i + 1 < chain.length; i++) {
+          const a = city.nearestNode(_v.set(chain[i].x, 0, chain[i].z));
+          const b = city.nearestNode(_v.set(chain[i + 1].x, 0, chain[i + 1].z));
+          if (a < 0 || b < 0) { routed = false; break; }
+          if (a !== b && city.findPath(a, b).length === 0) { routed = false; break; }
+        }
+      }
+
+      this.plan.set(def.id, { start, points, snaps, routed });
+    }
+
+    this.assertOnRoad(nodes);
+  }
+
+  /**
+   * THE ASSERTION. An activity point off the road graph is invisible until a
+   * player spends two minutes failing to reach it, so it is checked at boot
+   * and said out loud — and `?strict=1` turns it into a boot failure for CI,
+   * the same contract `buildersHouse.ts` uses for the Act IV doorway.
+   */
+  private assertOnRoad(nodes: ReadonlyArray<RoadNode>): void {
+    const bad: string[] = [];
+    for (const def of ACTIVITIES) {
+      const p = this.plan.get(def.id);
+      if (!p) continue;
+      const check = (x: number, z: number, label: string): void => {
+        const d = distanceToRoad(nodes, x, z);
+        if (d > MAX_OFF_ROAD) bad.push(`${def.id}/${label}: ${d.toFixed(1)} m off the road graph`);
+      };
+      check(p.start.x, p.start.z, 'start');
+      p.points.forEach((q, i) => check(q.x, q.z, q.label ?? `punct ${i + 1}`));
+      for (const s of p.snaps) {
+        if (!s.ok) bad.push(`${def.id}/${s.label}: no drivable segment within ${MAX_SNAP_TRAVEL} m`);
+      }
+      if (!p.routed) bad.push(`${def.id}: no route between consecutive points`);
+    }
+
+    const moved = [...this.plan.values()]
+      .flatMap((p) => p.snaps)
+      .reduce((a, s) => Math.max(a, s.ok ? s.travel : 0), 0);
+    console.info(
+      `[activities] ${this.plan.size} activities snapped to the road graph; ` +
+      `largest correction ${moved.toFixed(1)} m`,
+    );
+    if (bad.length === 0) return;
+
+    const msg = `[activities] ${bad.length} activity point(s) are not on a navigable road:\n  ${bad.join('\n  ')}`;
+    console.error(msg);
+    if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('strict') === '1') {
+      throw new Error(msg);
+    }
+  }
+
+  /** The snapped start marker for `def`, or its authored position. */
+  private startOf(def: ActivityDef): { x: number; z: number } {
+    return this.plan.get(def.id)?.start ?? { x: def.x, z: def.z };
+  }
+
+  /** The snapped point list for `def`, or the authored one. */
+  private pointsOf(def: ActivityDef): ActivityPoint[] {
+    return this.plan.get(def.id)?.points ?? def.points;
+  }
+
+  /* ---------------------------------------------------------------- */
   /* offer                                                             */
   /* ---------------------------------------------------------------- */
 
@@ -381,7 +597,8 @@ export class ActivitySystem implements System, ActivityService {
 
     for (const def of ACTIVITIES) {
       if (def.requiresUnlock && !(prog?.has(def.requiresUnlock) ?? false)) continue;
-      const p = new THREE.Vector3(def.x, this.groundAt(def.x, def.z), def.z);
+      const at = this.startOf(def);
+      const p = new THREE.Vector3(at.x, this.groundAt(at.x, at.z), at.z);
       this._available.push({ id: def.id, kind: def.kind, position: p.clone(), name: def.name });
       it?.add({
         id: START_PREFIX + def.id,
@@ -445,7 +662,7 @@ export class ActivitySystem implements System, ActivityService {
     const it = this.interaction();
     it?.remove(STEP_ID);
 
-    const pt = run.def.points[run.step];
+    const pt = this.pointsOf(run.def)[run.step];
     if (!pt) {
       this.hud()?.setWaypoint(null);
       return;
@@ -553,6 +770,12 @@ export class ActivitySystem implements System, ActivityService {
       if (this.resultTimer <= 0) activityHud.result = '';
     }
 
+    // The city generates its road graph in its own init; if it was not ready
+    // when ours ran, the plan is built the first frame it is.
+    if (!this.planned) {
+      this.planRoutes();
+      if (this.planned) this.refreshAvailable();
+    }
     if (!this.shopsPlaced) this.placeShops();
 
     // Stall cooldowns. Cheap enough to walk unconditionally — there are five.
@@ -584,7 +807,7 @@ export class ActivitySystem implements System, ActivityService {
         return;
       }
     } else {
-      const pt = run.def.points[run.step];
+      const pt = this.pointsOf(run.def)[run.step];
       // Photo steps are cleared by the E press, not by walking into them.
       if (pt && run.def.kind !== 'photo') {
         const d = Math.hypot(p.x - pt.x, p.z - pt.z);
@@ -649,7 +872,7 @@ export class ActivitySystem implements System, ActivityService {
       /** Teleport to the current target. */
       goToStep: () => {
         const run = this.run;
-        const pt = run?.def.points[run.step];
+        const pt = run ? this.pointsOf(run.def)[run.step] : undefined;
         if (!pt) return false;
         const player = this.ctx.tryGet(Services.Player);
         _v.set(pt.x, this.groundAt(pt.x, pt.z) + 0.2, pt.z);
@@ -658,6 +881,34 @@ export class ActivitySystem implements System, ActivityService {
         return true;
       },
       records: () => Object.fromEntries(this.best),
+      /**
+       * Where every activity point ACTUALLY is after snapping, how far it had
+       * to move, and how far it still is from a drivable road. This is the
+       * evidence for the checkpoint fix; `offRoad` must be ~0 everywhere.
+       */
+      routes: () => {
+        const nodes = this.ctx.tryGet(Services.City)?.roadNodes ?? [];
+        return ACTIVITIES.map((def) => {
+          const p = this.plan.get(def.id);
+          const at = this.startOf(def);
+          const one = (x: number, z: number, ax: number, az: number, label: string) => ({
+            label,
+            at: [Math.round(x * 10) / 10, Math.round(z * 10) / 10],
+            moved: Math.round(Math.hypot(x - ax, z - az) * 10) / 10,
+            offRoad: Math.round(distanceToRoad(nodes, x, z) * 10) / 10,
+          });
+          return {
+            id: def.id,
+            kind: def.kind,
+            routed: p?.routed ?? null,
+            points: [
+              one(at.x, at.z, def.x, def.z, 'start'),
+              ...this.pointsOf(def).map((q, i) =>
+                one(q.x, q.z, def.points[i].x, def.points[i].z, q.label ?? `punct ${i + 1}`)),
+            ],
+          };
+        });
+      },
       /** The sinks: where lei can actually be spent, and what they cost. */
       shops: () => {
         const it = this.interaction();

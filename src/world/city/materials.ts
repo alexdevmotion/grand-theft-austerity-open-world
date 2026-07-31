@@ -1716,23 +1716,32 @@ export function createCityMaterials(): CityMaterials {
            */
           if (vTrans > 0.001) {
             float _wrap = max(0.0, (-dot(_n, uSunDir) + 0.45) / 1.45);
-            float _thru = pow(max(0.0, dot(_vd, uSunDir)), 4.0);
-            // Weighted so the DIRECTIONAL term dominates. Turned up, the broad
-            // wrapped term fires on half the facets of every lobe at once and
-            // bleaches an amber canopy to cream — which is the failure mode
-            // opposite to the black plates, and just as obviously wrong.
+            /*
+             * BROADER FORWARD LOBE. At an exponent of 4 the glow only fired
+             * within about forty degrees of the sun, so a canopy read as a
+             * flat amber shape everywhere else and only lit up if you aimed
+             * straight into the key. Real foliage carries a wide forward
+             * scatter: an avenue of backlit trees glows across most of the
+             * frame, not in one hotspot. Exponent 3, gain up, and the broad
+             * wrapped term DOWN to pay for it — the wrapped term fires on half
+             * the facets of every lobe at once, so it is what bleaches an
+             * amber canopy to cream if it leads.
+             */
+            float _thru = pow(max(0.0, dot(_vd, uSunDir)), 3.0);
             totalEmissiveRadiance += diffuseColor.rgb * uSunCore * 2.1 * vTrans *
-              (_wrap * 0.24 + _thru * 1.05) * (1.0 - uNight * 0.82);
+              (_wrap * 0.19 + _thru * 1.3) * (1.0 - uNight * 0.82);
             // Sky fill through the leaf as well, or a crown with its back to
             // the sun goes to a flat silhouette instead of a dim olive mass.
+            // Kept small: this is the term that desaturates, and a shadowed
+            // autumn crown should stay a deep olive-umber, not go chalky.
             totalEmissiveRadiance += diffuseColor.rgb * gtaSky(_n * -0.4 + vec3(0.0, 0.55, 0.0))
-              * vTrans * 0.10;
+              * vTrans * 0.06;
           }
         }
         `,
       );
   };
-  detail.customProgramCacheKey = () => 'gta-detail-v2';
+  detail.customProgramCacheKey = () => 'gta-detail-v3';
 
   (window as unknown as { __GTA_CITYMAT__: unknown }).__GTA_CITYMAT__ = {
     emissive: (v: number) => { shared.uEmissiveGain.value = v; },

@@ -376,7 +376,11 @@ export class PostFXSystem implements System, RenderService {
       splitTint: (sr: number, sg: number, sb: number, hr: number, hg: number, hb: number) =>
         this.grade.setSplitTint(sr, sg, sb, hr, hg, hb),
       grain: (v: number) => this.grade.setGrain(v),
-      contrast: (v: number) => this.grade.setContrast(v),
+      contrast: (v: number, pivot?: number) => this.grade.setContrast(v, pivot),
+      /** Highlight compression — the knob that tames the wet-road sky mirror. */
+      shoulder: (knee: number, strength?: number) => this.grade.setShoulder(knee, strength),
+      /** Shadow crush — how deep the blacks go and up to what luma. */
+      toeDepth: (depth: number, range?: number) => this.grade.setToeDepth(depth, range),
       toe: (lift: number, r?: number, g?: number, b?: number) => this.grade.setToe(lift, r, g, b),
       vignette: (darkness: number) => { this.vignette.darkness = darkness; },
       bloom: (intensity: number, threshold?: number) => {

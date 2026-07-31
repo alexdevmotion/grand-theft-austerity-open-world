@@ -14,7 +14,7 @@ import { buildBuildersHouse, PLAZAS, buildPlaza, type LandmarkSink } from '../ci
 import { LOBBY, TOWER, TOWER_SOUTH_Z } from '../../content/places';
 import { BLOCKERS, INTERIORS, INTERIOR_VOIDS } from './defs';
 import {
-  MAX_LEAF, doorCentre, doorInside, doorNormal, doorOutside, floorSlab, innerHalf,
+  MAX_LEAF, doorCentre, doorInside, doorNormal, doorOutside, entryAnchor, floorSlab, innerHalf,
   leafWidth, shellBoxes, type ShellBox, type ShellSpec,
 } from './shell';
 import { fitLobby } from './lobby';
@@ -125,6 +125,83 @@ describe('doorways', () => {
       expect(spec.massH).toBeGreaterThan(spec.ceilingY);
     });
   }
+});
+
+/**
+ * WHERE A PLAYER WHO HAS JUST WALKED IN IS PUT.
+ *
+ * The playtest reported `enter('broadcastStudio')` dropping the player at
+ * 438 / 167.4 "outside the shell, hanging over a void". The point was in fact
+ * inside the room — 2.6 m inside the door, which `doorInside` was being asked
+ * for — but the chase camera booms about five metres BEHIND the player, so at
+ * 2.6 m the lens was two and a half metres outside the building and the frame
+ * was of the facade and the sky. These pin the anchor that replaced it.
+ */
+describe('entry anchors', () => {
+  /** Roughly how far behind the player the third-person boom sits. */
+  const BOOM = 5.0;
+
+  for (const spec of INTERIORS) {
+    test(`${spec.id}: the anchor is inside the room, clear of the walls`, () => {
+      const a = entryAnchor(spec);
+      const { hx, hz } = innerHalf(spec);
+      expect(Math.abs(a.x - spec.cx)).toBeLessThanOrEqual(hx - 0.99);
+      expect(Math.abs(a.z - spec.cz)).toBeLessThanOrEqual(hz - 0.99);
+      expect(hits(shellBoxes(spec), a.x, spec.floorY + 1.0, a.z)).toBe(false);
+    });
+
+    test(`${spec.id}: it faces into the room, not back out of the door`, () => {
+      const a = entryAnchor(spec);
+      const n = doorNormal(spec.door);
+      // Facing vector for a yaw where 0 rad is +Z.
+      const fx = Math.sin(a.yaw);
+      const fz = Math.cos(a.yaw);
+      expect(fx * n.x + fz * n.z).toBeLessThan(-0.99);
+    });
+
+    test(`${spec.id}: it stands back far enough for the camera boom`, () => {
+      const a = entryAnchor(spec);
+      const c = doorCentre(spec);
+      const n = doorNormal(spec.door);
+      // How deep into the room the anchor is, measured along the door normal.
+      const depth = (c.x - a.x) * n.x + (c.z - a.z) * n.z;
+      expect(depth).toBeGreaterThanOrEqual(2.2);
+      // In a room that can afford it, the whole boom fits inside.
+      const room = n.x === 0 ? innerHalf(spec).hz * 2 : innerHalf(spec).hx * 2;
+      if (room > 20) expect(depth).toBeGreaterThan(BOOM);
+    });
+
+    /**
+     * The boom must not run down the one line through the wall that has a
+     * hole in it, or the camera leaves the building through the front door.
+     */
+    test(`${spec.id}: the anchor is off the door centreline`, () => {
+      const a = entryAnchor(spec);
+      const c = doorCentre(spec);
+      const n = doorNormal(spec.door);
+      // Lateral distance from the door axis.
+      const lateral = n.x === 0 ? Math.abs(a.x - c.x) : Math.abs(a.z - c.z);
+      expect(lateral).toBeGreaterThan(spec.door.width / 2);
+    });
+
+    test(`${spec.id}: nothing solid is standing on the anchor`, () => {
+      const a = entryAnchor(spec);
+      const { hx, hz } = innerHalf(spec);
+      for (const bl of BLOCKERS[spec.id] ?? []) {
+        const cx = spec.cx + (bl.ax ?? 0) * hx + (bl.dx ?? 0);
+        const cz = spec.cz + (bl.az ?? 0) * hz + (bl.dz ?? 0);
+        const on = Math.abs(a.x - cx) < bl.hx + 0.4 && Math.abs(a.z - cz) < bl.hz + 0.4;
+        expect(`${spec.id}:${on}`).toBe(`${spec.id}:false`);
+      }
+    });
+  }
+
+  test('the broadcast studio no longer spawns you in the doorway', () => {
+    const studio = INTERIORS.find((s) => s.id === 'broadcastStudio')!;
+    const a = entryAnchor(studio);
+    // The reported bad spot, and the distance it was from the room.
+    expect(Math.hypot(a.x - 438, a.z - 167.4)).toBeGreaterThan(3);
+  });
 });
 
 describe('furniture colliders', () => {

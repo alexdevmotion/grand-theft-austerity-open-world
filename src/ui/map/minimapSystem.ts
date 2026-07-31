@@ -427,9 +427,22 @@ export class MinimapSystem implements System {
     // up on screen over a menu just because it initialised after the HUD did.
     this.hudVisible = this.ctx.tryGet(Services.Hud)?.visible ?? true;
 
+    /* THE MINIMAP GETS OUT OF THE WAY OF A CUTSCENE.
+     *
+     * The camera's act-title lower-third is anchored bottom-left, which is
+     * where the minimap lives: 22-cine has "ACTUL II / Bootstrap" written
+     * across the middle of the widget with the streets showing through the
+     * letters. Moving the card is half the answer and is done in
+     * `cameraSystem.ts`; the other half is that a title card is a CUTSCENE and
+     * a navigation aid has no business being on screen during one. The camera
+     * publishes `cinematicActive` on the service it registers, so this is a
+     * read of an existing contract rather than a new coupling. */
+    const director = this.ctx.tryGet(Services.Camera) as { cinematicActive?: boolean } | undefined;
+    const cine = director?.cinematicActive === true;
+
     // Everything that is not the map itself hides while the world is stopped —
     // the same rule the HUD follows, so the two never disagree on screen.
-    this.minimap.setVisible(!paused && this.hudVisible);
+    this.minimap.setVisible(!paused && this.hudVisible && !cine);
 
     this.world.sample(this.ctx, dt);
     this.syncWaypoint();
@@ -445,7 +458,7 @@ export class MinimapSystem implements System {
 
     const city = this.ctx.tryGet(Services.City);
     if (mapOpen) this.full.update(dt, this.data, this.world, this.router, city);
-    else if (!paused && this.hudVisible) {
+    else if (!paused && this.hudVisible && !cine) {
       this.minimap.update(dt, this.data, this.world, this.router, city, this.northUp);
     }
   }

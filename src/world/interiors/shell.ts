@@ -154,6 +154,61 @@ export function doorInside(s: ShellSpec, dist = 3.0): { x: number; z: number } {
 }
 
 /**
+ * WHERE TO PUT A PLAYER WHO HAS JUST WALKED IN — position AND facing.
+ *
+ * `doorInside(s, 2.6)` is the right answer for "a spot inside the threshold"
+ * and the WRONG answer for "spawn the player here", which is what it was being
+ * used for. Two things go wrong at 2.6 m:
+ *
+ *   — THE BOOM IS OUTSIDE. The chase camera sits five metres behind the man.
+ *     Dropped 2.6 m inside a doorway facing into the room, the camera is two
+ *     and a half metres OUTSIDE the building, hanging over the forecourt, and
+ *     the player is looking at the back of a wall. That is exactly the frame
+ *     the playtest caught in the broadcast studio (438 / 167.4, twenty metres
+ *     from the room centre, apparently over a void — it was not a void, it was
+ *     the camera outside the shell).
+ *   — NOBODY SETS THE FACING. `teleport(p, 0)` faces +Z whatever wall the door
+ *     is in, so a north door spawns you nose-first into it.
+ *
+ * So: stand back from the door by whatever the room can afford (never past its
+ * middle, never closer than 2.2 m), STEP OFF THE DOOR AXIS, keep a metre off
+ * every wall, and face the room rather than the street.
+ *
+ * The sideways step is the half of this that is easy to miss. Standing back
+ * from a door is not enough while you are standing ON ITS CENTRELINE: the boom
+ * then runs straight down the one line through the wall that has a hole in it,
+ * and the camera sails out through the doorway onto the street no matter how
+ * deep in the room the player is. Measured in the Builders House lobby, whose
+ * door is dead centre in the south wall: six and a half metres inside, the
+ * frame was still of the forecourt. One step to the side and the boom finds
+ * wall, which is what the camera's own collision probe is for.
+ */
+export function entryAnchor(s: ShellSpec): { x: number; z: number; yaw: number } {
+  const n = doorNormal(s.door);
+  const c = doorCentre(s);
+  const { hx, hz } = innerHalf(s);
+  // Depth available in front of the door, and how far in it is safe to stand.
+  const depth = n.x === 0 ? hz * 2 : hx * 2;
+  const inset = Math.min(6.5, Math.max(2.2, depth * 0.34));
+  // Sideways, far enough that a boom down the player's back misses the opening
+  // entirely. Toward the middle of the room, so it is never toward a corner.
+  const along = n.x === 0 ? hx : hz;
+  const centreOffset = n.x === 0 ? s.cx - c.x : s.cz - c.z;
+  const dir = centreOffset >= 0 ? 1 : -1;
+  const side = Math.min(s.door.width / 2 + 1.3, Math.max(0, along - 1.4));
+  const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
+  const x = n.x === 0 ? c.x + dir * side : c.x - n.x * inset;
+  const z = n.x === 0 ? c.z - n.z * inset : c.z + dir * side;
+  return {
+    x: clamp(x, s.cx - hx + 1.0, s.cx + hx - 1.0),
+    z: clamp(z, s.cz - hz + 1.0, s.cz + hz - 1.0),
+    // 0 rad faces +Z (the city's convention), so this looks along the inward
+    // normal of the door wall — into the room.
+    yaw: Math.atan2(-n.x, -n.z),
+  };
+}
+
+/**
  * Segments of a wall of length `len` (local coords, centred on 0) once the
  * doorway and its mullion have been taken out of it. Returned as [from, to]
  * pairs so both the collider and the drawn wall are cut identically.
@@ -403,8 +458,18 @@ export function drawShellRoom(
       const by = y0 + 1.1 + (k + 0.5) * (top / bands);
       // Warm and bright at the bottom, violet and dim toward the head.
       const g = gain * (1 - t * 0.72);
+      /*
+       * NOT A MIRROR. At metalness 0.88 / roughness 0.05 these panes are a
+       * polished chrome sheet, and the only thing there is to reflect indoors
+       * is `scene.environment` — the sky probe. A grazing view along a wall of
+       * them therefore rendered a clean horizon with sky above it, which reads
+       * as an OPEN ELEVATION: the "visible sky through a wall gap" the
+       * playtest reported in the studio was this, not a hole. Glass at a low
+       * metalness with a little roughness still catches the sunset through the
+       * door; it just stops pretending to be a window onto the skybox.
+       */
       b.box(px, by, pz, sx, top / bands - 0.02, sz, 0, {
-        color: tint, mr: [0.88, 0.05],
+        color: tint, mr: [0.45, 0.16],
         emissive: [
           (warm.r * (1 - t) + tint.r * t * 6) * g,
           (warm.g * (1 - t) * 0.66 + tint.g * t * 6) * g,
@@ -510,7 +575,9 @@ export function drawDoorReveal(b: DetailBuilder, s: ShellSpec, f: RoomFinish): v
   const frame = { color: lin(f.frame ?? 0x9aa2ab), mr: [0.72, 0.36] as [number, number] };
   const glass = {
     color: lin(0x11182b),
-    mr: [0.82, 0.1] as [number, number],
+    // See `glassPanel`: interior glass is deliberately NOT a mirror, or it
+    // renders the sky probe and reads as a hole in the wall.
+    mr: [0.4, 0.2] as [number, number],
     emissive: [0.012, 0.014, 0.03],
   };
   const alongX = n.x === 0;

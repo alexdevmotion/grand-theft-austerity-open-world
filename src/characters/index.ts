@@ -48,6 +48,7 @@ export {
   appearanceGeoKey,
   appearanceTexKey,
   buildAppearanceTextures,
+  slotSurface,
   SLOT,
   type Appearance,
   type AppearanceColors,

@@ -127,16 +127,29 @@ const HAIR = [
   0x14100c, 0x241a12, 0x35251a, 0x4a3220, 0x6b4a2c, 0x8a6a3e,
   0xb09257, 0x8e8e92, 0xb9b6b0, 0x5f5a58, 0x7a2c28, 0x53306e,
 ];
+/*
+ * A FLOOR UNDER EVERY GARMENT.
+ *
+ * Half of these entries used to sit between 0x12 and 0x23 per channel, which is
+ * 0.5-1.6% linear reflectance — below coal. A crowd painted out of that palette
+ * has no lit side at dusk, and the frames that showed it worst were the ones
+ * where the sun is behind the camera and everything SHOULD be readable.
+ *
+ * Nothing here goes under ~0x22 on its brightest channel any more (≈3% linear),
+ * which is the bottom of what real dyed cloth measures. The hues are unchanged;
+ * only the value floor moved, so the street is still a dark, cold, austere place
+ * — it just is not made of cut-outs.
+ */
 const TOP_COLORS = [
-  0xe9e6e0, 0xd8dce4, 0x2a2f3a, 0x171a20, 0x6d7d8c, 0x8f4a4a,
+  0xe9e6e0, 0xd8dce4, 0x343a47, 0x272a32, 0x6d7d8c, 0x8f4a4a,
   0x4b5f45, 0xc9b184, 0x3a4d6b, 0xa9a29a, 0x5a3a55, 0xbf6a3a,
 ];
 const OUTER_COLORS = [
-  0x1b1f2b, 0x121317, 0x2c2f36, 0x3a2b22, 0x3d4436, 0x2f4360,
-  0x4a2c38, 0x54504a, 0x22303f, 0x2a2230,
+  0x2b3142, 0x22242b, 0x353942, 0x453427, 0x3d4436, 0x2f4360,
+  0x54323f, 0x54504a, 0x2c3c4e, 0x342b3c,
 ];
-const LEG_COLORS = [0x232a38, 0x14161c, 0x2f3542, 0x3d3a33, 0x4a4e58, 0x2a2028, 0x38445c];
-const SHOE_COLORS = [0x14141a, 0x2a1d16, 0x3a3a40, 0xd8d4cc, 0x1f2630, 0x4a3226];
+const LEG_COLORS = [0x323a4b, 0x25272f, 0x2f3542, 0x3d3a33, 0x4a4e58, 0x362a34, 0x38445c];
+const SHOE_COLORS = [0x24242c, 0x33241b, 0x3a3a40, 0xd8d4cc, 0x2b333e, 0x4a3226];
 
 /* ------------------------------------------------------------------ */
 /* Rolling appearances                                                 */
@@ -398,14 +411,45 @@ export const HERO_APPEARANCE: Appearance = {
      * mismatch was doing at least as much of the damage. Held a little lighter
      * than the face on purpose: a neck genuinely is, because it spends its life
      * shaded by the jaw and gets less sun than a forehead. */
-    skin: 0x81644c,
+    skin: 0x8d6d53,
     hair: 0x2b2119,
-    top: 0x14151a,
-    outer: 0x1c2230,
-    legs: 0x1e2430,
-    shoes: 0x1a1512,
+    /* HE WAS A CUTOUT.
+     *
+     * Measured against the shipped build: backlit on the plaza at 19:24 his
+     * torso rendered at luma 15/255 while the pavement under him sat at 56 and
+     * a pedestrian in a nearly identical navy suit read at 40+. Replacing his
+     * material with plain 0.5 grey lit him perfectly, which rules the lighting
+     * rig out — the fault was entirely here.
+     *
+     * 0x1c2230 is 0.012/0.016/0.030 in linear reflectance. That is not "dark
+     * navy", it is the albedo of charcoal: one to three percent of the light
+     * that lands on it comes back, so no amount of sky fill can put form on it
+     * and he collapses to a silhouette the moment the sun is not square on his
+     * chest. Real dark denim measures 4-7%.
+     *
+     * BUT ALBEDO IS ONLY HALF OF IT, and it is the smaller half. The pedestrian
+     * he was losing to wears `OUTER_COLORS[0] = 0x1b1f2b` — the same colour to
+     * within a hair. What that pedestrian had and he did not was a SUIT, whose
+     * style sets roughness 0.66, against a jacket sitting on the 0.86 default.
+     * At 0.86 there is no specular lobe worth the name, so with the sun behind
+     * him the only light reaching the camera was diffuse off 1% albedo, which
+     * is nothing. Lower roughness on the garment styles below is the real fix;
+     * it buys a grazing rim off the sky and costs nothing in full sun.
+     *
+     * So these are held to ~1.35x the old values — 2.4x and 1.8x were both
+     * tried and both read as pale grey-blue in open sun, because the tone curve
+     * at this exposure is very compressive down here and a small change in
+     * albedo is a large change on screen. He is still the darkest figure on the
+     * street, which is what the reference frame wants. Do not move either the
+     * colours or the roughness without re-shooting BOTH the backlit and the
+     * sunlit plaza: either frame on its own will point you the wrong way.
+     */
+    top: 0x1d212b,
+    outer: 0x232a3c,
+    legs: 0x252b39,
+    shoes: 0x282219,
     accent: 0x7b3fd4,
-    detail: 0x2a2530,
+    detail: 0x2c2832,
   },
   face: HERO_FACE,
   // Just enough to catch the eye at dusk; any more and AgX burns the violet
@@ -589,7 +633,7 @@ function topStyle(a: Appearance): ColumnStyle {
     s.bands.push([0.04, 0.05, mix(c, 0x000000, 0.22), 0.5]);
     s.bands.push([0.46, 0.06, mix(c, 0x000000, 0.25), 0.45]);
     s.grain = 0.09;
-    s.roughness = 0.94;
+    s.roughness = 0.86;
   }
   if (a.top === 'poloShirt') s.bands.push([0.02, 0.03, mix(c, 0xffffff, 0.2), 0.4]);
   // sleeve cuff
@@ -611,7 +655,9 @@ function outerStyle(a: Appearance): ColumnStyle {
       break;
     case 'denimJacket':
       s.grain = 0.13;
-      s.roughness = 0.9;
+      // Denim is woven cotton, not chalk — see the sheen note in the default
+      // case below. 0.9 leaves it with no grazing highlight at all.
+      s.roughness = 0.80;
       s.bands.push([0.0, 0.035, mix(c, 0x000000, 0.28), 0.6]);
       s.bands.push([0.13, 0.012, mix(c, 0x000000, 0.4), 0.55]);
       s.bands.push([0.28, 0.010, mix(c, 0xffffff, 0.25), 0.3]);
@@ -636,19 +682,31 @@ function outerStyle(a: Appearance): ColumnStyle {
       for (let i = 0; i < 4; i++) s.bands.push([0.62 + i * 0.09, 0.012, mix(c, 0x000000, 0.42), 0.55]);
       break;
     case 'apron':
-      s.roughness = 0.9;
+      s.roughness = 0.80;
       s.bands.push([0.0, 0.02, mix(c, 0x000000, 0.4), 0.6]);
       s.bands.push([0.30, 0.02, mix(c, 0xffffff, 0.15), 0.3]);
       break;
     case 'coat':
     case 'longCoat':
       s.grain = 0.07;
-      s.roughness = 0.82;
+      s.roughness = 0.74;
       s.bands.push([0.0, 0.05, mix(c, 0x000000, 0.3), 0.5]);
       s.bands.push([0.35, 0.010, mix(c, 0x000000, 0.45), 0.5]);
       break;
     default:
+      /* SHEEN, NOT ALBEDO.
+       *
+       * A jacket at 0.86 roughness has no specular lobe worth the name, so with
+       * the sun behind him the only light reaching the camera was diffuse — and
+       * diffuse off 3% albedo is nothing, which is how the player ended up a
+       * black cut-out at dusk. Real coated cotton and denim are 0.65-0.75: they
+       * carry a broad grazing-angle sheen that puts a bright edge on a shoulder
+       * against a bright sky. That edge is what makes a figure sit IN a scene
+       * rather than on top of it, and unlike raising the albedo it costs nothing
+       * in full sun, where the value has to stay dark.
+       */
       s.grain = 0.06;
+      s.roughness = 0.70;
       s.bands.push([0.0, 0.035, mix(c, 0x000000, 0.3), 0.5]);
       s.bands.push([0.47, 0.04, mix(c, 0x000000, 0.25), 0.5]);
       break;
@@ -663,7 +721,9 @@ function legStyle(a: Appearance): ColumnStyle {
   s.bands.push([0.0, 0.045, mix(c, 0x000000, 0.3), 0.55]);
   if (a.legs === 'jeans' || a.legs === 'workTrousers') {
     s.grain = 0.12;
-    s.roughness = 0.92;
+    // Denim is not chalk: 0.92 left the legs with no grazing sheen at all, so
+    // they went flat black the moment the sun came round. See `outerStyle`.
+    s.roughness = 0.80;
     s.bands.push([0.06, 0.012, mix(c, 0xffffff, 0.2), 0.3]);
     s.bands.push([0.40, 0.06, mix(c, 0xffffff, 0.13), 0.35]);
     s.bands.push([0.78, 0.03, mix(c, 0x000000, 0.3), 0.5]);
@@ -703,18 +763,26 @@ function shoeStyle(a: Appearance): ColumnStyle {
 function skinStyle(a: Appearance): ColumnStyle {
   // v 0.30-0.50 forearm, 0.50-0.62 hand, 0.62-0.75 ankle/foot.
   const c = a.colors.skin;
-  const hand = mix(c, 0x6a4030, 0.16);
+  /* The hand band used to mix 16% toward a dark red-brown and then lay it down
+   * at 55% alpha, so a hand rendered a clear step DARKER than the forearm it
+   * belongs to. Hands are small, they are always in frame in third person, and
+   * they are the second thing after the face an eye checks a humanoid against —
+   * a dark patch there is read as a stump, which is exactly what happened. The
+   * back of a hand is in fact the most sun-exposed skin on a clothed body: it
+   * goes warmer and very slightly LIGHTER, never darker. */
+  const hand = mix(c, 0xc98a5e, 0.20);
   return {
     grain: 0.045,
     bands: [
       [0.0, 0.03, mix(c, 0x000000, 0.25), 0.35],
-      [0.50, 0.12, hand, 0.55],
-      [0.545, 0.008, mix(c, 0x000000, 0.35), 0.35],
-      [0.575, 0.008, mix(c, 0x000000, 0.30), 0.30],
+      [0.50, 0.12, hand, 0.45],
+      // knuckle creases — the only dark marks on a hand, and they are thin
+      [0.545, 0.006, mix(c, 0x000000, 0.30), 0.30],
+      [0.575, 0.006, mix(c, 0x000000, 0.26), 0.26],
       [0.62, 0.05, mix(c, 0x000000, 0.18), 0.28],
     ],
-    shadeTop: 1.04,
-    shadeBottom: 0.86,
+    shadeTop: 1.06,
+    shadeBottom: 0.90,
     roughness: 0.62,
     metalness: 0.0,
   };
@@ -796,6 +864,38 @@ function paintColumn(
   }
 }
 
+/**
+ * The roughness/metalness this look will paint into the MRA atlas, per slot.
+ *
+ * Split out of `buildAppearanceTextures` so the surface response can be
+ * asserted without a canvas — see `body.test.ts`. It matters: the player read
+ * as a black cut-out at dusk mostly because his jacket sat on the 0.86 default
+ * roughness and therefore had no grazing sheen at all, and that is invisible in
+ * a colour palette and invisible in a screenshot taken with the sun in front.
+ */
+export function slotSurface(a: Appearance): Map<SlotId, { roughness: number; metalness: number }> {
+  const styles = slotStyles(a);
+  const out = new Map<SlotId, { roughness: number; metalness: number }>();
+  for (let s = 0; s < SLOT_COUNT; s++) {
+    const st = styles[s];
+    out.set(s as SlotId, { roughness: st.roughness, metalness: st.metalness });
+  }
+  return out;
+}
+
+function slotStyles(a: Appearance): Record<number, ColumnStyle> {
+  return {
+    [SLOT.SKIN]: skinStyle(a),
+    [SLOT.HAIR]: hairStyle(a),
+    [SLOT.TOP]: topStyle(a),
+    [SLOT.OUTER]: outerStyle(a),
+    [SLOT.LEGS]: legStyle(a),
+    [SLOT.SHOES]: shoeStyle(a),
+    [SLOT.ACCENT]: accentStyle(a),
+    [SLOT.DETAIL]: detailStyle(a),
+  };
+}
+
 export interface AppearanceTextures {
   map: THREE.CanvasTexture;
   mra: THREE.CanvasTexture;
@@ -816,16 +916,7 @@ export function buildAppearanceTextures(a: Appearance): AppearanceTextures {
   const rng = new Rng(a.texSeed ^ 0x51ed27);
   const { c, g } = makeCanvas(ATLAS_SIZE, ATLAS_SIZE);
 
-  const styles: Record<number, ColumnStyle> = {
-    [SLOT.SKIN]: skinStyle(a),
-    [SLOT.HAIR]: hairStyle(a),
-    [SLOT.TOP]: topStyle(a),
-    [SLOT.OUTER]: outerStyle(a),
-    [SLOT.LEGS]: legStyle(a),
-    [SLOT.SHOES]: shoeStyle(a),
-    [SLOT.ACCENT]: accentStyle(a),
-    [SLOT.DETAIL]: detailStyle(a),
-  };
+  const styles = slotStyles(a);
   const bases: Record<number, number> = {
     [SLOT.SKIN]: a.colors.skin,
     [SLOT.HAIR]: a.colors.hair,

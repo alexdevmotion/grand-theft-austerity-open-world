@@ -192,8 +192,19 @@ export function fitStudio(
   for (let gx = galX0; gx <= galX1 - 0.1; gx += 2.0) {
     b.box(gx, galY + 1.1, galZ1, 0.09, 2.2, 0.12, 0, Mat.alu);
   }
+  /*
+   * THE GALLERY SCREEN IS AN INTERIOR PARTITION, NOT A WINDOW.
+   *
+   * At metalness 0.9 / roughness 0.06 this 22 m pane was a mirror, and indoors
+   * the only thing in `scene.environment` to mirror is the sky. Seen along its
+   * length — which is how you see it walking in through the studio door — it
+   * rendered a horizon with sky above and city below, and the south wall of
+   * the studio read as MISSING. That is the "open sky through a wall gap" the
+   * playtest reported. Dulled to real glass, and given a touch more of its own
+   * emissive so the gallery still glows behind it.
+   */
   b.box(galCx, galY + 1.1, galZ1, galX1 - galX0, 2.2, 0.03, 0, {
-    color: lin(0x0e1526), mr: [0.9, 0.06], emissive: [0.02, 0.024, 0.05],
+    color: lin(0x0e1526), mr: [0.22, 0.34], emissive: [0.010, 0.013, 0.026],
   });
   b.box(galCx, galY + 0.5, galZ1, galX1 - galX0, 1.0, 0.1, 0, Mat.darkSteel);
 

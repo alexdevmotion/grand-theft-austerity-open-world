@@ -36,6 +36,59 @@ const FLOOR_MARGIN = 0.42;
 const FLOOR_PROBE_UP = 3.0;
 const FLOOR_PROBE_LENGTH = 24.0;
 
+/**
+ * Gap the lens keeps off any surface the boom ran into. Smaller than the floor
+ * margin because a wall is only ever approached along the boom, never fallen
+ * onto.
+ */
+const WALL_SKIN = 0.34;
+
+/**
+ * THE ESCAPE FAN — where the rig looks for a new vantage when the boom is
+ * blocked shorter than the mode's comfortable radius. `[yaw, pitch]` offsets in
+ * radians, applied to the rig's current orbit.
+ *
+ * Ordered so the CHEAPEST-LOOKING recovery is tried first. Climbing keeps the
+ * shot pointing the same way and reads as the operator lifting the camera over
+ * a parked van; swinging round the side is a bigger move and is only worth it
+ * when there is no headroom either. The last entry is very nearly overhead and
+ * exists so an alley with a roof still has an answer.
+ */
+const ESCAPE_FAN: ReadonlyArray<readonly [number, number]> = [
+  [0, 0.26], [0, 0.52], [0, 0.82],
+  [0.55, 0.22], [-0.55, 0.22],
+  [0.95, 0.38], [-0.95, 0.38],
+  [1.55, 0.52], [-1.55, 0.52],
+  [0, 1.18],
+];
+
+/**
+ * LAST-RESORT CUTAWAY.
+ *
+ * When geometry still crosses the eye-line after the boom has been solved — a
+ * bollard, a sign, an advertising kiosk, the corner of a shopfront the car has
+ * wedged itself against — the camera's own near plane is walked out past the
+ * occluder's far face, so the thing between the lens and the subject stops
+ * being drawn at all. It is a fade in the only sense the camera department can
+ * deliver on its own: the occluder is dissolved out of the frame, the subject
+ * is not.
+ *
+ * WHY IT IS SAFE HERE AND NOT IN GENERAL: a chase camera looks nearly
+ * horizontally, so the ground first enters the frustum ten-odd metres ahead;
+ * pushing `near` to a few metres removes the kiosk and touches nothing else.
+ * It is capped both absolutely and by the subject's own keep-clear radius so a
+ * cut can never eat the car it is trying to reveal.
+ */
+const MAX_CUTAWAY = 5.0;
+
+/**
+ * Multiples of the mode's comfortable radius tried, in order, when the SUBJECT
+ * is buried and the camera has to guess its way to open air. Four steps is
+ * enough to clear a facade and a pavement colonnade; beyond that the shot is
+ * so far off the car that the cut would be worse than the wall.
+ */
+const BURIED_RANGES = [1.0, 1.7, 2.5, 3.4] as const;
+
 /* ================================================================== *
  * DIRECTION — the public surface other systems drive story beats with.
  * ================================================================== */
@@ -319,20 +372,28 @@ export class CameraSystem implements System, CameraDirector {
   /**
    * Per-mode rig.
    *
-   * `minRadius` is the *comfortable* boom length: below it the rig starts
-   * climbing rather than closing further, which is how a chase camera gets out
-   * of an alley without ending up in the boot.
-   * `hardMin` is the absolute floor — the radius at which the camera would be
-   * inside the subject — and nothing is ever allowed to go under it.
-   * `squeezeLift` is how far the rig climbs when squeezed all the way down.
+   * `minRadius` is the *comfortable* boom length: a direction that cannot hold
+   * it is abandoned in favour of one that can (see `escapeSqueeze`), which is
+   * how a chase camera gets out of an alley without ending up in the boot.
+   * `hardMin` is the radius at which the camera would be inside the subject —
+   * but note it is a floor on the SUBJECT, never on a wall: a surface nearer
+   * than `hardMin` shortens the boom below it rather than being tunnelled.
    */
-  private rigs = {
-    thirdPerson: { distance: 4.4, height: 1.72, shoulder: 0.55, fov: 58, minRadius: 1.55, hardMin: 0.95, squeezeLift: 0.55 },
-    vehicle: { distance: 6.6, height: 2.45, shoulder: 0, fov: 60, minRadius: 3.4, hardMin: 1.9, squeezeLift: 1.9 },
-    aim: { distance: 1.9, height: 1.62, shoulder: 0.78, fov: 44, minRadius: 0.95, hardMin: 0.7, squeezeLift: 0.25 },
-    cinematic: { distance: 7.0, height: 2.4, shoulder: 0, fov: 50, minRadius: 2.0, hardMin: 1.2, squeezeLift: 0.9 },
-    photo: { distance: 5.0, height: 2.0, shoulder: 0, fov: 55, minRadius: 0.6, hardMin: 0.4, squeezeLift: 0.2 },
+  private rigs: Record<CameraService['mode'], Rig> = {
+    thirdPerson: { distance: 4.4, height: 1.72, shoulder: 0.55, fov: 58, minRadius: 1.55, hardMin: 0.95, keepClear: 1.2 },
+    vehicle: { distance: 6.6, height: 2.45, shoulder: 0, fov: 60, minRadius: 3.4, hardMin: 1.9, keepClear: 2.9 },
+    aim: { distance: 1.9, height: 1.62, shoulder: 0.78, fov: 44, minRadius: 0.95, hardMin: 0.7, keepClear: 0.9 },
+    cinematic: { distance: 7.0, height: 2.4, shoulder: 0, fov: 50, minRadius: 2.0, hardMin: 1.2, keepClear: 2.0 },
+    photo: { distance: 5.0, height: 2.0, shoulder: 0, fov: 55, minRadius: 0.6, hardMin: 0.4, keepClear: 0.6 },
   };
+
+  /* ---- occlusion recovery ---- */
+  /** `camera.near` as the engine built it. Everything returns to this. */
+  private baseNear = 0.15;
+  /** Smoothed near plane while the cutaway is dissolving an occluder. */
+  private cutNear = 0.15;
+  /** Which entry of `ESCAPE_FAN` worked last frame; tried first, for stability. */
+  private lastEscape = -1;
 
   /* ---- direction ---- */
   private shot: ActiveShot | null = null;
@@ -364,6 +425,8 @@ export class CameraSystem implements System, CameraDirector {
     this.city = ctx.tryGet(Services.City);
     ctx.provide(Services.Camera, this);
     this.currentPos.copy(ctx.camera.position);
+    this.baseNear = ctx.camera.near;
+    this.cutNear = this.baseNear;
 
     // Never grab the pointer back while a menu is up — the pause screen has to
     // be usable with a visible cursor.
@@ -450,11 +513,18 @@ export class CameraSystem implements System, CameraDirector {
     // gameplay rig underneath — the spring would keep integrating toward the
     // player and snap the frame the instant control came back — so both
     // re-seed the spring state from wherever they finished.
+    // The cutaway belongs to the gameplay rig. A framed shot picks a spot with
+    // a clear eye-line by construction, and photo mode is the player's own
+    // composition — neither may have its near plane quietly moved.
     if (this.photo) {
+      this.restoreNear(ctx);
       this.updatePhoto(dt, ctx);
       return;
     }
-    if (this.shot && this.updateShot(dt, ctx)) return;
+    if (this.shot) {
+      this.restoreNear(ctx);
+      if (this.updateShot(dt, ctx)) return;
+    }
 
     const player = ctx.tryGet(Services.Player);
     if (!player) return;
@@ -532,47 +602,8 @@ export class CameraSystem implements System, CameraDirector {
     // otherwise the spring chases an underground target every frame.
     this.clampToFloor(this._desired);
 
-    // Collision: pull the camera in if a wall is between it and the pivot.
-    const toCam = this._tmp.subVectors(this._desired, this._pivot);
-    const dist = toCam.length();
-    if (dist > 0.001) {
-      toCam.divideScalar(dist);
-      const hit = this.phys.raycast(
-        this._pivot,
-        toCam,
-        dist + 0.4,
-        probeGroups(CG.STATIC | CG.TERRAIN),
-      );
-      if (hit && !this.isThinObstacle(hit.distance, dist, toCam)) {
-        const pulled = Math.max(rig.hardMin, hit.distance - 0.35);
-        if (pulled < dist) {
-          this._desired.copy(this._pivot).addScaledVector(toCam, pulled);
-          // Squeezed shorter than the comfortable boom: climb instead of
-          // burrowing. Clamping the boom at `minRadius` and stopping there is
-          // what parks the camera inside a shopfront when a car noses into a
-          // building — the wall is closer than the rig wants to be, so the
-          // only way out is up and over.
-          const span = Math.max(0.001, rig.minRadius - rig.hardMin);
-          const squeeze = THREE.MathUtils.clamp((rig.minRadius - pulled) / span, 0, 1);
-          if (squeeze > 0) {
-            this._desired.y += squeeze * rig.squeezeLift;
-            // The lift must not tunnel through a ceiling either.
-            const liftLen = this._tmp2.subVectors(this._desired, this._pivot).length();
-            this._tmp2.divideScalar(Math.max(1e-4, liftLen));
-            const up = this.phys.raycast(
-              this._pivot,
-              this._tmp2,
-              liftLen,
-              probeGroups(CG.STATIC | CG.TERRAIN),
-            );
-            if (up) {
-              this._desired.copy(this._pivot)
-                .addScaledVector(this._tmp2, Math.max(rig.hardMin, up.distance - 0.25));
-            }
-          }
-        }
-      }
-    }
+    // Collision.
+    this.solveBoom(rig, orbit);
 
     // Spring follow — snappier in vehicles so the car never outruns the frame.
     const follow = veh ? 12 + Math.min(1, Math.abs(speed) / 24) * 8 : 11;
@@ -591,6 +622,11 @@ export class CameraSystem implements System, CameraDirector {
     this.clampToFloor(this.currentPos);
     // ...and never inside the subject, whatever the clamp did to the boom.
     this.ejectFromSubject(this.currentPos, this._pivot, rig.hardMin);
+    // ...and never inside the WORLD. The spring interpolates through space, so
+    // a solve that is clear at both ends can still put a frame in the middle
+    // of a wall; this is the check that makes "no frame is ever rendered from
+    // inside geometry" true of the RENDERED position and not just the target.
+    this.evictFromSolid(this.currentPos, rig);
 
     ctx.camera.position.copy(this.currentPos);
 
@@ -604,6 +640,7 @@ export class CameraSystem implements System, CameraDirector {
       if (this.shakeTime <= 0) this.shakeAmount = 0;
       // Shake must not be able to punch through the pavement either.
       this.clampToFloor(ctx.camera.position);
+      this.evictFromSolid(ctx.camera.position, rig);
     }
 
     ctx.camera.lookAt(this.currentLook);
@@ -611,8 +648,12 @@ export class CameraSystem implements System, CameraDirector {
     // Speed FOV, with a kick under hard acceleration.
     const targetFov = fov + (veh ? THREE.MathUtils.clamp(this.accel * 0.35, -3, 5) : 0);
     this.currentFov += (targetFov - this.currentFov) * (1 - Math.exp(-4 * dt));
-    if (Math.abs(ctx.camera.fov - this.currentFov) > 0.01) {
+    // Whatever is STILL between the lens and the subject gets cut away.
+    const near = this.solveCutaway(dt, ctx.camera.position, rig);
+    if (Math.abs(ctx.camera.fov - this.currentFov) > 0.01
+      || Math.abs(ctx.camera.near - near) > 1e-3) {
       ctx.camera.fov = this.currentFov;
+      ctx.camera.near = near;
       ctx.camera.updateProjectionMatrix();
     }
   }
@@ -707,6 +748,260 @@ export class CameraSystem implements System, CameraDirector {
   }
 
   /* ------------------------------------------------------------------ */
+  /* Occlusion                                                           */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * SOLVE THE BOOM AGAINST THE WORLD. Reads and rewrites `this._desired`.
+   *
+   * THE BUG THIS REPLACES. The old solve was one line:
+   *
+   *     const pulled = Math.max(rig.hardMin, hit.distance - 0.35);
+   *
+   * `hardMin` is the radius below which the camera would be inside the *car*,
+   * so the intent was "never closer than this". But applied as a floor on a
+   * distance that came from a WALL, it says the opposite of what it means: when
+   * the wall is nearer than `hardMin` — a car wedged nose-first into a
+   * shopfront, reversed into a kiosk, spun against a plinth — the boom is
+   * lengthened back out to `hardMin` and the lens is placed THROUGH the surface
+   * the ray just found. That is exactly the wedged-car case in the playtest:
+   * 26-race is a camera 0.7 m inside a facade, and the squeeze-lift then raises
+   * it 1.9 m — still inside, because the facade is fifteen metres tall. The
+   * lift can only ever help when the obstruction has a top within reach, and a
+   * building does not.
+   *
+   * So a blocked direction is now simply UNAVAILABLE. If the ideal direction
+   * cannot hold the comfortable boom, the rig looks for a direction that can —
+   * up first, then round the sides — and only accepts a short boom on a
+   * direction that is genuinely clear. There is no code path left that places
+   * the camera further along a ray than the first thing the ray hit.
+   */
+  private solveBoom(rig: Rig, orbit: number): void {
+    const toCam = this._tmp.subVectors(this._desired, this._pivot);
+    const dist = toCam.length();
+    if (dist <= 0.001) return;
+    toCam.divideScalar(dist);
+
+    // Thin street furniture is deliberately ignored here (a lamp post must not
+    // slam the boom shut on a lamp-lined boulevard); the cutaway below is what
+    // stops the ignored pole from then standing in front of the car.
+    const hit = this.phys.raycast(this._pivot, toCam, dist + 0.4, probeGroups(CG.STATIC | CG.TERRAIN));
+    if (!hit || this.isThinObstacle(hit.distance, dist, toCam)) {
+      this.lastEscape = -1;
+      return;
+    }
+
+    const reach = hit.distance - WALL_SKIN;
+    if (reach >= dist) {
+      this.lastEscape = -1;
+      return;
+    }
+    if (reach >= rig.minRadius) {
+      // Comfortable. Pull straight in; this is the ordinary "wall behind you".
+      this._desired.copy(this._pivot).addScaledVector(toCam, reach);
+      this.lastEscape = -1;
+      return;
+    }
+
+    this.escapeSqueeze(rig, orbit, dist, reach);
+  }
+
+  /**
+   * The ideal direction cannot hold the boom. Fan out for one that can.
+   *
+   * Costs at most `ESCAPE_FAN.length + 1` rays and ONLY runs on the frames
+   * where the rig is genuinely trapped — a normal chase down a boulevard never
+   * enters this function at all. Last frame's winner is retried first so the
+   * rig does not hunt between two equally good escapes.
+   */
+  private escapeSqueeze(rig: Rig, orbit: number, want: number, straightReach: number): void {
+    let bestReach = straightReach;
+    let bestIdx = -2; // -2 = "keep the blocked direction", the fallback of last resort
+    const order = this.lastEscape >= 0
+      ? [this.lastEscape, ...ESCAPE_FAN.keys()]
+      : [...ESCAPE_FAN.keys()];
+
+    for (const i of order) {
+      const [dyaw, dpitch] = ESCAPE_FAN[i];
+      const pitch = THREE.MathUtils.clamp(this.pitch + dpitch, -0.72, 1.42);
+      const az = orbit + dyaw + Math.PI;
+      const cosP = Math.cos(pitch);
+      this._tmp2.set(Math.sin(az) * cosP, Math.sin(pitch), Math.cos(az) * cosP);
+      const hit = this.phys.raycast(this._pivot, this._tmp2, want + 0.4, probeGroups(CG.STATIC | CG.TERRAIN));
+      const reach = hit ? hit.distance - WALL_SKIN : want;
+      if (reach > bestReach) {
+        bestReach = reach;
+        bestIdx = i;
+      }
+      // Good enough to stop looking: a clear direction that holds the mode's
+      // comfortable radius is all the rig ever wanted.
+      if (reach >= rig.minRadius) break;
+    }
+
+    if (bestIdx >= 0) {
+      const [dyaw, dpitch] = ESCAPE_FAN[bestIdx];
+      const pitch = THREE.MathUtils.clamp(this.pitch + dpitch, -0.72, 1.42);
+      const az = orbit + dyaw + Math.PI;
+      const cosP = Math.cos(pitch);
+      this._tmp2.set(Math.sin(az) * cosP, Math.sin(pitch), Math.cos(az) * cosP);
+      this._desired.copy(this._pivot)
+        .addScaledVector(this._tmp2, Math.min(want, Math.max(rig.hardMin, bestReach)));
+      this.lastEscape = bestIdx;
+      this.clampToFloor(this._desired);
+      return;
+    }
+
+    // Nothing in the fan beat the blocked direction: the rig is in a box. Take
+    // whatever clearance straight up allows — the one direction a wedged car
+    // in a street always has — and accept a very short boom rather than a
+    // buried one.
+    this.lastEscape = -1;
+    const up = this.phys.raycast(this._pivot, CameraSystem.UP, want, probeGroups(CG.STATIC | CG.TERRAIN));
+    const upReach = (up ? up.distance - WALL_SKIN : want);
+    if (upReach > Math.max(bestReach, rig.hardMin)) {
+      this._desired.copy(this._pivot).addScaledVector(CameraSystem.UP, Math.min(want, upReach));
+      return;
+    }
+    this._desired.copy(this._pivot).addScaledVector(this._tmp, Math.max(0.25, bestReach));
+  }
+
+  /**
+   * True when `p` is inside a solid.
+   *
+   * Rapier's `castRayAndGetNormal` is called with `solid = true`, which means a
+   * ray whose origin is inside a shape reports a time-of-impact of zero. One
+   * ray of near-zero length is therefore a complete point-in-solid test, and it
+   * is the only reliable one available — a "is there something very close"
+   * query cannot tell inside from just-outside.
+   */
+  private isInsideSolid(p: THREE.Vector3): boolean {
+    const hit = this.phys.raycast(p, CameraSystem.UP, 0.02, probeGroups(CG.STATIC | CG.TERRAIN));
+    return hit !== null && hit.distance <= 1e-4;
+  }
+
+  /**
+   * If the rendered position ended up buried, put it back on the near side of
+   * whatever buried it. Costs one ray on every frame that is already fine.
+   */
+  private evictFromSolid(p: THREE.Vector3, rig: Rig): void {
+    if (!this.isInsideSolid(p)) return;
+
+    // Walk back along the eye-line: the first surface between the pivot and
+    // here is the one we are behind.
+    this._tmp.subVectors(p, this._pivot);
+    const len = this._tmp.length();
+    if (len > 1e-3) {
+      this._tmp.divideScalar(len);
+      const hit = this.phys.raycast(this._pivot, this._tmp, len, probeGroups(CG.STATIC | CG.TERRAIN));
+      const reach = hit ? hit.distance - WALL_SKIN : 0;
+      if (reach >= rig.hardMin * 0.6) {
+        p.copy(this._pivot).addScaledVector(this._tmp, reach);
+        this.clampToFloor(p);
+        if (!this.isInsideSolid(p)) return;
+      }
+    }
+
+    /* THE SUBJECT ITSELF IS BURIED.
+     *
+     * This is the wedged car — 26-race — and it is the case every ray-from-the-
+     * pivot technique in this file silently fails at. Rapier is queried with
+     * `solid = true`, so a ray whose ORIGIN is inside a collider reports a
+     * time-of-impact of ZERO: with the car half-through a facade, every probe
+     * comes back "blocked at 0 m", the boom collapses, and the camera is parked
+     * inside the wall with the subject. Measuring the way out from the inside
+     * is not possible; the only thing that works is to guess a point and ask
+     * whether that point is free.
+     *
+     * So: walk the escape fan outward and take the first candidate that is
+     * genuinely in open air. The wall is then between the lens and the car,
+     * which is exactly what the cutaway exists to dissolve — a camera outside
+     * the building looking through a hole in it beats a camera inside the
+     * building looking at masonry.
+     */
+    for (const d of BURIED_RANGES) {
+      const reach = rig.minRadius * d;
+      // Straight up first: in a street it is nearly always the shortest way to
+      // open air, and it keeps the framing pointing where it already pointed.
+      this._tmp2.copy(CameraSystem.UP);
+      if (this.freeAt(p, reach)) return;
+      for (const [dyaw, dpitch] of ESCAPE_FAN) {
+        const pitch = THREE.MathUtils.clamp(this.pitch + dpitch, -0.72, 1.42);
+        const az = this.yaw + dyaw + Math.PI;
+        const cosP = Math.cos(pitch);
+        this._tmp2.set(Math.sin(az) * cosP, Math.sin(pitch), Math.cos(az) * cosP);
+        if (this.freeAt(p, reach)) return;
+      }
+    }
+
+    // Nothing within reach is open air at all. Rise as far as the world allows
+    // and let the cutaway do what it can.
+    const up = this.phys.raycast(this._pivot, CameraSystem.UP, 30, probeGroups(CG.STATIC | CG.TERRAIN));
+    const rise = Math.min(rig.minRadius * 1.8, up ? Math.max(0.5, up.distance - WALL_SKIN) : rig.minRadius * 1.8);
+    p.copy(this._pivot).addScaledVector(CameraSystem.UP, rise);
+  }
+
+  /** Write `pivot + _tmp2 * reach` into `p` if that point is open air. */
+  private freeAt(p: THREE.Vector3, reach: number): boolean {
+    this._probe.copy(this._pivot).addScaledVector(this._tmp2, reach);
+    if (this._probe.y < 0.4) return false;
+    if (this.isInsideSolid(this._probe)) return false;
+    p.copy(this._probe);
+    this.clampToFloor(p);
+    return !this.isInsideSolid(p);
+  }
+
+  /**
+   * How far out the near plane has to go to dissolve whatever is still
+   * standing between the lens and the subject. Returns the near plane to use.
+   */
+  private solveCutaway(dt: number, cam: THREE.Vector3, rig: Rig): number {
+    let want = this.baseNear;
+
+    this._tmp.subVectors(cam, this._pivot);
+    const len = this._tmp.length();
+    // Below the keep-clear radius there is no room for a cut that would not
+    // also eat the subject, so do not try.
+    if (len > rig.keepClear + 0.3) {
+      this._tmp.divideScalar(len);
+      const hit = this.phys.raycast(
+        this._pivot,
+        this._tmp,
+        len - 0.15,
+        probeGroups(CG.STATIC | CG.TERRAIN),
+      );
+      if (hit) {
+        // `hit.distance` is measured from the pivot, so the occluder's far face
+        // — the one the lens sees — is this far in front of the lens.
+        const cut = len - hit.distance + 0.12;
+        // A hit at zero means the ray started inside a collider: the SUBJECT is
+        // buried, not merely hidden. Its own keep-clear radius is then
+        // protecting a car that is inside a wall, so it is relaxed — a glimpse
+        // of the bonnet through a hole in the facade is the best shot
+        // available, and it is a great deal better than the facade.
+        const keep = hit.distance <= 1e-4 ? Math.min(rig.keepClear, 1.1) : rig.keepClear;
+        const ceiling = hit.distance <= 1e-4 ? MAX_CUTAWAY * 1.6 : MAX_CUTAWAY;
+        want = THREE.MathUtils.clamp(cut, this.baseNear, Math.min(ceiling, len - keep));
+      }
+    }
+
+    // Snap on, ease off: an occluder appearing must be gone this frame, but the
+    // world coming back has to bloom in rather than pop.
+    const lambda = want > this.cutNear ? 30 : 6;
+    this.cutNear += (want - this.cutNear) * (1 - Math.exp(-lambda * dt));
+    if (this.cutNear < this.baseNear + 0.004) this.cutNear = this.baseNear;
+    return this.cutNear;
+  }
+
+  /** Put the near plane back where the engine had it. */
+  private restoreNear(ctx: GameContext): void {
+    this.cutNear = this.baseNear;
+    if (Math.abs(ctx.camera.near - this.baseNear) > 1e-3) {
+      ctx.camera.near = this.baseNear;
+      ctx.camera.updateProjectionMatrix();
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
   /* Floor / subject clamps                                              */
   /* ------------------------------------------------------------------ */
 
@@ -776,6 +1071,12 @@ export class CameraSystem implements System, CameraDirector {
    * subject than `minRadius`. Without this the floor clamp can shorten the
    * boom until the camera is inside the player's own head, and a wall behind
    * the car can do the same in a tight alley.
+   *
+   * The push is itself collision-tested. Ejecting blindly is the same mistake
+   * `solveBoom` used to make one level up: "get away from the car" and "get
+   * into the wall behind the car" are the same move, and the wall wins on
+   * screen. When there is not enough room to eject, the camera stays close and
+   * the cutaway deals with the result.
    */
   private ejectFromSubject(p: THREE.Vector3, pivot: THREE.Vector3, minRadius: number): void {
     this._tmp.subVectors(p, pivot);
@@ -787,7 +1088,10 @@ export class CameraSystem implements System, CameraDirector {
     } else {
       this._tmp.divideScalar(d);
     }
-    p.copy(pivot).addScaledVector(this._tmp, minRadius);
+    const hit = this.phys.raycast(pivot, this._tmp, minRadius + 0.4, probeGroups(CG.STATIC | CG.TERRAIN));
+    const reach = hit ? Math.min(minRadius, hit.distance - WALL_SKIN) : minRadius;
+    if (reach <= d) return;
+    p.copy(pivot).addScaledVector(this._tmp, reach);
     this.clampToFloor(p);
   }
 
@@ -1409,6 +1713,53 @@ export class CameraSystem implements System, CameraDirector {
           }
           : null,
       }),
+      /**
+       * THE OCCLUSION INVARIANT, MEASURED.
+       *
+       * "No frame is ever rendered from inside geometry" is not something four
+       * screenshots can establish — the failure is intermittent and depends on
+       * where a car happens to wedge. This reports the rendered camera's actual
+       * relationship to the world every frame it is asked, so a harness can
+       * sweep hundreds of yaw angles at dozens of positions and count.
+       *
+       *  `inside`  — the lens is buried. Must never be true.
+       *  `blocked` — something crosses the eye-line to the subject. Allowed,
+       *              but only while `cut` is large enough to have removed it.
+       */
+      probe: () => {
+        const p = this.ctx.camera.position;
+        this._tmp.subVectors(p, this._pivot);
+        const len = this._tmp.length();
+        let blockedAt = -1;
+        if (len > 1e-3) {
+          this._tmp.divideScalar(len);
+          const hit = this.phys.raycast(this._pivot, this._tmp, len - 0.15, probeGroups(CG.STATIC | CG.TERRAIN));
+          if (hit) blockedAt = len - hit.distance;
+        }
+        return {
+          mode: this._mode,
+          inside: this.isInsideSolid(p),
+          /** The SUBJECT is buried. No camera solve can be clean; only cut. */
+          pivotInside: this.isInsideSolid(this._pivot),
+          boom: Math.round(len * 100) / 100,
+          near: Math.round(this.ctx.camera.near * 1000) / 1000,
+          cut: Math.round((this.cutNear - this.baseNear) * 1000) / 1000,
+          /** Metres in front of the lens the occluder's far face sits, or -1. */
+          blocked: Math.round(blockedAt * 100) / 100,
+          /** True when something is in the way that the cutaway has NOT removed. */
+          occluded: blockedAt > 0 && this.ctx.camera.near < blockedAt - 0.02,
+          cinematic: this.shot !== null,
+          photo: this.photo !== null,
+          /**
+           * `DebugApi.setCamera` overrides the rendered position from a
+           * lateUpdate this system never sees, so every number above then
+           * describes a camera the rig is not driving. A sweep that does not
+           * skip these frames reports nonsense — a 495 m boom "occluded" by a
+           * building 432 m away — and would be read as a camera bug.
+           */
+          scripted: p.distanceTo(this.currentPos) > 0.75,
+        };
+      },
       /** Named story beats: 'start:act1_evacuare', 'act3_termsheet', 'busted'… */
       shot: (key: string) => this.climax(key),
       shots: () => ({ start: Object.keys(START_SHOTS), climax: Object.keys(CLIMAX_SHOTS) }),
@@ -1453,6 +1804,24 @@ export class CameraSystem implements System, CameraDirector {
 /* ------------------------------------------------------------------ */
 /* Internal shapes                                                     */
 /* ------------------------------------------------------------------ */
+
+/** Per-mode boom geometry. See `CameraSystem.rigs`. */
+interface Rig {
+  distance: number;
+  height: number;
+  shoulder: number;
+  fov: number;
+  /** Comfortable boom length; below this the rig starts looking for a way out. */
+  minRadius: number;
+  /** Absolute floor — the radius at which the lens is inside the subject. */
+  hardMin: number;
+  /**
+   * Radius around the pivot the cutaway must never clip into. A car is nearly
+   * three metres from its centre to its boot lid; cutting to the pivot would
+   * take the back half of the thing the cut exists to reveal.
+   */
+  keepClear: number;
+}
 
 interface ActiveShot {
   spec: CinematicShot;
@@ -1517,9 +1886,19 @@ const CINE_CSS = `
 .gta-cine-bar.top{top:0;}
 .gta-cine-bar.bottom{bottom:0;}
 .gta-cine.on .gta-cine-bar{height:10.5%;}
-.gta-cine-card{position:absolute;left:5.2%;bottom:14%;opacity:0;transform:translateY(10px);
+/* THE LOWER THIRD CLEARS THE MINIMAP.
+   Bottom-left is the classic place for an act card and it is also exactly
+   where the minimap lives (26 px in, 214 px wide, ~235 px tall) — 22-cine has
+   "ACTUL II / Bootstrap" written across the widget with streets showing
+   through the letters. max() rather than a flat percentage because the
+   minimap's width is in PIXELS: 5.2% clears it at 1600 wide and lands right
+   on top of it at 1024. MinimapSystem also fades the widget out for the
+   duration of a shot; this rule is what keeps the card legible on the frames
+   either side of that transition, and if the minimap is not registered at
+   all. */
+.gta-cine-card{position:absolute;left:max(5.2%,272px);bottom:15%;opacity:0;transform:translateY(10px);
   transition:opacity .5s ease,transform .5s cubic-bezier(.16,.84,.3,1);
-  font-family:Inter,system-ui,sans-serif;text-shadow:0 2px 18px rgba(0,0,0,.85);max-width:64%;}
+  font-family:Inter,system-ui,sans-serif;text-shadow:0 2px 18px rgba(0,0,0,.85);max-width:56%;}
 .gta-cine-card.on{opacity:1;transform:translateY(0);}
 .gta-cine-card .t{font-weight:900;font-size:40px;line-height:1.02;letter-spacing:.09em;
   color:#fff;text-transform:uppercase;}

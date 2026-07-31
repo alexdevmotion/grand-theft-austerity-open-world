@@ -527,9 +527,24 @@ export class DetailBuilder {
       this.push(ax + nx * r, ay + ny * r, az + nz * r, nx, ny, nz, o);
       this.push(bx + nx * r, by + ny * r, bz + nz * r, nx, ny, nz, o);
     }
+    /*
+     * WINDING. This walks the ring pair the OPPOSITE way round to `cyl`,
+     * because the (t, s) frame it builds turns the other way: for a vertical
+     * axis `cyl` steps +x -> +z while this steps -z -> -x. Emitting `cyl`'s
+     * index order on top of that produced triangles whose faces pointed INTO
+     * the tube while every vertex normal pointed out of it.
+     *
+     * With front-face culling on, what you then see through a branch is its
+     * far inner wall, shaded by an outward normal that happens to face the
+     * key — so every branch, twig, catenary wire, handrail and bracket in the
+     * city rendered as a BLINDING WHITE stick. On a tree that is the whole
+     * "white twigs poking out of the crown" complaint, and it is why a trunk
+     * built half from `cyl` and half from `tube` was dark up to its midpoint
+     * and white above it, which is what finally located this.
+     */
     for (let i = 0; i < seg; i++) {
       const i0 = base + i * 2;
-      this.idx.push(i0, i0 + 1, i0 + 3, i0, i0 + 3, i0 + 2);
+      this.idx.push(i0, i0 + 3, i0 + 1, i0, i0 + 2, i0 + 3);
     }
   }
 

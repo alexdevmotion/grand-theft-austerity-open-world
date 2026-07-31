@@ -628,10 +628,29 @@ const KEY_BLACKBODY = new THREE.Color(1.0, 0.44, 0.15);
 const KEY_HUE_PULL = 0.82;
 /** ~12000K skylight. The fill must sit opposite the key on the colour wheel. */
 const FILL_SKY = L(0x5a76ff);
-/** Bounce off wet violet tarmac: dark, and warmer than the sky. */
-const FILL_GROUND = L(0x4a3050);
-/** How hard the sky's own ambient tint is pulled toward that blue. */
-const FILL_BLUE_PULL = 0.6;
+/**
+ * Bounce off the street.
+ *
+ * WARMER THAN IT WAS, AND FOR A MEASURED REASON. `Atmosphere.wetness` is 0.85
+ * and the carriageway mirrors an orange horizon, so the light coming back UP
+ * off a Bucharest street at 19:24 is amber, not the violet 0x4a3050 this used
+ * to be. That mattered because it is the only warm term reaching a surface the
+ * sun cannot see: with the ground bounce violet as well, every shaded face in
+ * the city was lit by two cool sources and nothing else. Metered on a tower
+ * framing, 93% of the chromatic pixels came out cool against 41% in the
+ * reference frame.
+ */
+const FILL_GROUND = L(0x6b3a2a);
+/**
+ * How hard the sky's own ambient tint is pulled toward that blue.
+ *
+ * Raised because the sky's dusk ambient is VIOLET — red above green — and at
+ * 0.6 it was dragging the fill far enough that way to starve the green channel
+ * in every shadow in the game. Binned by luma, the 25-55 band of a tower
+ * framing measured [50, 32, 58] against the reference's [41, 37, 47]: the same
+ * blue, half the green, i.e. magenta shade rather than violet shade.
+ */
+const FILL_BLUE_PULL = 0.72;
 
 /**
  * How much of the palette's chroma the direct sun keeps. See broadSpectrum.

@@ -37,6 +37,16 @@ export interface FullMapHooks {
 
 const _w = { x: 0, z: 0 };
 
+/** Every piece of chrome that sits over the sheet. Order does not matter. */
+const CHROME_SELECTORS = [
+  '.gta-map-head',
+  '.gta-map-rule',
+  '.gta-map-readout',
+  '.gta-map-tools',
+  '.gta-map-legend',
+  '.gta-map-foot',
+] as const;
+
 export class FullMap {
   readonly root: HTMLDivElement;
   private canvas: HTMLCanvasElement;
@@ -303,10 +313,54 @@ export class FullMap {
       time: this.time,
       labels: true,
       traffic: this.view.scale > 0.5,
+      reserved: this.measureChrome(),
     };
     this.painter.paint(g, this.view, data, world, router, opts);
     this.drawCursor(g, opts);
     this.readout(world, router, city, data);
+  }
+
+  private chrome: number[] = [];
+  private chromeKey = '';
+
+  /**
+   * WHERE THE PAINTER MAY NOT WRITE.
+   *
+   * The chrome is DOM, laid out by the CSS in `mapStyle.ts`, and the canvas
+   * underneath it has no idea any of it is there — which is how "ZONA
+   * INDUSTRIALĂ" came to be drawn behind the button column and sliced in half
+   * by it, and how the anchors around Casa Constructorilor ended up stacked
+   * under the title strip.
+   *
+   * Measuring the real elements rather than hardcoding boxes means the
+   * reservation cannot drift out of sync with the stylesheet — including the
+   * readout card, whose height changes with the hovered POI's name. The result
+   * is cached against the sheet size and that height, so the common frame does
+   * no layout work at all.
+   */
+  private measureChrome(): readonly number[] {
+    const cr = this.canvas.getBoundingClientRect();
+    const key = `${Math.round(cr.width)}x${Math.round(cr.height)}|${this.readoutEl.offsetHeight}|${this.readoutEl.offsetWidth}`;
+    if (key === this.chromeKey) return this.chrome;
+    this.chromeKey = key;
+
+    const out: number[] = [];
+    for (const sel of CHROME_SELECTORS) {
+      const el = this.root.querySelector(sel) as HTMLElement | null;
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) continue;
+      // A few pixels of air: a caption that merely TOUCHES the panel edge still
+      // reads as colliding with it.
+      out.push(
+        r.left - cr.left - 7,
+        r.top - cr.top - 7,
+        r.right - cr.left + 7,
+        r.bottom - cr.top + 7,
+      );
+    }
+    this.chrome = out;
+    return out;
   }
 
   /** Crosshair on the hovered spot, so a click feels aimed. */

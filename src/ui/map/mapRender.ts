@@ -45,12 +45,67 @@ export interface PaintOpts {
   labels: boolean;
   /** Draw ambient traffic dots. */
   traffic: boolean;
+  /**
+   * BOXES THE PAINTER MUST NOT WRITE INTO, flat `[x0,y0,x1,y1,…]` in CSS px.
+   *
+   * The painter has always had a claim table so two captions cannot land on
+   * each other, but it had no idea the *chrome* existed. On the full sheet the
+   * chrome is half the furniture in the frame — a title strip, a readout card,
+   * a column of six buttons down the right, a legend and a footer — and every
+   * one of them is opaque DOM sitting on top of the canvas. So "ZONA
+   * INDUSTRIALĂ" was drawn underneath the button panel and came out sliced in
+   * half, and the district captions crowded into the header.
+   *
+   * The full map measures its own chrome from the DOM and hands the rectangles
+   * over, which means the reservation follows the CSS instead of duplicating
+   * it. The minimap passes nothing: it has no chrome over the canvas.
+   */
+  reserved?: readonly number[];
 }
 
 const _p: Pt = { x: 0, y: 0 };
 const _q: Pt = { x: 0, y: 0 };
 const _clamped: Pt = { x: 0, y: 0 };
 const _segIdx: number[] = [];
+/** Where `MapPainter.place` decided the caption goes. */
+const _l: Pt = { x: 0, y: 0 };
+
+/** One candidate caption position, relative to the thing being named. */
+interface Slot {
+  dx: number;
+  dy: number;
+  align: CanvasTextAlign;
+}
+
+/**
+ * Blip captions, in preference order: under the mark, over it, then out to
+ * the right and the left. `dx`/`dy` are rewritten per call from the blip's
+ * radius — the array is reused so a full sheet of 140 POIs allocates nothing.
+ */
+const _slots: Slot[] = [
+  { dx: 0, dy: 0, align: 'center' },
+  { dx: 0, dy: 0, align: 'center' },
+  { dx: 0, dy: 0, align: 'left' },
+  { dx: 0, dy: 0, align: 'right' },
+];
+
+/**
+ * District captions name a REGION, so they are free to walk. The fan is wide
+ * and deliberately asymmetric — a caption that has slid 60 px off the centroid
+ * still lands well inside its own district, and it is how "HARTA
+ * BUCUREȘTIULUI"'s neighbours stop stacking under the title strip.
+ */
+const DISTRICT_SLOTS: ReadonlyArray<Slot> = [
+  { dx: 0, dy: 0, align: 'center' },
+  { dx: 0, dy: -22, align: 'center' },
+  { dx: 0, dy: 22, align: 'center' },
+  { dx: 0, dy: -44, align: 'center' },
+  { dx: 0, dy: 44, align: 'center' },
+  { dx: -58, dy: -22, align: 'center' },
+  { dx: 58, dy: -22, align: 'center' },
+  { dx: -58, dy: 26, align: 'center' },
+  { dx: 58, dy: 26, align: 'center' },
+];
 
 export class MapPainter {
   private minor = new Path2D();
@@ -68,6 +123,20 @@ export class MapPainter {
    * districts, then story/plaza anchors, then POIs.
    */
   private taken: number[] = [];
+
+  /**
+   * Names already drawn this frame, with the screen point they were drawn at.
+   *
+   * `buildDistrictLabels` deliberately emits TWO captions for the industrial
+   * belt and the cartiere, because those districts are split by the river and
+   * one caption in the middle of the gap names nothing. That is right when the
+   * two halves are far apart on screen and obviously wrong when the sheet is
+   * zoomed out far enough to show both at once: 24-map has "ZONA INDUSTRIALĂ"
+   * twice, 150 px apart, reading as a rendering fault rather than as two
+   * districts. A second caption for a name already on the sheet has to earn
+   * its place by being a long way from the first.
+   */
+  private drawnNames = new Map<string, Pt>();
 
   private scanline: CanvasPattern | null = null;
   private scanKey = '';
@@ -104,6 +173,10 @@ export class MapPainter {
     this.pixelTransform(g, o.dpr);
     g.clearRect(0, 0, v.w, v.h);
     this.taken.length = 0;
+    this.drawnNames.clear();
+    if (o.reserved) for (let i = 0; i < o.reserved.length; i++) this.taken.push(o.reserved[i]);
+    // The scale bar draws itself last but occupies its box from the start.
+    if (!o.compact) this.taken.push(v.w / 2 - 110, v.h - 50, v.w / 2 + 110, v.h - 14);
 
     g.fillStyle = MapInk.paper;
     g.fillRect(0, 0, v.w, v.h);
@@ -111,6 +184,13 @@ export class MapPainter {
     this.drawWash(g, v, data, o);
     this.drawLandmarkGrounds(g, v, data, o);
     this.drawRoads(g, v, data, o);
+    // Marks are PAINTED last, on top of everything, but they have to be
+    // CLAIMED first: the player arrow, the waypoint diamond and the activity
+    // blips are drawn after the captions and were happily stamped straight
+    // across them — "Casa Constructorilor" with the player's halo through the
+    // middle of it. Reserving the boxes up front is the only ordering that
+    // gets both right: marks on top, captions out of their way.
+    if (!o.compact) this.reserveMarks(v, world, o);
     if (!o.compact) this.drawDistrictLabels(g, v, data, o);
     this.drawSearch(g, v, world, o);
     this.drawRoute(g, v, world, router, o);
@@ -246,19 +326,148 @@ export class MapPainter {
 
   private drawDistrictLabels(g: CanvasRenderingContext2D, v: MapView, data: MapData, o: PaintOpts): void {
     if (!o.labels || v.scale < 0.055) return;
-    g.textAlign = 'center';
     g.textBaseline = 'middle';
     g.font = '700 10px Inter, system-ui, sans-serif';
     for (const d of data.districtLabels) {
       project(v, d.x, d.z, _p);
       if (_p.x < -80 || _p.x > v.w + 80 || _p.y < -20 || _p.y > v.h + 20) continue;
       const text = spaced(d.name);
-      const w = g.measureText(text).width;
-      if (!this.claim(_p.x - w / 2, _p.y - 7, _p.x + w / 2, _p.y + 7)) continue;
-      g.fillStyle = 'rgba(6,3,12,.75)';
-      g.fillText(text, _p.x + 1, _p.y + 1);
-      g.fillStyle = 'rgba(226,201,255,.42)';
-      g.fillText(text, _p.x, _p.y);
+      // A district caption may drift a long way from its centroid — the
+      // district is a region, not a point, so anywhere inside it names it. That
+      // is what lets a caption step out from under a boulevard instead of being
+      // struck through by it.
+      // Two passes: first insist on a slot no boulevard runs through, then
+      // settle for any free slot. Without the second pass a district in a dense
+      // quarter simply loses its name, which is worse than a caption with a
+      // street behind it now that the captions are haloed.
+      if (!this.place(g, text, _p.x, _p.y, DISTRICT_SLOTS, 7, v, d.name, 340, v.scale > 0.12 ? data : undefined)
+        && !this.place(g, text, _p.x, _p.y, DISTRICT_SLOTS, 7, v, d.name, 340)) continue;
+      label(g, text, _l.x, _l.y, 'rgba(226,201,255,.52)', 'middle');
+    }
+  }
+
+  /**
+   * PLACE A CAPTION, or refuse to draw it.
+   *
+   * Tries each offset in `slots` (they are ordered by how much they distort the
+   * association between the caption and the thing it names) and takes the first
+   * that is both fully on the sheet and unclaimed. The chosen box is written to
+   * `_l` and reserved. `align` is set on the context as a side effect, so the
+   * caller can draw immediately.
+   *
+   * Reject-only claiming — what this replaces — drops a caption the moment its
+   * FIRST choice is taken, which is why the anchors around Casa Constructorilor
+   * came out as a pile: everything wanted the same twelve pixels under its own
+   * blip and the ones that lost simply vanished or, worse, were drawn by a
+   * different pass that did not consult the table at all.
+   */
+  private place(
+    g: CanvasRenderingContext2D,
+    text: string,
+    x: number,
+    y: number,
+    slots: ReadonlyArray<Slot>,
+    half: number,
+    v: MapView,
+    dedupeKey: string,
+    minSeparation: number,
+    /** When given, reject slots a boulevard or the monumental axis runs through. */
+    avoidRoadsIn?: MapData,
+  ): boolean {
+    if (dedupeKey) {
+      const prev = this.drawnNames.get(dedupeKey);
+      if (prev && Math.hypot(prev.x - x, prev.y - y) < minSeparation) return false;
+    }
+    const w = g.measureText(text).width;
+    if (w > 300 || w < 1) return false;
+
+    for (const s of slots) {
+      const cx = x + s.dx;
+      const cy = y + s.dy;
+      const x0 = s.align === 'center' ? cx - w / 2 : s.align === 'left' ? cx : cx - w;
+      const x1 = x0 + w;
+      const y0 = cy - half;
+      const y1 = cy + half;
+      // Fully on the sheet. Half-clipped captions were the "ZONA INDUSTRIA"
+      // in the playtest — the old code only checked the ANCHOR was near the
+      // canvas, which says nothing about where the text ends up.
+      if (x0 < 3 || x1 > v.w - 3 || y0 < 3 || y1 > v.h - 3) continue;
+      if (avoidRoadsIn && this.crossedByRoad(v, avoidRoadsIn, x0, y0, x1, y1)) continue;
+      if (!this.claim(x0 - 2, y0, x1 + 2, y1)) continue;
+      _l.x = cx;
+      _l.y = cy;
+      g.textAlign = s.align;
+      if (dedupeKey) this.drawnNames.set(dedupeKey, { x, y });
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Does a boulevard or the monumental axis run through this box?
+   *
+   * Minor lanes are ignored on purpose: in the old town they are everywhere
+   * and insisting on a caption clear of all of them would mean no captions at
+   * all. It is the wide pale strokes — 7–9 px of near-white — that swallow
+   * text, and there are few enough of them to dodge.
+   */
+  private crossedByRoad(
+    v: MapView,
+    data: MapData,
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+  ): boolean {
+    // Screen box -> world box, via the two diagonal corners. North-up on the
+    // full sheet, which is the only place this runs, so the axes agree.
+    const inv = 1 / v.scale;
+    const wx0 = v.cx + (Math.min(x0, x1) - v.ox) * inv - 12;
+    const wx1 = v.cx + (Math.max(x0, x1) - v.ox) * inv + 12;
+    const wz0 = v.cz + (Math.min(y0, y1) - v.oy) * inv - 12;
+    const wz1 = v.cz + (Math.max(y0, y1) - v.oy) * inv + 12;
+    data.query(wx0, wz0, wx1, wz1, _segIdx);
+    for (let i = 0; i < _segIdx.length; i++) {
+      const s = data.segs[_segIdx[i]];
+      if (!s.major && s.lanes < 3) continue;
+      project(v, s.ax, s.az, _p);
+      project(v, s.bx, s.bz, _q);
+      if (segmentHitsRect(_p.x, _p.y, _q.x, _q.y, x0 - 3, y0 - 3, x1 + 3, y1 + 3)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Claim the footprint of every mark that will be painted on top of the
+   * captions. Mirrors the radii the draw passes below actually use.
+   */
+  private reserveMarks(v: MapView, w: MapWorld, o: PaintOpts): void {
+    const box = (x: number, y: number, r: number): void => {
+      if (x + r < 0 || x - r > v.w || y + r < 0 || y - r > v.h) return;
+      this.claim(x - r, y - r, x + r, y + r);
+    };
+
+    // The player: arrow, halo and ring. The ring is the widest part at 1.75×.
+    project(v, w.x, w.z, _p);
+    box(_p.x, _p.y, (o.compact ? 8 : 11) * 1.8);
+
+    if (w.hasWaypoint) {
+      project(v, w.waypointX, w.waypointZ, _p);
+      box(_p.x, _p.y, (o.compact ? 5.4 : 7.2) * 2.4);
+    }
+
+    const acts = w.activities;
+    for (let i = 0; i < acts.used; i++) {
+      const b = acts.items[i];
+      project(v, b.x, b.z, _p);
+      box(_p.x, _p.y, (o.compact ? 4.6 : 6.4) + 2);
+    }
+
+    const pol = w.police;
+    for (let i = 0; i < pol.used; i++) {
+      const b = pol.items[i];
+      project(v, b.x, b.z, _p);
+      box(_p.x, _p.y, (b.tag === 'car' ? (o.compact ? 3.6 : 4.6) : o.compact ? 2.4 : 3.2) + 2);
     }
   }
 
@@ -366,7 +575,7 @@ export class MapPainter {
    */
   private drawLandmarkBlips(g: CanvasRenderingContext2D, v: MapView, data: MapData, o: PaintOpts): void {
     g.textAlign = 'center';
-    g.textBaseline = 'top';
+    g.textBaseline = 'middle';
     // The OSM import contributes ~140 minor POIs. They only earn a mark once
     // the full map is zoomed past a street-level scale, and a name past that.
     const poiDots = !o.compact && v.scale > 0.9;
@@ -409,7 +618,7 @@ export class MapPainter {
         g.fill();
       }
 
-      if (o.labels && !o.compact) this.tryLabel(g, lm.name, _p.x, _p.y + r + 4, MapInk.text);
+      if (o.labels && !o.compact) this.tryLabel(g, v, lm.name, _p.x, _p.y, r, MapInk.text);
     }
 
     if (poiNames) {
@@ -418,7 +627,7 @@ export class MapPainter {
         if (lm.kind !== 'poi') continue;
         project(v, lm.x, lm.z, _p);
         if (!this.onSheet(v, 30)) continue;
-        this.tryLabel(g, lm.name, _p.x, _p.y + 5, 'rgba(226,201,255,.72)');
+        this.tryLabel(g, v, lm.name, _p.x, _p.y, 2.2, 'rgba(226,201,255,.72)');
       }
     }
   }
@@ -428,12 +637,25 @@ export class MapPainter {
     return _p.x > -pad && _p.x < v.w + pad && _p.y > -pad && _p.y < v.h + pad;
   }
 
-  /** Centred caption that gives way to anything already occupying the space. */
-  private tryLabel(g: CanvasRenderingContext2D, text: string, x: number, y: number, ink: string): void {
-    const w = g.measureText(text).width;
-    if (w > 300) return;
-    if (!this.claim(x - w / 2 - 2, y - 1, x + w / 2 + 2, y + 11)) return;
-    label(g, text, x, y, ink);
+  /**
+   * Caption for a blip at `(x, y)` with radius `r`. Prefers to sit under the
+   * mark and will step above it or out to either side before giving up.
+   */
+  private tryLabel(
+    g: CanvasRenderingContext2D,
+    v: MapView,
+    text: string,
+    x: number,
+    y: number,
+    r: number,
+    ink: string,
+  ): void {
+    _slots[0].dy = r + 9;
+    _slots[1].dy = -(r + 9);
+    _slots[2].dx = r + 6;
+    _slots[3].dx = -(r + 6);
+    if (!this.place(g, text, x, y, _slots, 6.5, v, text, 90)) return;
+    label(g, text, _l.x, _l.y, ink, 'middle');
   }
 
   private drawActivities(g: CanvasRenderingContext2D, v: MapView, w: MapWorld, o: PaintOpts): void {
@@ -770,6 +992,36 @@ function viewBoundsOf(v: MapView): { x0: number; z0: number; x1: number; z1: num
   return { x0: x0 - 20, z0: z0 - 20, x1: x1 + 20, z1: z1 + 20 };
 }
 
+/** Liang–Barsky: does the segment (ax,ay)–(bx,by) touch the axis-aligned box? */
+export function segmentHitsRect(
+  ax: number, ay: number, bx: number, by: number,
+  x0: number, y0: number, x1: number, y1: number,
+): boolean {
+  if (Math.max(ax, bx) < x0 || Math.min(ax, bx) > x1) return false;
+  if (Math.max(ay, by) < y0 || Math.min(ay, by) > y1) return false;
+  let t0 = 0;
+  let t1 = 1;
+  const dx = bx - ax;
+  const dy = by - ay;
+  const p = [-dx, dx, -dy, dy];
+  const q = [ax - x0, x1 - ax, ay - y0, y1 - ay];
+  for (let i = 0; i < 4; i++) {
+    if (p[i] === 0) {
+      if (q[i] < 0) return false;
+      continue;
+    }
+    const r = q[i] / p[i];
+    if (p[i] < 0) {
+      if (r > t1) return false;
+      if (r > t0) t0 = r;
+    } else {
+      if (r < t0) return false;
+      if (r < t1) t1 = r;
+    }
+  }
+  return true;
+}
+
 function chamferSquare(g: CanvasRenderingContext2D, x: number, y: number, r: number): void {
   const c = r * 0.45;
   g.moveTo(x - r + c, y - r);
@@ -781,6 +1033,16 @@ function chamferSquare(g: CanvasRenderingContext2D, x: number, y: number, r: num
   g.closePath();
 }
 
+/**
+ * Caption with a dark halo rather than a drop shadow.
+ *
+ * A one-pixel offset shadow only darkens the lower-right of each glyph, which
+ * is enough over the paper and nothing at all over a 7 px pale boulevard: in
+ * 24-map the monumental axis runs straight through "HARTA BUCUREȘTIULUI" and
+ * two district captions and the text simply dissolves into it. A stroked halo
+ * surrounds every glyph, so a caption reads over the brightest ink on the
+ * sheet without needing an opaque plate behind it.
+ */
 function label(
   g: CanvasRenderingContext2D,
   text: string,
@@ -790,8 +1052,10 @@ function label(
   baseline: CanvasTextBaseline = 'top',
 ): void {
   g.textBaseline = baseline;
-  g.fillStyle = 'rgba(6,3,12,.9)';
-  g.fillText(text, x + 1, y + 1);
+  g.lineJoin = 'round';
+  g.lineWidth = 3;
+  g.strokeStyle = 'rgba(6,3,12,.88)';
+  g.strokeText(text, x, y);
   g.fillStyle = ink;
   g.fillText(text, x, y);
 }

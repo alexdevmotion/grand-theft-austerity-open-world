@@ -183,6 +183,12 @@ describe('emitters whose winding matches their normals', () => {
     ['DetailBuilder.box (rotated)', () => det((b) => b.box(0, 1, 0, 3, 2, 1, 0.7, DO))],
     ['DetailBuilder.cyl', () => det((b) => b.cyl(0, 0, 0, 1, 1, 4, 10, DO))],
     ['DetailBuilder.cyl (tapered, uncapped)', () => det((b) => b.cyl(0, 0, 0, 1, 0.4, 4, 10, DO, false))],
+    // FIXED (foliage pass): `tube` walked its ring pair the opposite way round
+    // to `cyl`, so every branch, twig, catenary wire, handrail and bracket in
+    // the city drew its inner wall — which shaded white against the low sun and
+    // was most of why street trees read as sticks with white hairs on them.
+    ['DetailBuilder.tube (vertical)', () => det((b) => b.tube(0, 0, 0, 0, 4, 0, 0.3, 8, DO))],
+    ['DetailBuilder.tube (skew)', () => det((b) => b.tube(0, 0, 0, 2, 4, 1, 0.3, 8, DO))],
     ['DetailBuilder.blob', () => det((b) => b.blob(0, 0, 0, 2, 2, 2, DO, 0.2, 7, 2, 0.2, 8))],
     ['DetailBuilder.ring', () => det((b) => b.ring(-5, -5, 5, 5, 0, 0.5, 1, DO))],
     ['DetailBuilder.ringPoly (CW)', () => det((b) => b.ringPoly(CW, 0, 0.5, 1, DO))],
@@ -324,9 +330,8 @@ describe('closed generated meshes are wound outward', () => {
  *           the ear-clipped path past four corners is wrong, which is exactly
  *           the imported footprints.  FIX: emit `t[0], t[2], t[1]` from
  *           `triangulate()`, in `triangulate()` itself so both callers get it.
- *   tube    the ring pair is walked the opposite way round to `cyl`, which is
- *           correct.  FIX: `idx.push(i0, i3, i1, i0, i2, i3)` — or simply
- *           mirror `cyl`'s ordering.
+ *   tube    FIXED in the foliage pass — see the winding note in builders.ts.
+ *           It now emits `i0, i3, i1, i0, i2, i3` and has moved into section 1.
  *
  * These assertions FAIL THE MOMENT THE DEFECT IS FIXED. That is deliberate:
  * when you fix an emitter, delete its entry here and move the case up into
@@ -347,8 +352,6 @@ describe('KNOWN INSIDE OUT (quarantine — shrink this list, never grow it)', ()
       () => surf((b) => b.poly(CCW, 0, SP))],
     ['FacadeBuilder.cap (imported footprints with > 4 corners)',
       () => fac((b) => b.cap(CW_NGON, 12, FP))],
-    ['DetailBuilder.tube (branches, brackets, handrails)',
-      () => det((b) => b.tube(0, 0, 0, 0, 4, 0, 0.3, 8, DO))],
   ];
 
   for (const [name, build] of broken) {

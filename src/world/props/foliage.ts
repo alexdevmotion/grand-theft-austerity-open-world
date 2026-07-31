@@ -36,8 +36,8 @@ const opt = (color: PropOpts['color'], mr: PropOpts['mr']): PropOpts => ({ color
  *               holds a dim olive rather than going to zero. Deliberately
  *               much smaller than it used to be: it is a floor, not the look.
  */
-const leafOpt = (color: PropOpts['color'], gain = 0.12, trans = 0.85): PropOpts =>
-  ({ color, mr: MR.leaf, emissive: [color.r * gain, color.g * gain, color.b * gain], trans });
+const leafOpt = (color: PropOpts['color'], gain = 0.12, trans = 0.85, wind = 0): PropOpts =>
+  ({ color, mr: MR.leaf, emissive: [color.r * gain, color.g * gain, color.b * gain], trans, wind });
 
 /**
  * Radians of normal scatter applied to every leaf cluster. +-40 degrees, which
@@ -57,7 +57,7 @@ const LEAF_NORMAL_JITTER = 0.7;
  */
 export function autumnTree(
   b: PropBuilder, x: number, z: number, rng: Rng,
-  scale = 1, thin = rng.range(0.35, 0.78),
+  scale = 1, thin = rng.range(0.06, 0.28),
   /** 2 = full detail, 1 = mid, 0 = distant silhouette. Halves the cluster count. */
   lod: 0 | 1 | 2 = 2,
 ): void {
@@ -68,23 +68,41 @@ export function autumnTree(
    * frame constantly: a 1.8 m person reaches a third of the way up the trunk,
    * and the 7.2-9.4 m lamp heads sit level with the top of the crown.
    */
-  const h = rng.range(8.0, 11.0) * scale;
-  const trunkH = rng.range(2.4, 3.4) * scale;
-  const trunkR = 0.155 * scale;
-  // A trunk backlit at three degrees is the same trap as the crown: a pure
-  // albedo trunk goes to black. A little self-emissive keeps it a dark umber.
+  const h = rng.range(8.0, 10.8) * scale;
+  const trunkH = rng.range(2.6, 3.4) * scale;
+  const trunkR = 0.16 * scale;
+  /*
+   * BARK, AUTHORED DARK. A trunk carries no translucency, so with the key three
+   * degrees above the horizon it is the least forgiving surface on the tree:
+   * at 0x5b4a3c with a 12% emissive floor on top, every plaza tree in the game
+   * stood on a stick brighter than the pavement behind it, and a bright
+   * vertical stroke under a thin crown is half of why the far field read as
+   * coloured chips floating in the air.
+   */
   const bark: PropOpts = {
     color: C.bark,
-    mr: [0, 0.92],
-    emissive: [C.bark.r * 0.12, C.bark.g * 0.12, C.bark.b * 0.12],
+    mr: [0, 0.96],
+    emissive: [C.bark.r * 0.03, C.bark.g * 0.03, C.bark.b * 0.03],
   };
 
-  // Trunk, tapering, plus the root flare that plants it on the pavement.
-  b.cyl(x, WALK_Y - 0.05, z, trunkR * 1.45, trunkR * 0.9, trunkH, 6, bark, false);
+  // Trunk in two segments with a lean between them, plus the root flare that
+  // plants it on the pavement. A dead-vertical stick is the loudest possible
+  // procedural tell on an object this familiar; the second segment costs 12
+  // triangles.
+  const leanA = rng.range(0, Math.PI * 2);
+  const leanR = rng.range(0.04, 0.15) * trunkH;
+  const cx = x + Math.cos(leanA) * leanR;
+  const cz = z + Math.sin(leanA) * leanR;
   b.cyl(x, WALK_Y - 0.06, z, trunkR * 2.1, trunkR * 1.4, 0.26, 6, bark, false);
+  b.cyl(x, WALK_Y - 0.05, z, trunkR * 1.4, trunkR * 1.05, trunkH * 0.5, 6, bark, false);
+  b.tube(x, WALK_Y + trunkH * 0.5, z, cx, WALK_Y + trunkH, cz, trunkR * 0.98, 6, bark);
 
   const crownY = WALK_Y + trunkH;
-  const crownR = rng.range(2.2, 3.1) * scale;
+  // Crown 3.6-4.8 m ACROSS, not 6 m in radius. A Bucharest street plane is
+  // pollarded back off the trolleybus wires and simply does not carry the
+  // crown this used to author — and the extra width is what put the leaf
+  // clusters too far apart to ever merge into a canopy.
+  const crownR = rng.range(1.8, 2.4) * scale;
   const crownH = h - trunkH;
 
   /*
@@ -94,17 +112,34 @@ export function autumnTree(
    * off the secondaries — is the minimum that reads as a tree rather than as a
    * lollipop, and the twigs are what keep the silhouette from closing up.
    */
-  const tips: Array<[number, number, number, number]> = [];   // x, y, z, order
+  const tips: number[] = [];                                  // flat x, y, z
   const nLimb = 3 + rng.int(0, 3);
   const lean = rng.range(0, Math.PI * 2);
+  const limbOpt: PropOpts = { ...bark, wind: 0.006 * scale };
+  const secOpt: PropOpts = { ...bark, wind: 0.018 * scale };
+  /*
+   * TWIGS ARE THE "WHITE HAIRS". Authored at trunkR * 0.12 a twig was a 19 mm
+   * rod: under two pixels wide at twenty metres, so it never resolved as a
+   * shaded cylinder and aliased into a hard bright line poking out of the
+   * crown. Authored instead as what you actually see at street distance — a
+   * BUNCH of twigs, ~5 cm, resolvable — and given a little translucency so it
+   * glows the same warm amber as the leaves in the same light rather than
+   * reading as a different material stuck on the outside.
+   */
+  const twigOpt: PropOpts = { ...bark, wind: 0.038 * scale, trans: 0.3 };
   for (let i = 0; i < nLimb; i++) {
     const a = lean + (i / nLimb) * Math.PI * 2 + rng.range(-0.35, 0.35);
     const reach = crownR * rng.range(0.42, 0.66);
     const rise = crownH * rng.range(0.30, 0.52);
-    const lx = x + Math.cos(a) * reach;
-    const lz = z + Math.sin(a) * reach;
+    const lx = cx + Math.cos(a) * reach;
+    const lz = cz + Math.sin(a) * reach;
     const ly = crownY + rise;
-    b.tube(x, crownY - 0.25, z, lx, ly, lz, trunkR * 0.5, 4, bark);
+    // Elbowed, not a straight rod: a limb leaves the fork steeply then flattens.
+    const ex = cx + Math.cos(a) * reach * 0.42;
+    const ez = cz + Math.sin(a) * reach * 0.42;
+    const ey = crownY + rise * rng.range(0.62, 0.78);
+    b.tube(cx, crownY - 0.25, cz, ex, ey, ez, trunkR * 0.56, 4, limbOpt);
+    b.tube(ex, ey, ez, lx, ly, lz, trunkR * 0.4, 4, limbOpt);
 
     const nSec = 2 + rng.int(0, 2);
     for (let j = 0; j < nSec; j++) {
@@ -112,57 +147,161 @@ export function autumnTree(
       const sx = lx + Math.cos(a2) * crownR * rng.range(0.26, 0.5);
       const sz = lz + Math.sin(a2) * crownR * rng.range(0.26, 0.5);
       const sy = ly + crownH * rng.range(0.14, 0.34);
-      b.tube(lx, ly, lz, sx, sy, sz, trunkR * 0.26, 3, bark);
-      tips.push([sx, sy, sz, 1]);
+      b.tube(lx, ly, lz, sx, sy, sz, trunkR * 0.32, 3, secOpt);
       // Bare twigs beyond the last leaf cluster: this is the fringe that stops
       // a crown reading as a hard-edged solid against a bright sky.
-      if (lod === 2 && rng.bool(0.7)) {
+      if (lod >= 1 && rng.bool(0.7)) {
         const a3 = a2 + rng.range(-1.1, 1.1);
         const tx = sx + Math.cos(a3) * crownR * rng.range(0.2, 0.38);
         const tz = sz + Math.sin(a3) * crownR * rng.range(0.2, 0.38);
         const ty = sy + crownH * rng.range(0.08, 0.26);
-        b.tube(sx, sy, sz, tx, ty, tz, trunkR * 0.12, 3, bark);
-        tips.push([tx, ty, tz, 2]);
+        b.tube(sx, sy, sz, tx, ty, tz, trunkR * 0.29, 3, twigOpt);
+        tips.push(tx, ty, tz);
       }
     }
   }
   // The leader.
-  b.tube(x, crownY - 0.25, z, x + rng.range(-0.25, 0.25), crownY + crownH * 0.72, z + rng.range(-0.25, 0.25),
-    trunkR * 0.42, 4, bark);
+  b.tube(cx, crownY - 0.25, cz,
+    cx + rng.range(-0.25, 0.25), crownY + crownH * 0.72, cz + rng.range(-0.25, 0.25),
+    trunkR * 0.42, 4, limbOpt);
 
   /*
-   * THE CANOPY. Small clusters hung on the branch ENDS only, never a solid
-   * mass at the middle. Late autumn thins the crown by dropping whole clusters
-   * rather than shrinking them, so `thin` gates the loop — at thin 0.78 you get
-   * a mostly bare armature with a handful of clinging gold, which is exactly
-   * what a Bucharest plane tree looks like in the reference.
+   * THE CANOPY — a CLOSED SHELL OF SMALL LOBES, not four fat balloons per
+   * branch tip.
+   *
+   * Hanging clusters on branch tips is the obvious construction and it is what
+   * this function used to do. Tips are further apart than clusters are wide, so
+   * the crown never closed: what reached the screen was a bare stick with a
+   * handful of large opaque balloons stuck near the top — which is, word for
+   * word, how a playtest described it. A crown is a MASS, and the size of the
+   * pieces it is made of is not a free parameter. See the derivation on
+   * `LOBE_COVER` in city/facades.ts; this mirrors it:
+   *
+   *     r = sqrt(COVER * crownR * crownHalfH / N)
+   *
+   * closes the side silhouette for any N, so the LOD tiers pick GRANULARITY and
+   * never coverage — few big lobes far away, many small ones near, the same
+   * solid mass either way, and no tier at which the crown comes apart.
    */
+  const COVER = 4.0;
+  const rWanted = lod === 2 ? 0.70 : lod === 1 ? 0.86 : 1.36;
+  const crownHalfH = crownH * 0.34;
+  const crownMidY = crownY + crownH * 0.46;
+  const silh = crownR * crownHalfH;
+  const nSurf = Math.max(6, Math.min(100, Math.round((COVER * silh) / (rWanted * rWanted))));
+  const lobeR = Math.sqrt((COVER * silh) / nSurf);
+  // Two scales — see the long note in city/facades.ts. These structural lobes
+  // are the crown's MASS at 20 triangles each; the tuft pass at the bottom
+  // skins their outside in 0.3 m single-ring lobes, and those are what the eye
+  // resolves from the distance a third-person camera actually lives at.
+  const rings = lod === 0 ? 1 : 2;
+  const lobeSeg = lod === 0 ? 6 : 5;
+  const GOLD = Math.PI * (3 - Math.sqrt(5));
   const amberBias = rng.range(0.6, 0.98);
-  const perTip = lod === 2 ? 4 : lod === 1 ? 2 : 1;
-  for (let i = 0; i < tips.length; i++) {
-    if (rng.next() < thin * 0.55) continue;
-    const [tx, ty, tz, order] = tips[i];
-    // Twig-order clusters are half the size of secondary-order ones, which is
-    // what gives the crown a soft outer fringe and a denser core.
-    // Absolute metres, not a fraction of the crown: a cluster of leaves is
-     // 0.4-0.8 m across on a 3 m tree and on a 12 m one. Scaling it with the
-     // crown is what made park trees (scale 1.5) grow 2 m cabbages.
-     const cr = (order === 2 ? rng.range(0.30, 0.46) : rng.range(0.42, 0.68)) * scale;
+  const seedBase = (Math.round(cx * 13.7 + cz * 7.3) >>> 0) || 1;
+
+  for (let i = 0; i < nSurf; i++) {
+    const t = (i + 0.5) / nSurf;
+    const cy = 1 - 2 * t;
+    /*
+     * Late autumn strips a crown from the INSIDE and the BOTTOM outwards — the
+     * outer tips hold their leaves longest. Dropping clusters uniformly, which
+     * is what `thin` used to do at up to 0.78, punches holes straight through
+     * the silhouette, and a silhouette full of holes is a handful of detached
+     * pieces rather than a thinning tree.
+     */
+    if (rng.next() < thin * (1.0 - cy)) continue;
+    const sr = Math.sqrt(Math.max(0, 1 - cy * cy));
+    /*
+     * The spiral needs BREAKING, not just following. A golden-angle sequence
+     * spreads points evenly, which on a tall narrow crown (a poplar) lays them
+     * down as a visible helix — you can count the turns winding up the tree.
+     * Nearly a radian of angular jitter plus a radial wobble costs nothing and
+     * keeps the even spread while destroying the pattern.
+     */
+    const ang = i * GOLD + rng.range(-0.9, 0.9);
+    const wob = rng.range(0.88, 1.12);
+    const shell = rng.range(0.86, 1.06);
     const leafC = rng.next() < amberBias
       ? rng.weighted([C.leafGold, C.leafAmber, C.leafPale, C.leafRust], [4, 3, 2, 2])
       : C.leafOlive;
-    for (let k = 0; k < perTip; k++) {
-      const kr = cr * (1.0 - k * 0.16);
+    // Lobes on the underside are shaded by the whole crown above them; the
+    // shader cannot know that, so it is authored off height in the shell.
+    const depth = 0.60 + 0.40 * (0.5 + 0.5 * cy);
+    // Clusters HANG. Pulling every lobe down a fraction of its own radius is
+    // most of the difference between a canopy and a ball of moss.
+    const ly = crownMidY + cy * crownHalfH * shell - lobeR * 0.22;
+    const r = lobeR * rng.range(0.8, 1.18);
+    b.blob(
+      cx + Math.cos(ang) * sr * crownR * shell * wob,
+      ly,
+      cz + Math.sin(ang) * sr * crownR * shell * wob,
+      r, r * rng.range(0.7, 0.92), r * rng.range(0.86, 1.14),
+      leafOpt(
+        leafC.clone().multiplyScalar(depth), 0.1, rng.range(0.72, 1.0),
+        0.035 + 0.11 * Math.max(0, (ly - crownY) / Math.max(crownH, 0.5)),
+      ),
+      // 0.32, not 0.5: on a five-segment two-ring lobe a vertex pulled to
+      // 0.75r leaves its neighbours' quad nearly planar, and the structural
+      // lobes flatten into hard cards. Raggedness is the tuft pass's job.
+      0.32, 1 + ((i * 7919 + seedBase * 104729) >>> 0), rings, LEAF_NORMAL_JITTER * 0.55, lobeSeg,
+    );
+  }
+
+  // Backing lobes: whatever shows through a thinned crown has to be more canopy
+  // in shadow — never sky, and never the trunk.
+  if (lod >= 1) {
+    for (let i = 0; i < 6; i++) {
+      const cy = rng.range(-0.5, 0.7);
+      const sr = Math.sqrt(Math.max(0, 1 - cy * cy));
+      const ang = i * GOLD * 2.3;
+      const shell = rng.range(0.28, 0.62);
+      const r = lobeR * rng.range(1.0, 1.45);
       b.blob(
-        tx + rng.range(-cr * 1.5, cr * 1.5),
-        ty + rng.range(-cr * 0.8, cr * 1.6),
-        tz + rng.range(-cr * 1.5, cr * 1.5),
-        kr, kr * rng.range(0.66, 0.96), kr,
-        leafOpt(k === 0 ? leafC : rng.weighted([C.leafGold, C.leafPale, C.leafRust], [3, 2, 2]),
-          0.12, rng.range(0.7, 1.0)),
-        0.55, 101 + i * 7 + k * 31, 2, LEAF_NORMAL_JITTER * 0.6,
+        cx + Math.cos(ang) * sr * crownR * shell,
+        crownMidY + cy * crownHalfH * shell,
+        cz + Math.sin(ang) * sr * crownR * shell,
+        r, r * 0.72, r,
+        leafOpt(C.leafOlive.clone().multiplyScalar(0.5), 0.08, 0.35, 0.03),
+        0.45, 1 + ((i * 15486 + seedBase * 39769) >>> 0), 1, LEAF_NORMAL_JITTER * 0.4, 5,
       );
     }
+  }
+
+  /*
+   * THE FRINGE, hung on the twig tips. Two jobs at once: it breaks the outline
+   * at a finer scale than the main lobes can, and it buries the bare end of
+   * every twig inside a cluster of leaves — which is where a real twig ends,
+   * and which is what stops them reading as hairs sticking out of the crown.
+   */
+  const nTip = tips.length / 3;
+  const nTuft = nTip + Math.round(nSurf * (lod === 2 ? 1.7 : lod === 1 ? 1.0 : 0));
+  for (let i = 0; i < nTuft; i++) {
+    const fr = lobeR * rng.range(0.28, 0.46);
+    let fx: number;
+    let fy: number;
+    let fz: number;
+    if (i < nTip) {
+      fx = tips[i * 3] + rng.range(-0.12, 0.12);
+      fy = tips[i * 3 + 1] - fr * 0.35;
+      fz = tips[i * 3 + 2] + rng.range(-0.12, 0.12);
+    } else {
+      const a = rng.range(0, Math.PI * 2);
+      const cy = rng.range(-0.7, 0.95);
+      const sr = Math.sqrt(Math.max(0, 1 - cy * cy));
+      // Radial and vertical overshoot together, never independently, or a
+      // tuft near the poles floats clear of the crown it belongs to.
+      const sh = rng.range(1.0, 1.13);
+      fx = cx + Math.cos(a) * sr * crownR * sh;
+      fz = cz + Math.sin(a) * sr * crownR * sh;
+      fy = crownMidY + cy * crownHalfH * sh - fr * 0.3;
+    }
+    b.blob(
+      fx, fy, fz, fr, fr * rng.range(0.6, 0.86), fr,
+      leafOpt(rng.weighted([C.leafGold, C.leafAmber, C.leafPale, C.leafRust], [4, 3, 2, 2]),
+        0.1, rng.range(0.9, 1.0), 0.15),
+      0.6, 1 + ((i * 22691 + seedBase * 6353) >>> 0), 1, LEAF_NORMAL_JITTER * 0.55, 5,
+    );
   }
 }
 

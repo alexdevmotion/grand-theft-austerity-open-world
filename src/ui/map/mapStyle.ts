@@ -137,10 +137,16 @@ export const MAP_CSS = `
    frame edge — the title used to sit right on top of the border line. */
 .gta-map-ui { position:absolute; inset:34px; pointer-events:none; }
 
+/* THE MASTHEAD IS A PLATE, NOT A HINT OF ONE.
+   The scrim used to reach zero alpha over the title's own line, so the
+   monumental axis — the brightest ink on the sheet — was drawn straight
+   through "HARTA BUCUREȘTIULUI" and struck it out. It now stays opaque past
+   the baseline and only fades below the tricolour rule. */
 .gta-map-head {
-  position:absolute; left:0; right:0; top:0; padding:14px 20px 10px;
+  position:absolute; left:0; right:0; top:0; padding:14px 20px 22px;
   display:flex; align-items:flex-end; gap:16px; pointer-events:none;
-  background:linear-gradient(180deg, rgba(10,4,20,.92), rgba(10,4,20,0));
+  background:linear-gradient(180deg,
+    rgba(9,4,18,.97) 0%, rgba(9,4,18,.95) 62%, rgba(9,4,18,.72) 82%, rgba(9,4,18,0) 100%);
 }
 .gta-map-head h2 {
   margin:0; font-size:20px; font-weight:800; letter-spacing:.14em; line-height:1;
@@ -153,7 +159,7 @@ export const MAP_CSS = `
 .gta-map-sub { margin-left:auto; font-size:10px; letter-spacing:.2em; color:#b48ede; text-align:right; }
 .gta-map-sub b { color:#ff9ec4; }
 
-.gta-map-tools { position:absolute; right:18px; top:80px; display:flex; flex-direction:column; gap:6px; }
+.gta-map-tools { position:absolute; right:18px; top:88px; display:flex; flex-direction:column; gap:6px; }
 .gta-map-tools button {
   pointer-events:auto; min-width:104px; padding:7px 10px; font:700 10px/1 Inter,system-ui,sans-serif;
   letter-spacing:.16em; color:#c3ade0; background:rgba(20,8,34,.82);
@@ -165,18 +171,22 @@ export const MAP_CSS = `
 
 .gta-map-legend {
   position:absolute; left:18px; bottom:16px; display:flex; flex-wrap:wrap; gap:4px 16px;
-  max-width:56%; font-size:10px; letter-spacing:.1em; color:#c3ade0; pointer-events:none;
-  text-shadow:0 1px 4px #000, 0 0 8px #000;
+  max-width:52%; font-size:10px; letter-spacing:.1em; color:#c3ade0; pointer-events:none;
+  text-shadow:0 1px 4px #000; padding:6px 10px; background:rgba(9,4,18,.78); border-radius:2px;
 }
 .gta-map-legend span { display:flex; align-items:center; gap:6px; }
 .gta-map-legend em { width:8px; height:8px; display:inline-block; font-style:normal; }
 
+/* Legend and footer sit straight on the sheet, and a text shadow is no defence
+   against a pale boulevard running under them — 24-map has the key line half
+   dissolved into the monumental axis. Both get a real plate. */
 .gta-map-foot {
   position:absolute; right:18px; bottom:16px; font-size:9.5px; letter-spacing:.22em;
-  color:#9a86b8; text-align:right; pointer-events:none; text-shadow:0 1px 4px #000, 0 0 8px #000;
+  color:#9a86b8; text-align:right; pointer-events:none; text-shadow:0 1px 4px #000;
+  padding:6px 10px; background:rgba(9,4,18,.78); border-radius:2px;
 }
 .gta-map-readout {
-  position:absolute; left:18px; top:80px; padding:9px 13px; min-width:186px;
+  position:absolute; left:18px; top:88px; padding:9px 13px; min-width:186px;
   background:linear-gradient(90deg, rgba(22,8,38,.92), rgba(18,8,30,.5));
   border-left:3px solid #ff3d7f; pointer-events:none;
 }

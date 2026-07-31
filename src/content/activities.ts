@@ -9,10 +9,24 @@
  *   evadare   the Ministry comes for you; lose them
  *   foto      photograph Georgescu's propaganda screens before the patrol
  *
- * COORDINATES. The city is a 92 m grid whose road centrelines fall on
- * `-1196 + 92k` (see `WorldScale`, src/artDirection.ts). Every point below is
- * on one of those lines or on a plaza deck, so nothing is ever authored inside
- * a building.
+ * COORDINATES ARE INTENT, NOT TRUTH.
+ *
+ * The numbers below are authored on the 92 m planning grid whose lines fall on
+ * `-1196 + 92k` (`G`, and see `WorldScale` in src/artDirection.ts). That grid
+ * is where the road centrelines were DESIGNED to be. The city that ships is a
+ * curated OpenStreetMap import of central Bucharest, and its real centrelines
+ * wander several metres off the grid downtown and tens of metres off at the
+ * edges — so a point that looks like it is on a boulevard can be inside a
+ * block. Measured before the fix: twelve of these thirty-three points were
+ * more than 10 m from the nearest drivable segment, three were inside a
+ * building, and the start of "Cursă: Bulevardul Magheru" was 33 m off, which a
+ * playtester experienced as 115 seconds of driving at a wall.
+ *
+ * `ActivitySystem.planRoutes` therefore SNAPS every point below onto the
+ * nearest drivable road segment at boot, checks each consecutive pair is
+ * connected by an A* route, and refuses to ship a point it cannot place
+ * (`?strict=1` makes that a boot failure). Author roughly where the challenge
+ * should be; the road graph decides exactly where it lands.
  */
 
 import type { ActivityKind } from '../gameplay/activityScoring';

@@ -45,6 +45,9 @@ import {
   type Vec3Lite,
 } from './missionState';
 import { missionHud, resetMissionHud } from './hudState';
+// Type only: `CameraService` in the frozen seam has `focusOn` and nothing that
+// can compose a shot. The camera system publishes the wider contract.
+import type { CameraDirector, CinematicShot } from './cameraSystem';
 
 const GIVER_ID = 'story:giver';
 const OBJ_ID = 'story:objective';
@@ -152,12 +155,27 @@ export class MissionSystem implements System, MissionService {
       this.cast.add({ id: `builder_out${i}`, name: 'Constructor', role: 'builder', x, z, yaw, parties: true });
     });
 
-    // Builders waiting in silence in the dark lobby — the afterparty crowd.
+    /*
+     * BUILDERS WAITING IN SILENCE IN THE DARK LOBBY — the afterparty crowd.
+     *
+     * There were four, standing in a loose diagonal near the middle of the
+     * room, and after liberation they stayed exactly where they were and
+     * shuffled on the spot. A playtester who walked into the finale saw ONE
+     * person: the rest were in the unlit half of a 28 x 22 m hall.
+     *
+     * Seven now, pushed out to the edges of the room while it is sealed — that
+     * is what waiting in a condemned building looks like, and it leaves the
+     * middle of the floor empty for the party to fill. `FINALE_RING` is where
+     * they go when the lights come on.
+     */
     const inside: Array<[number, number, number]> = [
-      [LOBBY.cx - 5.5, LOBBY.cz - 1.5, 0.4],
-      [LOBBY.cx - 2.0, LOBBY.cz + 1.0, 3.0],
-      [LOBBY.cx + 3.0, LOBBY.cz - 2.5, 2.2],
-      [LOBBY.cx + 6.5, LOBBY.cz + 0.5, 3.6],
+      [LOBBY.cx - 9.5, LOBBY.cz - 3.0, 0.9],
+      [LOBBY.cx - 8.0, LOBBY.cz + 3.4, 1.5],
+      [LOBBY.cx - 2.0, LOBBY.cz + 6.2, 3.0],
+      [LOBBY.cx + 3.0, LOBBY.cz - 5.2, 2.2],
+      [LOBBY.cx + 8.5, LOBBY.cz + 0.5, 4.3],
+      [LOBBY.cx + 6.5, LOBBY.cz + 5.6, 3.6],
+      [LOBBY.cx - 5.0, LOBBY.cz - 6.4, 0.2],
     ];
     inside.forEach(([x, z, yaw], i) => {
       this.cast.add({ id: `builder_in${i}`, name: 'Constructor', role: 'builder', x, z, yaw, parties: true });
@@ -230,6 +248,7 @@ export class MissionSystem implements System, MissionService {
     this.lastFailedId = null;
     this.failBanner = 0;
     this.clearMarkers();
+    this.cancelFinalePan();
     resetMissionHud();
 
     this._completed = new Set(completed.filter((id) => CAMPAIGN_BY_ID.has(id)));
@@ -251,6 +270,7 @@ export class MissionSystem implements System, MissionService {
     const id = this._current ?? this.lastFailedId;
     if (!id) return;
     this.clearMarkers();
+    this.cancelFinalePan();
     this.run = null;
     this._current = null;
     this.start(id);
@@ -353,12 +373,32 @@ export class MissionSystem implements System, MissionService {
         this.ctx.tryGet(Services.Peds)?.scatter(_v.set(PLACES.barricade.x, 0, PLACES.barricade.z), 30);
         break;
       case 'enter': {
-        // Step him over the threshold. The shell has a real 3.4 m pedestrian
-        // gap (see buildersHouse.ts), so this is a nudge through the door
-        // rather than a teleport into a sealed box.
+        /*
+         * Step him over the threshold. The shell has a real 3.4 m pedestrian
+         * gap (see buildersHouse.ts), so this is a nudge through the door
+         * rather than a teleport into a sealed box.
+         *
+         * NOT `LOBBY_DOOR_INSIDE` any more. Three metres inside a doorway is
+         * a fine place to stand and a terrible place to be PUT: the chase
+         * camera booms five metres back, so it ends up outside the building
+         * looking at the back of the facade. The interiors system computes an
+         * anchor with room for the boom and a facing that looks into the hall
+         * (`entryAnchor`, world/interiors/shell.ts).
+         *
+         * REQUEST TO THE ARCHITECTURE OWNER: `entrySpot` deserves a place on
+         * `InteriorsService` in src/core/services.ts next to `doorwayInside`.
+         * Until it has one this narrows the service and falls back.
+         */
+        type WithEntry = { entrySpot?(id: string): { x: number; y: number; z: number; yaw: number } | null };
+        const spot = (this.ctx.tryGet(Services.Interiors) as WithEntry | undefined)
+          ?.entrySpot?.('buildersLobby');
         this.ctx.tryGet(Services.Player)?.teleport(
-          new THREE.Vector3(LOBBY_DOOR_INSIDE.x, LOBBY.floorY + 0.05, LOBBY_DOOR_INSIDE.z),
-          0,
+          new THREE.Vector3(
+            spot?.x ?? LOBBY_DOOR_INSIDE.x,
+            (spot?.y ?? LOBBY.floorY) + 0.05,
+            spot?.z ?? LOBBY_DOOR_INSIDE.z,
+          ),
+          spot?.yaw ?? 0,
         );
         this.toast('Ești în holul Casei Constructorilor', 'good');
         break;
@@ -375,20 +415,119 @@ export class MissionSystem implements System, MissionService {
    * THE PAYOFF. Lights up, tricolour on, folk music, dancing builders — and
    * none of it before this exact interaction, which is what `docs/STORY.md`
    * asks for.
+   *
+   * All four halves of that sentence now actually happen:
+   *   LIGHTS   `InteriorsService.liberate()` rebuilds the room in its
+   *            `liberated` state, which is where the pendants, the dance
+   *            floor and the raised ambient fill live (interiors/lobby.ts).
+   *   PEOPLE   every builder in the building — the seven who were waiting in
+   *            the dark plus the ones off the forecourt — is walked onto the
+   *            dance floor and set dancing, in a ring facing the decks, so
+   *            the party is a crowd rather than the one man who happened to
+   *            be standing in the light.
+   *   MUSIC    the afterparty bed, which was the only part that worked.
+   *   CAMERA   a slow interior pan, `FINALE_PAN`, played after the act card.
    */
   private liberate(): void {
     this.partyOn = true;
     this.ctx.tryGet(Services.BuildersHouse)?.liberate();
-    this.cast.setParty(true);
-    // The builders outside come in for the party.
-    const seats: Array<[number, number]> = [
-      [LOBBY.cx - 8, LOBBY.cz - 4], [LOBBY.cx + 8, LOBBY.cz - 4], [LOBBY.cx, LOBBY.cz - 6],
+
+    // A ring around the dance floor, everyone facing the decks on the
+    // reception counter. The ring is authored in room-relative metres so it
+    // follows the lobby if the tower ever moves.
+    const dfx = LOBBY.cx;
+    const dfz = LOBBY.cz - 1.6;
+    const ring: Array<[number, number]> = [];
+    const N = 10;
+    for (let i = 0; i < N; i++) {
+      const a = (i / N) * Math.PI * 2 + 0.35;
+      ring.push([dfx + Math.sin(a) * 5.2, dfz + Math.cos(a) * 3.9]);
+    }
+    const dancers = [
+      ...['builder_in0', 'builder_in1', 'builder_in2', 'builder_in3', 'builder_in4', 'builder_in5', 'builder_in6'],
+      ...['builder_out0', 'builder_out1', 'builder_out2'],
     ];
-    seats.forEach(([x, z], i) => this.cast.moveTo(`builder_out${i}`, x, z, Math.PI));
+    dancers.forEach((id, i) => {
+      const [x, z] = ring[i % ring.length];
+      // Face the decks, so the crowd reads as an audience and not a queue.
+      this.cast.moveTo(id, x, z, Math.atan2(LOBBY_RECEPTION.x - x, LOBBY_RECEPTION.z - z));
+    });
+    this.cast.setParty(true);
+
     this.ctx.tryGet(Services.Wanted)?.clear();
     this.ctx.tryGet(Services.Audio)?.setMusic('afterparty', 1.5);
     this.ctx.tryGet(Services.Camera)?.shake(0.25, 0.5);
     this.ctx.events.emit('radio:line', { text: 'Casa Constructorilor e din nou deschisă. Muzica e a noastră.' });
+
+    this.queueFinalePan();
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* the finale pan                                                    */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * THE SLOW INTERIOR PAN `docs/STORY.md` PROMISES.
+   *
+   * Two shots, cut together, both held inside the room:
+   *   1. a slow push up the hall onto the decks, the tricolour and the crowd;
+   *   2. a slow crane back off the dance floor that gives up the whole hall.
+   *
+   * Timed to START AFTER the act's own closing card. `liberate()` runs from
+   * the last objective of Act IV, so `completeRun()` — and with it the
+   * camera's `act4_giftshop` climax — fires a frame later; opening with our
+   * own shot would simply be replaced by it. Rather than fight over the
+   * camera, the pan waits for the card to finish and then plays.
+   *
+   * `azimuthDeg` is fixed on both: the shot-picker's sweep looks for the
+   * longest clear eye-line, and inside a room the clearest line is out
+   * through the door.
+   */
+  private queueFinalePan(): void {
+    const dfx = LOBBY.cx;
+    const dfz = LOBBY.cz - 1.6;
+    this.panClock = 0;
+    this.panQueue = [
+      {
+        at: 5.4,
+        shot: {
+          target: new THREE.Vector3(LOBBY_RECEPTION.x, LOBBY.floorY, LOBBY_RECEPTION.z),
+          duration: 6.5, distance: 12.5, height: 2.4, lookHeight: 1.7, fov: 44,
+          azimuthDeg: 180, push: 5.0, rise: 0.5, rollDeg: -0.8,
+          hold: true, priority: 4,
+          subtitle: 'Constructorii sunt acasă.',
+        },
+      },
+      {
+        at: 12.2,
+        shot: {
+          target: new THREE.Vector3(dfx, LOBBY.floorY, dfz),
+          duration: 7.0, distance: 8.0, height: 2.2, lookHeight: 1.35, fov: 50,
+          // From the north-west quarter, craning back and up off the crowd:
+          // the reception desk is due north, and a shot that ends behind it
+          // frames the party through a monitor and a counter edge.
+          azimuthDeg: 325, push: -4.0, rise: 3.0, rollDeg: 1.0,
+          hold: true, priority: 4,
+          subtitle: 'Muzica e a noastră.',
+        },
+      },
+    ];
+  }
+
+  private panQueue: Array<{ at: number; shot: CinematicShot }> = [];
+  private panClock = 0;
+
+  /** Runs whether or not a mission is still running — the act ends mid-pan. */
+  private tickFinalePan(dt: number): void {
+    if (this.panQueue.length === 0) return;
+    this.panClock += dt;
+    const cam = this.ctx.tryGet(Services.Camera) as CameraDirector | undefined;
+    while (this.panQueue.length && this.panClock >= this.panQueue[0].at) {
+      const next = this.panQueue.shift()!;
+      // No camera director (headless, or a stubbed camera): drop the pan
+      // rather than stall the queue.
+      cam?.playShot?.(next.shot);
+    }
   }
 
   private completeRun(): void {
@@ -464,6 +603,12 @@ export class MissionSystem implements System, MissionService {
     this.lines.length = 0;
   }
 
+  /** Abandon/restore/restart must not leave a finale pan queued. */
+  private cancelFinalePan(): void {
+    this.panQueue.length = 0;
+    this.panClock = 0;
+  }
+
   /* ---------------------------------------------------------------- */
   /* frame                                                             */
   /* ---------------------------------------------------------------- */
@@ -473,6 +618,9 @@ export class MissionSystem implements System, MissionService {
       this.failBanner -= dt;
       if (this.failBanner <= 0) missionHud.failed = '';
     }
+
+    // Before the early-out: the finale pan outlives the act that started it.
+    this.tickFinalePan(dt);
 
     const run = this.run;
     if (!run || !run.isRunning) return;
@@ -657,6 +805,20 @@ export class MissionSystem implements System, MissionService {
       interact: (id?: string) =>
         this.interaction.trigger(id ?? this.interaction.focusId),
       callDacia: () => this.callDacia(),
+      /**
+       * Fire the Act IV payoff on the spot — lights, crowd, music, pan —
+       * without playing three acts first. This is how the finale is verified.
+       */
+      finale: () => {
+        this.liberate();
+        return { party: this.partyOn, pan: this.panQueue.map((p) => p.at) };
+      },
+      /** Skip straight to the interior pan, for framing checks. */
+      finalePan: () => {
+        this.queueFinalePan();
+        this.panClock = 5.39;
+        return true;
+      },
       goTo: (place: string) => {
         const pl = (PLACES as Record<string, { x: number; z: number }>)[place];
         if (!pl) return false;

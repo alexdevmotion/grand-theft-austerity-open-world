@@ -18,6 +18,7 @@ import {
   viewBounds,
   type MapView,
 } from './mapMath';
+import { segmentHitsRect } from './mapRender';
 
 function view(over: Partial<MapView> = {}): MapView {
   return { ...makeView(200, 200), scale: 1, ...over };
@@ -182,4 +183,31 @@ test('smoothing rounds corners without moving the ends', () => {
 test('smoothing a degenerate route is a no-op', () => {
   expect(smoothPolyline([]).length).toBe(0);
   expect(smoothPolyline([{ x: 1, z: 2 }, { x: 3, z: 4 }]).length).toBe(2);
+});
+
+/* ------------------------------------------------------------------ */
+/* label collision                                                     */
+/* ------------------------------------------------------------------ */
+
+test('a road crossing a caption box is detected from any direction', () => {
+  const box: [number, number, number, number] = [100, 100, 200, 120];
+  // Straight through the middle, horizontally and vertically.
+  expect(segmentHitsRect(0, 110, 400, 110, ...box)).toBe(true);
+  expect(segmentHitsRect(150, 0, 150, 400, ...box)).toBe(true);
+  // Diagonal clipping one corner.
+  expect(segmentHitsRect(80, 80, 130, 130, ...box)).toBe(true);
+  // Ending inside the box.
+  expect(segmentHitsRect(150, 110, 900, 900, ...box)).toBe(true);
+});
+
+test('a road that misses the caption box is not a collision', () => {
+  const box: [number, number, number, number] = [100, 100, 200, 120];
+  expect(segmentHitsRect(0, 90, 400, 90, ...box)).toBe(false);
+  expect(segmentHitsRect(0, 130, 400, 130, ...box)).toBe(false);
+  expect(segmentHitsRect(90, 0, 90, 400, ...box)).toBe(false);
+  // Diagonal that passes the corner on the outside.
+  expect(segmentHitsRect(0, 130, 90, 40, ...box)).toBe(false);
+  // Degenerate: a zero-length segment inside counts, outside does not.
+  expect(segmentHitsRect(150, 110, 150, 110, ...box)).toBe(true);
+  expect(segmentHitsRect(10, 10, 10, 10, ...box)).toBe(false);
 });

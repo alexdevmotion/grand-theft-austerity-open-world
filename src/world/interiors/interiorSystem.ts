@@ -30,7 +30,9 @@ import { GROUP, type PhysicsWorld } from '../../physics/physics';
 import { DetailBuilder } from '../city/builders';
 import { BLOCKERS, INTERIORS, INTERIOR_BY_ID } from './defs';
 import { createInteriorMaterial, type InteriorMaterial } from './interiorMaterial';
-import { doorCentre, doorInside, doorNormal, doorOutside, innerHalf, type ShellSpec } from './shell';
+import {
+  doorCentre, doorInside, doorNormal, doorOutside, entryAnchor, innerHalf, type ShellSpec,
+} from './shell';
 import type { LightAnchor } from './kit';
 import { fitLobby, type LobbyState } from './lobby';
 import { fitRecorder } from './recorder';
@@ -83,6 +85,27 @@ const INITIAL_STATE: Record<string, string> = {
   buildersLobby: 'sealed',
   broadcastStudio: 'regime',
 };
+
+/**
+ * PER-STATE AMBIENT FILL, overriding `ShellSpec.fill`.
+ *
+ * `fill` is one number per room, which is right while a room is one thing. The
+ * Builders House lobby is two: a dead 28 x 22 m hall lit by two work lamps,
+ * and the same hall with every pendant, every string light and a PA rig
+ * running. Six shared point lights cannot express that difference — at the
+ * far end of the room they are all out of range either way — so the party's
+ * bounce is carried by the fill, the way the studio already carries its own.
+ *
+ * The playtest's "mostly black lobby" with the music playing was this number
+ * being 1 in both states.
+ */
+const STATE_FILL: Record<string, Record<string, number>> = {
+  buildersLobby: { sealed: 0.85, liberated: 4.8 },
+};
+
+function fillFor(spec: ShellSpec, state: string): number {
+  return STATE_FILL[spec.id]?.[state] ?? spec.fill ?? 1;
+}
 
 /** Real point lights alive at once, across every interior. */
 const LIGHT_POOL = 6;
@@ -145,11 +168,12 @@ export class InteriorSystem implements System, InteriorsService {
 
     for (const spec of INTERIORS) {
       const mat = createInteriorMaterial();
-      mat.setFill(spec.fill ?? 1);
+      const state0 = INITIAL_STATE[spec.id] ?? '';
+      mat.setFill(fillFor(spec, state0));
       const inst: Instance = {
         spec,
         mat,
-        state: INITIAL_STATE[spec.id] ?? '',
+        state: state0,
         mesh: null,
         anchors: [],
         triangles: 0,
@@ -243,13 +267,35 @@ export class InteriorSystem implements System, InteriorsService {
     }
     const fit = FITOUT[inst.spec.id];
     if (!fit) return;
+    inst.mat.setFill(fillFor(inst.spec, inst.state));
     const b = new DetailBuilder();
     const rng = new Rng(`interior:${inst.spec.id}:${inst.state}`);
     inst.anchors = fit(b, inst.spec, rng, inst.state);
     const geo = b.build();
     const mesh = new THREE.Mesh(geo, inst.mat);
     mesh.name = `interior-${inst.spec.id}`;
-    mesh.castShadow = false;
+    /*
+     * THE ROOM IS ITS OWN SUNSHADE — THIS IS WHAT SEALS AN INTERIOR.
+     *
+     * The city's facade extrusion has no lid: a shell is four walls and a
+     * parapet, open to the sky from directly above. At 19:30 the sun sits at
+     * three degrees and nothing gets in, which is why this was invisible for
+     * so long; wind the clock to the middle of the day and the sun drops
+     * straight down into every interior in the game. The playtest caught it in
+     * the broadcast studio as "a hard-edged white sun shaft cutting diagonally
+     * across the floor" — that shaft is the shadow edge of the wall the light
+     * came over.
+     *
+     * With the fitout casting, the ceiling slab and the four inner wall faces
+     * drawn by `drawShellRoom` are real occluders, so the only sun in the room
+     * is the sun that comes through the door — which is a shaft you WANT.
+     *
+     * The cost is bounded by the streaming: only rooms inside their own
+     * `streamRadius` are visible, and three.js skips invisible objects in the
+     * shadow pass. Two rooms at 5k triangles each is nothing against a
+     * 1.9 M-triangle frame.
+     */
+    mesh.castShadow = true;
     mesh.receiveShadow = true;
     mesh.matrixAutoUpdate = false;
     mesh.updateMatrix();
@@ -391,6 +437,18 @@ export class InteriorSystem implements System, InteriorsService {
     return { x: p.x, y: s.floorY + 0.06, z: p.z };
   }
 
+  /**
+   * Where a player who has just come through the door should STAND, and which
+   * way he should be looking. Not the same question as `doorwayInside` — see
+   * `entryAnchor` in shell.ts for why two and a half metres is not enough.
+   */
+  entrySpot(id: string): { x: number; y: number; z: number; yaw: number } | null {
+    const s = INTERIOR_BY_ID.get(id);
+    if (!s) return null;
+    const a = entryAnchor(s);
+    return { x: a.x, y: s.floorY + 0.06, z: a.z, yaw: a.yaw };
+  }
+
   /* ---------------------------------------------------------------- */
   /* Automation hook                                                   */
   /* ---------------------------------------------------------------- */
@@ -402,6 +460,7 @@ export class InteriorSystem implements System, InteriorsService {
         name: i.spec.name,
         centre: [i.spec.cx, i.spec.floorY, i.spec.cz] as [number, number, number],
         inside: this.doorwayInside(i.spec.id),
+        entry: this.entrySpot(i.spec.id),
         state: i.state,
         built: !!i.mesh,
         near: i.near,
@@ -414,11 +473,14 @@ export class InteriorSystem implements System, InteriorsService {
         triangles: this.instances.reduce((a, i) => a + (i.mesh?.visible ? i.triangles : 0), 0),
         litLights: this.lights.filter((l) => l.intensity > 0).length,
       }),
-      /** Teleport the player through the door of `id`. */
+      /**
+       * Teleport the player through the door of `id`, standing where a person
+       * who had just walked in would stand and facing the way he would face.
+       */
       enter: (id: string) => {
-        const p = this.doorwayInside(id);
+        const p = this.entrySpot(id);
         if (!p) return null;
-        this.ctx.tryGet(Services.Player)?.teleport(new THREE.Vector3(p.x, p.y + 0.9, p.z), 0);
+        this.ctx.tryGet(Services.Player)?.teleport(new THREE.Vector3(p.x, p.y + 0.9, p.z), p.yaw);
         return p;
       },
       /**

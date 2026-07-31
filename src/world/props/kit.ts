@@ -156,6 +156,18 @@ export interface PropOpts {
    * when real foliage glows.
    */
   trans?: number;
+  /**
+   * WIND SWAY AMPLITUDE IN METRES, per vertex. Zero on everything rigid.
+   *
+   * Props are merged into one static geometry per tile exactly like the city's
+   * detail pass, so the only place motion can come from is the vertex shader.
+   * The city's trees have had this since the last foliage pass; the props ones
+   * did not, so a plaza planted from `autumnTree` stood dead still next to a
+   * street planted from `planeTree` that was moving — which reads worse than
+   * nothing moving at all. Authored the same way and with the same numbers:
+   * ~0.02 on inner branches, 0.10-0.16 on crown tips.
+   */
+  wind?: number;
 }
 
 const NO_E = [0, 0, 0];
@@ -176,6 +188,7 @@ export class PropBuilder {
   readonly mr: number[] = [];
   readonly emis: number[] = [];
   readonly trans: number[] = [];
+  readonly wind: number[] = [];
   readonly idx: number[] = [];
 
   get triangles(): number {
@@ -199,6 +212,7 @@ export class PropBuilder {
     const e = o.emissive ?? NO_E;
     this.emis.push(e[0], e[1], e[2]);
     this.trans.push(o.trans ?? 0);
+    this.wind.push(o.wind ?? 0);
   }
 
   /** Quad with a derived normal. Winding a→b→c→d, front face CCW. */
@@ -350,9 +364,24 @@ export class PropBuilder {
       this.v(ax + nx * r, ay + ny * r, az + nz * r, nx, ny, nz, o);
       this.v(bx + nx * r, by + ny * r, bz + nz * r, nx, ny, nz, o);
     }
+    /*
+     * WINDING. This walks the ring pair the OPPOSITE way round to `cyl`,
+     * because the (t, s) frame it builds turns the other way: for a vertical
+     * axis `cyl` steps +x -> +z while this steps -z -> -x. Emitting `cyl`'s
+     * index order on top of that produced triangles whose faces pointed INTO
+     * the tube while every vertex normal pointed out of it.
+     *
+     * With front-face culling on, what you then see through a branch is its
+     * far inner wall, shaded by an outward normal that happens to face the
+     * key — so every branch, twig, catenary wire, handrail and bracket in the
+     * city rendered as a BLINDING WHITE stick. On a tree that is the whole
+     * "white twigs poking out of the crown" complaint, and it is why a trunk
+     * built half from `cyl` and half from `tube` was dark up to its midpoint
+     * and white above it, which is what finally located this.
+     */
     for (let i = 0; i < seg; i++) {
       const i0 = base + i * 2;
-      this.idx.push(i0, i0 + 1, i0 + 3, i0, i0 + 3, i0 + 2);
+      this.idx.push(i0, i0 + 3, i0 + 1, i0, i0 + 2, i0 + 3);
     }
   }
 
@@ -475,8 +504,10 @@ export class PropBuilder {
      * real foliage does and what stops a tree reading as a hole in the frame.
      */
     nJitter = 0,
+    /** Radial segments. Five is the cheapest shape that still reads as round
+     *  once a dozen of them overlap; six is for lobes seen in isolation. */
+    seg = 6,
   ): void {
-    const seg = 6;
     const base = this.pos.length / 3;
     let seed = seedIn;
     const rnd = (): number => {
@@ -545,6 +576,7 @@ export class PropBuilder {
     g.setAttribute('aMR', new THREE.Float32BufferAttribute(this.mr, 2));
     g.setAttribute('aEmissive', new THREE.Float32BufferAttribute(this.emis, 3));
     g.setAttribute('aTrans', new THREE.Float32BufferAttribute(this.trans, 1));
+    g.setAttribute('aWind', new THREE.Float32BufferAttribute(this.wind, 1));
     g.setIndex(this.idx);
     g.computeBoundingSphere();
     return g;
@@ -563,6 +595,8 @@ export interface PropMaterialSet {
   uSunDir: { value: THREE.Vector3 };
   /** Linear radiance of the key light, so translucency matches the sun. */
   uSunColor: { value: THREE.Color };
+  /** Seconds. Drives the foliage wind sway; self-driven, see below. */
+  uTime: { value: number };
   dispose(): void;
 }
 
@@ -570,17 +604,35 @@ const PROP_VERT_PARS = /* glsl */ `
 attribute vec2 aMR;
 attribute vec3 aEmissive;
 attribute float aTrans;
+attribute float aWind;
 varying vec2 vPMR;
 varying vec3 vPEmi;
 varying float vPTrans;
 varying vec3 vPWPos;
 varying vec3 vPWNrm;
+uniform float uPropTime;
 `;
 
+/**
+ * WIND, matched term for term to the city's detail shader so a plaza tree and
+ * the street tree ten metres from it move as one weather system rather than as
+ * two. Two frequencies — a slow sway plus a faster flutter — phased off world
+ * position, which is what stops an avenue of trees moving in unison. Prop tiles
+ * carry identity matrices and are authored in world metres, so `position` is
+ * the world position here.
+ */
 const PROP_VERT_MAIN = /* glsl */ `
 vPMR = aMR;
 vPEmi = aEmissive;
 vPTrans = aTrans;
+if (aWind > 0.0001) {
+  float ph = position.x * 0.21 + position.z * 0.17;
+  float sway = sin(uPropTime * 0.55 + ph) * 0.7 + sin(uPropTime * 1.43 + ph * 2.7) * 0.3;
+  float flut = sin(uPropTime * 3.1 + position.y * 1.9 + ph * 4.1);
+  transformed.x += (sway * 0.92 + flut * 0.22) * aWind;
+  transformed.z += (sway * 0.46 - flut * 0.26) * aWind;
+  transformed.y += flut * aWind * 0.18;
+}
 vPWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
 vPWNrm = normalize(mat3(modelMatrix) * objectNormal);
 `;
@@ -600,6 +652,26 @@ export function createPropMaterials(): PropMaterialSet {
   const uNight = { value: 0 };
   const uSunDir = { value: new THREE.Vector3(-0.95, 0.056, -0.31).normalize() };
   const uSunColor = { value: srgb(0xffab72).multiplyScalar(2.6) };
+  /*
+   * SELF-DRIVEN CLOCK. The city's wind clock is fed by the world system, which
+   * owns the detail materials; nothing in the props pipeline is handed a per
+   * frame time, and threading one through would change the ProceduralProps
+   * update signature — a file this module does not own. A single rAF that only
+   * writes one float is the smaller change, and it is correct: wind is wall
+   * clock weather, not simulation state, so it does not want to be paused,
+   * rewound or scaled with the game clock. `uTime` is still exposed on the set,
+   * so a caller that wants authority over it can simply overwrite the value.
+   */
+  const uTime = { value: 0 };
+  if (typeof requestAnimationFrame === 'function') {
+    const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+    const tick = (): void => {
+      const now = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+      uTime.value = now - t0;
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
 
   const solid = new THREE.MeshStandardMaterial({
     color: 0xffffff,
@@ -616,6 +688,7 @@ export function createPropMaterials(): PropMaterialSet {
     shader.uniforms.uNight = uNight;
     shader.uniforms.uPropSunDir = uSunDir;
     shader.uniforms.uPropSunColor = uSunColor;
+    shader.uniforms.uPropTime = uTime;
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>\n${PROP_VERT_PARS}`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>\n${PROP_VERT_MAIN}`);
@@ -652,14 +725,18 @@ export function createPropMaterials(): PropMaterialSet {
           // facets of every cluster at once and bleaches an amber canopy to
           // cream, which is as wrong as the black plates it replaced.
           float _wrapT = max(0.0, (-dot(_n, uPropSunDir) + 0.45) / 1.45);
-          float _thru = pow(max(0.0, dot(_v, uPropSunDir)), 4.0);
+          // Exponent 3, not 4: at 4 the glow only fired within about forty
+          // degrees of the sun, so a canopy read as a flat amber shape unless
+          // you aimed straight into the key. Matched to the city's detail
+          // shader so a plaza tree and the street tree beside it agree.
+          float _thru = pow(max(0.0, dot(_v, uPropSunDir)), 3.0);
           totalEmissiveRadiance += diffuseColor.rgb * uPropSunColor * vPTrans *
-            (_wrapT * 0.24 + _thru * 1.05) * (1.0 - uNight * 0.8);
+            (_wrapT * 0.19 + _thru * 1.3) * (1.0 - uNight * 0.8);
         }
         `,
       );
   };
-  solid.customProgramCacheKey = () => 'gta-prop-solid-v3';
+  solid.customProgramCacheKey = () => 'gta-prop-solid-v5';
   solid.name = 'gta:props';
 
   return {
@@ -667,6 +744,7 @@ export function createPropMaterials(): PropMaterialSet {
     uNight,
     uSunDir,
     uSunColor,
+    uTime,
     dispose() {
       solid.dispose();
     },

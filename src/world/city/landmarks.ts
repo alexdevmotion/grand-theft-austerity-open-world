@@ -151,6 +151,43 @@ export function buildBuildersHouse(sink: LandmarkSink, rng: Rng): LandmarkResult
   f.extrude(towerFp, 0, towerH, 0, glass);
 
   /*
+   * AND THEN THE CURTAIN WALL AS REAL GEOMETRY ON TOP OF IT.
+   *
+   * The grammar shader draws a very good curtain wall — analytic mullions,
+   * a per-pane reveal, a bowed mosaic — but two of its terms are scaled for a
+   * building seen from across a boulevard and both collapse on the hero:
+   *
+   *   - `_f.emissive *= 1 - smoothstep(70, 340, dist) * 0.86`, and
+   *     `uLitGain = 0.34 + 0.66 * uNight`, which at DUSK is 0.34. The lit-room
+   *     term's base gain is 0.019, so a lit office at 19:24 arrives at 0.0065
+   *     linear. That is two and a half orders of magnitude under the sky it is
+   *     supposed to be read against, which is why Builders House — the story's
+   *     home and the reference frame's subject — shipped with zero lit windows
+   *     and broke rule 3 of docs/VISUAL_TARGET.md on the one building that
+   *     rule was written for.
+   *   - the relief is a derivative bump, so it perturbs the NORMAL but casts no
+   *     shadow and breaks no silhouette. From the forecourt, twenty metres from
+   *     the glass, the wall reads flat.
+   *
+   * `curtainWall` fixes both with geometry the depth buffer can see: mullions
+   * and transoms that stand proud and drop real cascade shadows across the
+   * panes under them, projecting sills that catch the three-degree sun, and
+   * emissive room panels sunk 160 mm behind the frame with desks and figures
+   * silhouetted against them. src/world/city/materials.ts is not this agent's
+   * file; this is the local equivalent of raising uLitGain there.
+   *
+   * The west elevation is deliberately skipped — the travertine core slab
+   * stands over the whole of it, exactly as it does in the reference.
+   */
+  curtainWall(d, rng, {
+    cx, cz, w: towerW, dep: towerD,
+    y0: groundH, y1: towerH - 1.2,
+    floorH, bayW: 1.7,
+    south: true, north: true, east: true, west: false,
+    lit: 0.38,
+  });
+
+  /*
    * THE TOWER IS A SHELL, NOT A SOLID.
    *
    * It used to be registered as ONE cuboid spanning y 0..82 over the whole
@@ -315,6 +352,212 @@ export function buildBuildersHouse(sink: LandmarkSink, rng: Rng): LandmarkResult
     boxes,
     slabs: [forecourt, landing, floorSlab(BUILDERS_LOBBY)],
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* Curtain wall — real geometry, not a painted grid                     */
+/* ------------------------------------------------------------------ */
+
+/** Anodised bronze-grey mullion cap. Dark, so lit panes read against it. */
+const MULLION = lin(0x2a2c33);
+const MULLION_LIT = lin(0x4b4d56);
+/** Warm office fluorescent seen through glass, and the Builders' fit-out. */
+const ROOM_WARM = lin(0xffbe63);
+const ROOM_COOL = lin(0xc2d2ff);
+/** Desks, partitions and people in silhouette against a lit floor. */
+const ROOM_DARK = lin(0x14101c);
+
+export interface CurtainWallSpec {
+  cx: number;
+  cz: number;
+  /** Extent along X and along Z. */
+  w: number;
+  dep: number;
+  y0: number;
+  y1: number;
+  floorH: number;
+  bayW: number;
+  south: boolean;
+  north: boolean;
+  east: boolean;
+  west: boolean;
+  /** Fraction of panes with a lit room behind them. */
+  lit: number;
+}
+
+/**
+ * A MULLIONED GLASS ELEVATION, BUILT OUT OF BOXES.
+ *
+ * Proportions are taken off the reference frame's tower rather than invented:
+ * a 1.7 m bay, a storey a shade over 4 m, a mullion that stands about a
+ * hand's width proud of the glass, and a transom at every floor line carrying
+ * a sill deep enough to throw a line of shade across the pane below it.
+ *
+ * WHY BOXES AND NOT MORE SHADER. The grammar's analytic relief is a
+ * derivative bump: it changes the normal and nothing else. It cannot occlude,
+ * it cannot cast a cascade shadow, and it cannot break the silhouette against
+ * the sky — so the moment the camera is close enough for the mullion spacing
+ * to matter, which on the hero building is most of Act I and all of Act IV,
+ * the wall goes flat. Twelve triangles per mullion buys all three.
+ *
+ * COST. A 30 x 24 x 72 m tower on three elevations comes to roughly 1.5k
+ * boxes / 18k triangles, which is under one percent of a street frame and adds
+ * no draw call at all — it goes into the chunk's existing detail buffer.
+ */
+function curtainWall(d: DetailBuilder, rng: Rng, o: CurtainWallSpec): void {
+  const floors = Math.max(1, Math.floor((o.y1 - o.y0) / o.floorH));
+
+  /** Mullion depth, transom depth, sill projection — metres proud of glass. */
+  const MULL_OUT = 0.17;
+  const TRAN_OUT = 0.23;
+  const SILL_OUT = 0.34;
+  /** How far the glass line itself sits behind the frame. */
+  const GLASS_IN = 0.02;
+
+  const faces: Array<{ nx: number; nz: number; on: boolean }> = [
+    { nx: 0, nz: 1, on: o.south },
+    { nx: 0, nz: -1, on: o.north },
+    { nx: 1, nz: 0, on: o.east },
+    { nx: -1, nz: 0, on: o.west },
+  ];
+
+  for (const fc of faces) {
+    if (!fc.on) continue;
+    const alongX = fc.nx === 0;
+    const span = alongX ? o.w : o.dep;
+    // Distance from the building centre out to this face.
+    const half = alongX ? o.dep / 2 : o.w / 2;
+    const bays = Math.max(2, Math.round(span / o.bayW));
+    const bw = span / bays;
+
+    /** World position of a point (t along the face, y up, out along normal). */
+    const px = (t: number, out: number): number =>
+      alongX ? o.cx - span / 2 + t : o.cx + fc.nx * (half + out);
+    const pz = (t: number, out: number): number =>
+      alongX ? o.cz + fc.nz * (half + out) : o.cz - span / 2 + t;
+    /** Box extents for something w0 wide along the face and d0 deep. */
+    const sx = (w0: number, d0: number): number => (alongX ? w0 : d0);
+    const sz = (w0: number, d0: number): number => (alongX ? d0 : w0);
+
+    /* ---- vertical mullions, one per bay line ---- */
+    const wallH = floors * o.floorH;
+    for (let b = 0; b <= bays; b++) {
+      const t = b * bw;
+      d.box(
+        px(t, MULL_OUT / 2), o.y0 + wallH / 2, pz(t, MULL_OUT / 2),
+        sx(0.10, MULL_OUT), wallH, sz(0.10, MULL_OUT), 0,
+        { color: MULLION, mr: MR.metal },
+      );
+    }
+
+    /* ---- transom + sill at every floor line ---- */
+    for (let fl = 0; fl <= floors; fl++) {
+      const y = o.y0 + fl * o.floorH;
+      d.box(
+        px(span / 2, TRAN_OUT / 2), y, pz(span / 2, TRAN_OUT / 2),
+        sx(span, TRAN_OUT), 0.22, sz(span, TRAN_OUT), 0,
+        { color: MULLION, mr: MR.metal },
+      );
+      // The sill is the part that reads at dusk: a 340 mm shelf catching a
+      // three-degree sun runs a bright line along every storey of the tower,
+      // and drops a hard shadow onto the glass beneath it.
+      if (fl < floors) {
+        d.box(
+          px(span / 2, SILL_OUT / 2), y + 0.17, pz(span / 2, SILL_OUT / 2),
+          sx(span, SILL_OUT), 0.07, sz(span, SILL_OUT), 0,
+          { color: MULLION_LIT, mr: MR.metal },
+        );
+      }
+    }
+
+    /* ---- lit rooms behind the glass ---- */
+    const paneW = bw - 0.20;
+    const paneH = o.floorH - 0.95;
+    for (let fl = 0; fl < floors; fl++) {
+      const yc = o.y0 + fl * o.floorH + 0.40 + paneH / 2;
+      /*
+       * OCCUPANCY IS PER FLOOR FIRST, PER PANE SECOND.
+       *
+       * An office tower is not lit pane-by-pane at random: a floor is either
+       * worked late on or it is not, and the lit ones show a run of six or
+       * eight bays together. Rolling every pane independently gives an even
+       * dither that reads as noise rather than as occupancy, which is one of
+       * the tells that separates a game facade from a photograph.
+       */
+      const floorBias = rng.bool(0.30) ? 1.75 : rng.bool(0.42) ? 0.12 : 0.72;
+      const rowLit = Math.min(0.93, o.lit * floorBias);
+      for (let b = 0; b < bays; b++) {
+        if (!rng.bool(rowLit)) continue;
+        const t = (b + 0.5) * bw;
+        // Four floors in five are ordinary office fluorescent; the fifth is
+        // one of the Builders' fit-outs. Two hues playing against each other
+        // is what stops a lit tower reading as a single glowing slab.
+        const purple = rng.bool(0.36);
+        const room = purple
+          ? (rng.bool(0.5) ? DetailColor.purple : DetailColor.magenta)
+          : (rng.bool(0.25) ? ROOM_COOL : ROOM_WARM);
+        /*
+         * GAIN, MEASURED NOT GUESSED. A sodium lamp head in this city is
+         * authored at 7.0 and a media screen's caption bar at 2.0; a whole
+         * pane of office ceiling seen through tinted glass is a much larger,
+         * much dimmer source than either. Above ~0.5 the panes clip through
+         * AgX to flat white and the tower reads as a lightbox instead of as
+         * glass with rooms behind it — the failure opposite to the unlit
+         * cream grid this replaced, and just as wrong.
+         */
+        const gain = purple ? 0.42 : rng.range(0.13, 0.27);
+        d.box(
+          px(t, -GLASS_IN), yc, pz(t, -GLASS_IN),
+          sx(paneW, 0.04), paneH, sz(paneW, 0.04), 0,
+          { color: room, mr: [0, 0.35], emissive: emi(room, gain) },
+        );
+        // Ceiling wash: the brightest band of any lit interior seen from
+        // outside, and the thing that makes a floor read as a ROOM with a
+        // ceiling rather than as a rectangle of light stuck on a wall.
+        d.box(
+          px(t, 0.02), yc + paneH * 0.42, pz(t, 0.02),
+          sx(paneW * 0.94, 0.03), paneH * 0.14, sz(paneW * 0.94, 0.03), 0,
+          { color: room, mr: [0, 0.3], emissive: emi(room, gain * 1.7) },
+        );
+        /* Furniture and people, silhouetted against the ceiling wash.
+         *
+         * Not pure black: a real interior silhouette is lit from behind AND
+         * spilled on from the front, so it sits a stop or two under the room
+         * rather than punching a hole in it. Pure black rectangles are the
+         * single most obvious tell at close range — they read as decals. */
+        const sil = { color: ROOM_DARK, mr: MR.rough, emissive: emi(room, gain * 0.10) };
+        const dw = paneW * rng.range(0.45, 0.8);
+        d.box(
+          px(t + rng.range(-0.1, 0.1), 0.05), yc - paneH * rng.range(0.30, 0.36),
+          pz(t + rng.range(-0.1, 0.1), 0.05),
+          sx(dw, 0.03), paneH * rng.range(0.12, 0.20), sz(dw, 0.03), 0, sil,
+        );
+        if (rng.bool(0.5)) {
+          const ox = rng.range(-0.28, 0.28) * paneW;
+          const ph = paneH * rng.range(0.26, 0.40);
+          d.box(
+            px(t + ox, 0.07), yc - paneH * 0.20 + ph / 2, pz(t + ox, 0.07),
+            sx(0.17, 0.03), ph, sz(0.17, 0.03), 0, sil,
+          );
+          // Head.
+          d.box(
+            px(t + ox, 0.07), yc - paneH * 0.20 + ph + 0.10, pz(t + ox, 0.07),
+            sx(0.13, 0.03), 0.17, sz(0.13, 0.03), 0, sil,
+          );
+        }
+        if (rng.bool(0.35)) {
+          // A monitor, back to the glass: a small bright block, which is what
+          // actually reads from the street on a real office floor.
+          const ox = rng.range(-0.3, 0.3) * paneW;
+          d.box(
+            px(t + ox, 0.06), yc - paneH * 0.10, pz(t + ox, 0.06),
+            sx(0.26, 0.03), 0.20, sz(0.26, 0.03), 0,
+            { color: ROOM_COOL, mr: [0, 0.3], emissive: emi(ROOM_COOL, gain * 1.4) },
+          );
+        }
+      }
+    }
+  }
 }
 
 /* ------------------------------------------------------------------ */

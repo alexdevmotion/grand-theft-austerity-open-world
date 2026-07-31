@@ -283,6 +283,13 @@ const HEAD_PROFILE: Array<[number, number, number, number]> = [
 
 interface HeadPoint { y: number; z: number; rx: number; rzF: number; rzB: number }
 
+/**
+ * One ring of the arm sweep: [t, radius, boneA, weightA, boneB].
+ * `t` is 0..1 along the upper arm and 1..2 along the forearm, so the elbow is
+ * exactly 1 and the sleeve cut is a single number on the same scale.
+ */
+type ArmRow = [number, number, number, number, number];
+
 function headProfile(m: BodyMetrics, t: number, jaw: number, grow = 0): HeadPoint {
   const chinY = m.headY - 0.010;
   const crownY = m.headTopY;
@@ -347,7 +354,26 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
     const skirtOut = hem > 0.4 ? 0.028 + hem * 0.02 : 0;
     const shape = hasOuter ? 2.5 : 2.2;
 
-    interface Prof { y: number; w: number; d: number; back: number; v: number }
+    interface Prof { y: number; w: number; d: number; back: number; v: number; n?: number }
+
+    /* THE SHOULDER YOKE — why there are four rings up here and not two.
+     *
+     * The torso used to jump straight from the armpit ring (`yokeY + 12 mm`,
+     * half-width `yokeW`) to a neck-root ring at `neckY + 12 mm`, 176 mm above
+     * it. The arm's first ring is buried 30-50 mm ABOVE the shoulder joint by
+     * design, and at that height the linear interpolation between those two
+     * rings had already collapsed the torso to ~117 mm half-width while the
+     * deltoid's inner edge sat at 147 mm. Thirty millimetres of nothing, on both
+     * sides, exactly where the playtest saw daylight through the shoulder.
+     *
+     * The fix is anatomical rather than numerical: a body does not taper
+     * straight from armpit to neck, it carries an ACROMION (the widest point of
+     * the frame, level with the shoulder joint) and then a TRAPEZIUS that slopes
+     * up and in to the neck. Both of those rings overlap the deltoid by 40 mm or
+     * more, so the arm now emerges from the torso instead of floating beside it.
+     * `n` is also relaxed toward a true ellipse as the profile climbs: a 2.5
+     * super-ellipse is right for a ribcage under a jacket and gives square,
+     * armoured corners on a shoulder. */
     const profile: Prof[] = [
       { y: bottomY, w: m.pelvisW * (hem > 0.4 ? 1.06 : 0.94) + skirtOut, d: m.pelvisD * 0.94 + skirtOut, back: m.pelvisD * 0.98 + skirtOut, v: 0.50 },
       { y: m.hipY - 0.02, w: m.pelvisW, d: m.pelvisD + m.bellyPush * 0.7, back: m.pelvisD, v: 0.40 },
@@ -355,8 +381,26 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
       { y: m.spineY + 0.03, w: m.waistW, d: m.waistD + m.bellyPush * 0.85, back: m.waistD, v: 0.27 },
       { y: m.chestY, w: lerp(m.waistW, m.chestW, 0.62), d: lerp(m.waistD, m.chestD, 0.7) + m.bustPush * 0.6, back: lerp(m.waistD, m.chestD, 0.6), v: 0.19 },
       { y: lerp(m.chestY, m.yokeY, 0.55), w: m.chestW, d: m.chestD + m.bustPush, back: m.chestD * 0.94, v: 0.12 },
-      { y: m.yokeY + 0.012, w: m.yokeW, d: m.yokeD, back: m.yokeD * 1.02, v: 0.06 },
-      { y: m.neckY + 0.012, w: m.yokeW * 0.66, d: m.yokeD * 0.80, back: m.yokeD * 0.86, v: 0.015 },
+      // armpit
+      { y: m.yokeY + 0.012, w: m.yokeW * 0.92, d: m.yokeD, back: m.yokeD * 1.02, v: 0.06, n: shape - 0.2 },
+      // deltoid shelf — the torso starts flaring toward the joint
+      { y: m.shoulderY - 0.020, w: m.yokeW * 1.02, d: m.yokeD * 0.98, back: m.yokeD * 1.02, v: 0.048, n: 2.2 },
+      // ACROMION. The widest ring on the body and the one that does the work.
+      //
+      // It has to reach further out than the top of the deltoid's own capped
+      // root ring, or the two silhouettes come apart above the joint and that
+      // notch is the daylight. So it is DERIVED from where the arm actually
+      // starts rather than picked as a fraction of the yoke: a fixed multiple
+      // of `yokeW` holds on 'average' and fails on 'slim' and 'tall', whose
+      // yoke narrows with girth while their shoulder joints and deltoids do
+      // not. `shoulderHalf + 0.62 * deltoidR` is the arm root's outer edge; the
+      // 8 mm covers the sleeve's own bulk on an unjacketed build. Asserted per
+      // body type by the silhouette raster in body.test.ts.
+      { y: m.shoulderY + 0.014, w: Math.max(m.yokeW * 1.02, m.shoulderHalf + m.deltoidR * 0.62 + 0.008), d: m.yokeD * 0.94, back: m.yokeD * 0.98, v: 0.040, n: 2.15 },
+      // trapezius, sloping up and in to the neck
+      { y: m.shoulderY + 0.040, w: m.yokeW * 0.78, d: m.yokeD * 0.84, back: m.yokeD * 0.92, v: 0.028, n: 2.1 },
+      // neck root
+      { y: m.neckY + 0.014, w: m.yokeW * 0.50, d: m.yokeD * 0.72, back: m.yokeD * 0.80, v: 0.015, n: 2.05 },
     ];
 
     const rings: Ring[] = profile.map((pr, i) => {
@@ -368,7 +412,7 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
         rx: pr.w + inflate,
         rzF: pr.d + inflate,
         rzB: pr.back + inflate,
-        n: shape,
+        n: pr.n ?? shape,
         b0: w[0], w0: w[1], b1: w[2], w1: w[3],
         v: pr.v,
       };
@@ -411,13 +455,21 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
        * carries its full height at the sides and back, which is how a real
        * turned-up collar sits and also leaves the beard somewhere to end. */
       if (a.collarUp) {
+        /* HOW HIGH. The first pass took the collar to `chin - 12 mm`, which on
+         * this rig is 60 of the 70 mm between the neck root and the jaw: the
+         * head then sat straight on the jacket and the playtest reported "no
+         * neck". A turned-up collar stops at the base of the ear, not under the
+         * lip. Topping out 55% of the way to the chin leaves ~32 mm of lit neck
+         * column under the jaw — enough to read as a neck at gameplay distance,
+         * short enough that the beard still ends somewhere. */
         const chin = m.headY - 0.010;
+        const top = lerp(m.neckY, chin, 0.55);
         const wl = spineWeights(m.neckY - 0.01, m);
         b.tube(
           [
-            { c: V(0, m.neckY - 0.010, 0.004), dir: UPV, rx: m.neckR * 1.62, rzF: m.neckR * 1.54, rzB: m.neckR * 1.66, n: 2.4, b0: wl[0], w0: wl[1], b1: wl[2], w1: wl[3], v: 0.03 },
-            { c: V(0, m.neckY + 0.036, -0.002), dir: UPV, rx: m.neckR * 1.50, rzF: m.neckR * 1.40, rzB: m.neckR * 1.60, n: 2.3, b0: BI.neck, w0: 0.85, b1: BI.upperChest, w1: 0.15, v: 0.02 },
-            { c: V(0, chin - 0.012, -0.008), dir: UPV, rx: m.neckR * 1.74, rzF: m.neckR * 1.44, rzB: m.neckR * 1.86, n: 2.2, b0: BI.neck, w0: 1, v: 0.008 },
+            { c: V(0, m.neckY - 0.014, 0.004), dir: UPV, rx: m.neckR * 1.66, rzF: m.neckR * 1.58, rzB: m.neckR * 1.70, n: 2.4, b0: wl[0], w0: wl[1], b1: wl[2], w1: wl[3], v: 0.03 },
+            { c: V(0, lerp(m.neckY, top, 0.5), -0.002), dir: UPV, rx: m.neckR * 1.52, rzF: m.neckR * 1.42, rzB: m.neckR * 1.62, n: 2.3, b0: BI.neck, w0: 0.85, b1: BI.upperChest, w1: 0.15, v: 0.02 },
+            { c: V(0, top, -0.008), dir: UPV, rx: m.neckR * 1.70, rzF: m.neckR * 1.40, rzB: m.neckR * 1.82, n: 2.2, b0: BI.neck, w0: 1, v: 0.008 },
           ],
           12, SLOT.OUTER, {},
         );
@@ -425,15 +477,25 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
     }
   }
 
-  /* ---------------- neck ---------------- */
+  /* ---------------- neck ----------------
+   * A COLUMN, not a peg. Three rings was enough shape but not enough overlap:
+   * the bottom ring started 35 mm below the neck joint, which is inside the
+   * trapezius shelf, and the whole thing was then hidden by the collar. It now
+   * starts lower and wider (that flare IS the sternocleidomastoid running down
+   * to the collarbones — the thing that makes a neck read as attached), narrows
+   * through the middle, and swells again where it meets the jaw. It also leans
+   * very slightly forward, which every human neck does and which stops the head
+   * from looking bolted on from the side. */
   const chinY = m.headY - 0.010;
   const crownY = m.headTopY;
   {
     b.tube(
       [
-        { c: V(0, m.neckY - 0.035, -0.006), dir: UPV, rx: m.neckR * 1.22, rzF: m.neckR * 1.18, b0: BI.upperChest, w0: 0.55, b1: BI.neck, w1: 0.45, v: 0.62 },
-        { c: V(0, m.neckY + 0.030, -0.003), dir: UPV, rx: m.neckR, rzF: m.neckR * 1.02, b0: BI.neck, w0: 1, v: 0.56 },
-        { c: V(0, chinY + 0.020, 0.004), dir: UPV, rx: m.neckR * 1.06, rzF: m.neckR * 1.12, b0: BI.neck, w0: 0.35, b1: BI.head, w1: 0.65, v: 0.5 },
+        { c: V(0, m.neckY - 0.058, -0.008), dir: UPV, rx: m.neckR * 1.46, rzF: m.neckR * 1.30, rzB: m.neckR * 1.34, n: 2.2, b0: BI.upperChest, w0: 0.80, b1: BI.neck, w1: 0.20, v: 0.66 },
+        { c: V(0, m.neckY - 0.020, -0.006), dir: UPV, rx: m.neckR * 1.16, rzF: m.neckR * 1.12, rzB: m.neckR * 1.18, n: 2.1, b0: BI.upperChest, w0: 0.42, b1: BI.neck, w1: 0.58, v: 0.62 },
+        { c: V(0, m.neckY + 0.030, -0.002), dir: UPV, rx: m.neckR, rzF: m.neckR * 1.02, b0: BI.neck, w0: 1, v: 0.56 },
+        { c: V(0, chinY + 0.006, 0.005), dir: UPV, rx: m.neckR * 1.05, rzF: m.neckR * 1.10, b0: BI.neck, w0: 0.55, b1: BI.head, w1: 0.45, v: 0.52 },
+        { c: V(0, chinY + 0.026, 0.006), dir: UPV, rx: m.neckR * 1.00, rzF: m.neckR * 1.08, b0: BI.neck, w0: 0.25, b1: BI.head, w1: 0.75, v: 0.5 },
       ],
       10, SLOT.SKIN, {},
     );
@@ -522,47 +584,100 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
 
     const upLen = m.upperArmLen;
     const loLen = m.forearmLen;
-    const sleeveEndT = bare ? 0.45 : 1.0;
-    const inflate = (t: number) => (t <= sleeveEndT ? sleeveBulk : 0.0);
-    const slotAt = (t: number): SlotId => (t <= sleeveEndT ? sleeveSlot : SLOT.SKIN);
-    // Sleeve v: 0.60 at the shoulder seam .. 0.79 at the elbow .. 0.99 cuff.
-    const vAt = (t: number) => (t <= sleeveEndT ? 0.60 + t * 0.19 : 0.30 + t * 0.16);
+    /** Direction through the elbow itself — the average of the two segments, so
+     *  the ring sitting ON the joint belongs to both and neither pinches. */
+    const dEl = dUp.clone().add(dLo).normalize();
 
-    // Deltoid + upper arm (sleeve or skin). The first ring is buried inside the
-    // torso so the shoulder reads as a joint, not a pauldron.
-    const upperRings: Ring[] = [
-      { c: shoulder.clone().addScaledVector(dUp, -0.052), dir: dUp, rx: m.deltoidR * 0.70 + inflate(0), rzF: m.deltoidR * 0.76 + inflate(0), n: 2.2, b0: clav, w0: 0.45, b1: upper, w1: 0.55, v: vAt(0) },
-      { c: shoulder.clone().addScaledVector(dUp, -0.012), dir: dUp, rx: m.deltoidR * 0.94 + inflate(0.05), rzF: m.deltoidR * 0.94 + inflate(0.05), n: 2.15, b0: clav, w0: 0.25, b1: upper, w1: 0.75, v: vAt(0.05) },
-      { c: at(shoulder, dUp, 0.22, upLen), dir: dUp, rx: m.deltoidR * 0.94 + inflate(0.22), rzF: m.deltoidR * 0.90 + inflate(0.22), n: 2.1, b0: upper, w0: 1, v: vAt(0.22) },
-      { c: at(shoulder, dUp, 0.58, upLen), dir: dUp, rx: m.upperArmR + inflate(0.58), rzF: m.upperArmR + inflate(0.58), n: 2, b0: upper, w0: 1, v: vAt(0.58) },
-      { c: at(shoulder, dUp, 0.95, upLen), dir: dUp, rx: m.elbowR * 1.05 + inflate(0.95), rzF: m.elbowR * 1.05 + inflate(0.95), n: 2, b0: upper, w0: 0.6, b1: fore, w1: 0.4, v: vAt(0.95) },
+    /* ONE ARM, NOT TWO CAPSULES.
+     *
+     * The upper arm and the forearm used to be two independent `tube()` calls
+     * that met at the elbow. Independent tubes do not share vertices, so
+     * `computeVertexNormals` gave the joint two opposing hard rims; the radii
+     * either side of the seam disagreed by 5%; and the sweep direction stepped
+     * discontinuously from `dUp` to `dLo`. All three cues say "two objects" and
+     * the eye picks that up long before it can resolve an elbow — which is
+     * exactly what the playtest reported.
+     *
+     * The whole limb is now a single ring chain from the buried shoulder root to
+     * the wrist. One ring sits on the elbow with the averaged direction and a
+     * 50/50 bind, so the surface is continuous through the joint in bind pose
+     * AND stays continuous when the animation bends it.
+     *
+     * `t` runs 0..1 along the upper arm and 1..2 along the forearm, which keeps
+     * the taper table readable and lets the sleeve cut be a single number.
+     */
+    const armPoint = (t: number): THREE.Vector3 =>
+      t <= 1 ? at(shoulder, dUp, t, upLen) : at(elbow, dLo, t - 1, loLen);
+    const armDir = (t: number): THREE.Vector3 =>
+      t < 0.98 ? dUp : t > 1.02 ? dLo : dEl;
+
+    // Sleeve v: 0.60 at the shoulder seam .. 0.80 at the elbow .. 0.99 cuff.
+    // Bare skin runs the SKIN column's forearm band, 0.30 .. 0.49.
+    // On the 0..2 scale a short sleeve stops just under halfway down the UPPER
+    // arm — 0.45, not 1.45. (1.45 puts the cuff past the elbow, which both
+    // looks wrong and splits the elbow across two surfaces.)
+    const sleeveEndT = bare ? 0.45 : 2.0;
+    const vAt = (t: number) => (t <= sleeveEndT ? 0.60 + t * 0.195 : 0.30 + (t - 1) * 0.19);
+
+    /** [t, radius, boneA, weightA, boneB] — one row per ring. */
+    const armTaper: ArmRow[] = [
+      // The root ring is CAPPED, so its disc is the top of the arm's silhouette
+      // and it must sit under the acromion ring of the torso. Small and barely
+      // above the joint: a jacket's shoulder is carried by the torso's own
+      // shoulder seam, and the sleeve head starts just below it. Pushing this
+      // ring higher or fatter is precisely what tore the arm off the body.
+      [-0.012, m.deltoidR * 0.60, clav, 0.55, upper],
+      [0.060, m.deltoidR * 0.98, clav, 0.30, upper],
+      [0.190, m.deltoidR * 1.00, upper, 0.92, clav],
+      [0.360, m.deltoidR * 0.86, upper, 1, upper],
+      [0.620, m.upperArmR * 1.02, upper, 1, upper],
+      [0.880, m.elbowR * 1.10, upper, 0.86, fore],
+      // the joint
+      [1.000, m.elbowR * 1.14, upper, 0.5, fore],
+      [1.120, m.elbowR * 1.08, fore, 0.86, upper],
+      [1.320, m.forearmR, fore, 1, fore],
+      [1.640, lerp(m.forearmR, m.wristR, 0.62), fore, 1, fore],
+      [1.860, m.wristR * 1.14, fore, 1, fore],
+      [2.000, m.wristR * 0.98, fore, 0.5, hand],
     ];
-    b.tube(upperRings, 7, slotAt(0), { capStart: true });
 
-    if (bare) {
-      // Sleeve stops mid-upper-arm; the rest of the arm is skin.
-      const tCut = 0.45;
-      const cut = at(shoulder, dUp, tCut, upLen);
-      b.tube(
-        [
-          { c: cut, dir: dUp, rx: m.upperArmR * 1.02, rzF: m.upperArmR * 1.02, b0: upper, w0: 1, v: 0.30 },
-          { c: at(shoulder, dUp, 0.96, upLen), dir: dUp, rx: m.elbowR, rzF: m.elbowR, b0: upper, w0: 0.6, b1: fore, w1: 0.4, v: 0.36 },
-        ],
-        7, SLOT.SKIN, {},
-      );
+    const armRing = (row: ArmRow): Ring => {
+      const [t, r, b0, w0, b1] = row;
+      const clothed = t <= sleeveEndT;
+      // The cuff keeps its bulk; a rolled sleeve loses it over the last 10%.
+      const inf = clothed ? sleeveBulk * (t > 1.86 ? cuffT : 1) : 0;
+      return {
+        c: armPoint(t), dir: armDir(t),
+        rx: r + inf, rzF: r * 0.97 + inf, rzB: r * 1.02 + inf,
+        n: t < 0.35 ? 2.15 : 2,
+        b0, w0, b1, w1: 1 - w0,
+        v: vAt(t),
+      };
+    };
+
+    if (!bare) {
+      // Long sleeve: shoulder to cuff, one surface, one slot.
+      b.tube(armTaper.map(armRing), 8, sleeveSlot, { capStart: true });
+    } else {
+      /* A short sleeve is a real edge in the world, so it gets a real seam here.
+       * The two chains share the cut ring exactly (same centre, same direction,
+       * the sleeve's copy only carries the cloth's bulk), and — the part that
+       * matters — the SKIN chain still runs unbroken from the cut through the
+       * elbow to the wrist. The elbow is interior to one chain either way, which
+       * is the whole point of this rewrite. */
+      const cutT = sleeveEndT;
+      const cutRow: ArmRow = [cutT, m.upperArmR * 1.02, upper, 1, upper];
+      const sleeve = armTaper.filter((r) => r[0] < cutT).map(armRing);
+      sleeve.push(armRing(cutRow));
+      b.tube(sleeve, 8, sleeveSlot, { capStart: true });
+
+      const skin = [cutRow, ...armTaper.filter((r) => r[0] > cutT)].map((row) => {
+        const ring = armRing(row);
+        // Same centres, no cloth bulk, and the SKIN column's own v ramp.
+        return { ...ring, rx: row[1], rzF: row[1] * 0.97, rzB: row[1] * 1.02, v: 0.30 + (row[0] - 1) * 0.19 };
+      });
+      b.tube(skin, 8, SLOT.SKIN, {});
     }
-
-    const foreSlot: SlotId = bare ? SLOT.SKIN : sleeveSlot;
-    const foreInflate = bare ? 0 : sleeveBulk * 0.8;
-    b.tube(
-      [
-        { c: elbow.clone().addScaledVector(dLo, -0.012), dir: dLo, rx: m.elbowR + foreInflate, rzF: m.elbowR + foreInflate, b0: upper, w0: 0.35, b1: fore, w1: 0.65, v: bare ? 0.37 : 0.790 },
-        { c: at(elbow, dLo, 0.30, loLen), dir: dLo, rx: m.forearmR + foreInflate, rzF: m.forearmR * 0.94 + foreInflate, b0: fore, w0: 1, v: bare ? 0.41 : 0.855 },
-        { c: at(elbow, dLo, 0.80, loLen), dir: dLo, rx: m.wristR * 1.20 + foreInflate * cuffT, rzF: m.wristR * 1.1 + foreInflate * cuffT, b0: fore, w0: 1, v: bare ? 0.46 : 0.955 },
-        { c: at(elbow, dLo, 1.0, loLen), dir: dLo, rx: m.wristR, rzF: m.wristR * 0.86, b0: fore, w0: 0.5, b1: hand, w1: 0.5, v: bare ? 0.49 : 0.99 },
-      ],
-      7, foreSlot, {},
-    );
 
     buildHand(b, m, rig, L, hand);
   }
@@ -613,8 +728,15 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
         legRing(at(knee, dS, 0.72, shinLen), dS, lerp(m.calfR, m.ankleR, 0.72), 1.72, shin, 1, shin, 0),
         legRing(at(knee, dS, 1.0, shinLen), dS, m.ankleR, 2.0, shin, 0.5, foot, 0.5),
       ];
-      // Re-key the v ramp so trousers run 0 -> 0.78 down the column.
-      for (const r of rings) r.v = THREE.MathUtils.clamp(r.v <= 0.9 ? r.v * 0.39 : 0.30 + (r.v - 1) * 0.14, 0, 0.99);
+      /* Re-key the v ramp so trousers run 0 -> 0.78 down the column — which the
+       * comment always claimed and the arithmetic never did. `t` reaches 2.0 at
+       * the ankle, so a 0.39 factor topped the leg out at v = 0.37: the whole
+       * garment lived in the pale first third of its own column, the base colour
+       * at v = 0.5 was never reached at all, and the two features `legStyle`
+       * paints below that — the knee fade at 0.40 and the dark cuff at 0.78 —
+       * landed on nothing. That is why dark denim rendered as pale grey with no
+       * shading down the leg. */
+      for (const r of rings) r.v = THREE.MathUtils.clamp(r.v * 0.975, 0, 0.99);
       const trouserRings = rings.filter((_, i) => i <= (shorts ? 3 : 7));
       b.tube(trouserRings, 9, shorts ? SLOT.LEGS : SLOT.LEGS, { capStart: true });
       if (shorts) {
@@ -958,34 +1080,77 @@ function buildAccessory(b: SkinBuilder, a: Appearance, m: BodyMetrics, rng: Rng)
 
   switch (a.accessory) {
     case 'builderHarness': {
-      // Two chest straps crossing to the hips, plus a wide belt and a buckle.
-      // Deliberately oversized — this is the hero's one loud purple signature.
+      /* BRACES AND A BELT — not a sash.
+       *
+       * This used to be two straps running from each shoulder DOWN ACROSS the
+       * body to the opposite hip. That is the geometry of a sash, and it is what
+       * the playtest called it: an X on the chest reads as ceremonial dress, and
+       * the V it makes above the waistband is the single loudest shape on the
+       * character. Work harness straps run STRAIGHT DOWN, shoulder to
+       * same-side hip, because their job is to carry weight into the belt and a
+       * diagonal cannot do that.
+       *
+       * Straight braces plus a proper belt reads as a working builder from any
+       * angle, keeps every square centimetre of the purple, and stops competing
+       * with the torso's own silhouette. */
+      const beltY = waistY - 0.004;
+      /* WHERE THE SHOULDER ACTUALLY IS. Every anchor here used to be measured
+       * off `yokeY`, which is the ARMPIT — 140 mm below the top of the shoulder
+       * on this rig. The straps therefore started halfway down his back and the
+       * "shoulder loop" crossed his shoulder blade. Braces that do not pass over
+       * the shoulder cannot be read as braces at any distance. */
+      const shY = m.shoulderY + 0.006;
+      const shX = m.yokeW * 0.52;
+      /* AND HOW DEEP. A strap is only a strap if it is ON the cloth. The
+       * shoulder anchors were being placed at `chestF * 0.44` ≈ 70 mm, but the
+       * torso is ~135 mm deep at the shoulder once the jacket's bulk is on it,
+       * so the top half of every strap was buried inside the jacket and only
+       * surfaced further down where the body gets shallower. From behind that
+       * read as two short tabs floating in the middle of his back. */
+      /* The torso ring at the shoulder is a super-ellipse, not a cylinder, so
+       * its depth at the strap's x is only ~93% of the ring's own `rzF`. Sitting
+       * the anchors at the full depth stood them 10-12 mm off the cloth, and at
+       * arm's length two glowing bars floating clear of his back read as
+       * antennae rather than as braces. These land within a strap's thickness of
+       * the surface, and the tops finish just INSIDE the trapezius so the caps
+       * are hidden under the shoulder instead of poking over it. */
+      const shZ = (m.yokeD * 0.94 + bulk + 0.004) * 0.93;
       for (const s of [1, -1] as const) {
-        const top = V(s * m.yokeW * 0.48, m.yokeY + 0.022, chestF * 0.40);
-        const bot = V(-s * m.pelvisW * 0.26, waistY + 0.028, m.pelvisD + bulk + 0.004);
-        b.slab(top, bot, 0.024, 0.008, SLOT.ACCENT, BI.chest, 0.12, 0.5, FRONT, 4);
-        const btop = V(s * m.yokeW * 0.46, m.yokeY + 0.020, -chestF * 0.40);
-        const bbot = V(-s * m.pelvisW * 0.24, waistY + 0.028, -(m.pelvisD + bulk));
-        b.slab(btop, bbot, 0.021, 0.007, SLOT.ACCENT, BI.chest, 0.12, 0.5, FRONT, 4);
-        // shoulder loop over the trapezius — a strap, not armour
+        const x = m.chestW * 0.46;
+        // front brace: over the collarbone, straight down to the belt
         b.slab(
-          V(s * m.yokeW * 0.47, m.yokeY + 0.026, chestF * 0.34),
-          V(s * m.yokeW * 0.48, m.yokeY + 0.024, -chestF * 0.36),
-          0.024, 0.008, SLOT.ACCENT, BI.upperChest, 0.15, 0.2, UPV, 4,
+          V(s * shX, shY + 0.010, shZ * 0.94),
+          V(s * x, beltY + 0.030, m.waistD + bulk + 0.008),
+          0.020, 0.007, SLOT.ACCENT, BI.upperChest, 0.10, 0.5, FRONT, 4,
+        );
+        // back brace: same line behind, converging slightly as real braces do
+        b.slab(
+          V(s * shX, shY + 0.010, -(shZ * 0.96)),
+          V(s * x * 0.58, beltY + 0.030, -(m.pelvisD + bulk + 0.004)),
+          0.019, 0.007, SLOT.ACCENT, BI.upperChest, 0.10, 0.5, FRONT, 4,
+        );
+        // the loop over the trapezius that joins the two — a strap, not armour
+        b.slab(
+          V(s * shX, shY + 0.014, shZ * 0.82),
+          V(s * shX, shY + 0.012, -(shZ * 0.86)),
+          0.020, 0.007, SLOT.ACCENT, BI.upperChest, 0.15, 0.2, UPV, 4,
         );
       }
-      belt(SLOT.ACCENT, waistY, 0.008, 0.62, 0.70, -1);
-      // buckle
+      // The belt itself: narrower than it was (its half-height is the `belt()`
+      // helper's 22 mm, so it was 44 mm of solid violet round the waist) and now
+      // sitting where a tool belt sits rather than riding the ribs.
+      belt(SLOT.ACCENT, beltY, 0.006, 0.62, 0.70, -1);
+      // buckle — a plate, wider than it is tall, so it reads as hardware
       b.slab(
-        V(0, waistY, m.waistD + bulk + 0.004),
-        V(0, waistY, m.waistD + bulk + 0.022),
-        0.030, 0.026, SLOT.ACCENT, BI.hips, 0.2, 0.25, UPV, 5,
+        V(0, beltY, m.waistD + bulk + 0.004),
+        V(0, beltY, m.waistD + bulk + 0.020),
+        0.034, 0.019, SLOT.ACCENT, BI.hips, 0.2, 0.25, UPV, 5,
       );
       // hip tool loops
       for (const s of [1, -1] as const) {
         b.slab(
-          V(s * (m.pelvisW + bulk + 0.002), waistY - 0.02, 0.01),
-          V(s * (m.pelvisW + bulk + 0.002), waistY - 0.09, 0.012),
+          V(s * (m.pelvisW + bulk + 0.002), beltY - 0.02, 0.01),
+          V(s * (m.pelvisW + bulk + 0.002), beltY - 0.09, 0.012),
           0.024, 0.017, SLOT.ACCENT, BI.hips, 0.55, 0.66, FRONT, 4,
         );
       }

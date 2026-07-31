@@ -366,6 +366,10 @@ describe('PropBuilder primitives face the way their normals claim', () => {
     ['box (rotated)', () => mk((b) => b.box(0, 1, 0, 3, 2, 1, 0.9, opts))],
     ['cyl', () => mk((b) => b.cyl(0, 0, 0, 0.6, 0.6, 3, 10, opts))],
     ['blob', () => mk((b) => b.blob(0, 0, 0, 1, 1, 1, opts, 0, 3, 2, 0, 8))],
+    // FIXED (foliage pass): see the winding note in props/kit.ts. Both `tube`
+    // implementations walked their ring pair the opposite way round to `cyl`.
+    ['tube (vertical)', () => mk((b) => b.tube(0, 0, 0, 0, 3, 0, 0.2, 8, opts))],
+    ['tube (skew)', () => mk((b) => b.tube(0, 0, 0, 2, 3, 1, 0.2, 8, opts))],
   ];
   for (const [name, build] of cases) {
     test(name, () => {
@@ -376,27 +380,6 @@ describe('PropBuilder primitives face the way their normals claim', () => {
     });
   }
 
-  /**
-   * QUARANTINE — `PropBuilder.tube` is inside out, exactly like
-   * `DetailBuilder.tube`. Two independent implementations of the same
-   * primitive, the same mistake in both, and between them they build every
-   * tree branch, wire, handrail, bracket, bike frame and scaffold pole in the
-   * city. The surrounding solids are open at both ends, so the volume test
-   * above cannot see it; this is what does.
-   *
-   * FIX (src/world/props/kit.ts): the ring pair is walked the opposite way
-   * round to `cyl`, which is correct — mirror `cyl`'s index order. Then delete
-   * this test and move `tube` into the list above.
-   */
-  test('STILL BROKEN: PropBuilder.tube (branches, wires, handrails)', () => {
-    for (const g of [
-      mk((b) => b.tube(0, 0, 0, 0, 3, 0, 0.2, 8, opts)),
-      mk((b) => b.tube(0, 0, 0, 2, 3, 1, 0.2, 8, opts)),
-    ]) {
-      const r = windingDisagreements(g);
-      expect(`PropBuilder.tube: ${r.bad}/${r.tris}`).toBe(`PropBuilder.tube: ${r.tris}/${r.tris}`);
-    }
-  });
 
   /**
    * QUARANTINE — `panel` and `disc` emit BOTH faces, and both of them carry

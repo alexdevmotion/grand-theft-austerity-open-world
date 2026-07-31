@@ -17,7 +17,7 @@ import {
   BI, BODY_TYPES, BONE_COUNT, CORE_BONE_COUNT, DIGITS,
   NOMINAL_HEIGHT, bodyMetrics, buildRig, type BodyType, type Rig,
 } from './rig';
-import { HERO_APPEARANCE, rollAppearance } from './wardrobe';
+import { ATLAS_SIZE, HERO_APPEARANCE, SLOT, rollAppearance, slotSurface } from './wardrobe';
 import { Rng } from '../core/rng';
 
 const rigs = new Map<string, Rig>();
@@ -241,6 +241,282 @@ test('the crowd does not pay for fingers it never shows', () => {
   expect(after.y).toBeCloseTo(before.y, 9);
   expect(after.z).toBeCloseTo(before.z, 9);
   expect(after.w).toBeCloseTo(before.w, 9);
+});
+
+/* ------------------------------------------------------------------ */
+/* 2b. THE BODY IS ONE BODY                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Rasterise the front-view (XY) silhouette of a geometry into a bitmask.
+ *
+ * A playtest called the character "a mannequin", and the single most damning
+ * sentence in it was that you could see daylight between his arms and his
+ * torso. That is a claim about the SILHOUETTE and nothing else — not about
+ * normals, not about weights — so it is checkable exactly the way the eye
+ * checks it: flatten the mesh onto the view plane and look for holes.
+ *
+ * `cell` is the world size of one raster cell, so the numbers the tests below
+ * assert are millimetres of real gap and not pixel counts.
+ */
+function silhouette(geo: THREE.BufferGeometry, n = 400): {
+  grid: Uint8Array; n: number; cell: number; yOf(row: number): number;
+} {
+  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+  const idx = geo.getIndex()!;
+  const x0 = -0.5, x1 = 0.5, y0 = 0, y1 = 2;
+  const grid = new Uint8Array(n * n);
+  const px = (x: number) => ((x - x0) / (x1 - x0)) * n;
+  const py = (y: number) => ((y - y0) / (y1 - y0)) * n;
+
+  for (let t = 0; t < idx.count; t += 3) {
+    const i0 = idx.getX(t), i1 = idx.getX(t + 1), i2 = idx.getX(t + 2);
+    const ax = px(pos.getX(i0)), ay = py(pos.getY(i0));
+    const bx = px(pos.getX(i1)), by = py(pos.getY(i1));
+    const cx = px(pos.getX(i2)), cy = py(pos.getY(i2));
+    const det = (bx - ax) * (cy - ay) - (cx - ax) * (by - ay);
+    if (Math.abs(det) < 1e-12) continue;
+    const r0 = Math.max(0, Math.floor(Math.min(ay, by, cy)));
+    const r1 = Math.min(n - 1, Math.ceil(Math.max(ay, by, cy)));
+    const c0 = Math.max(0, Math.floor(Math.min(ax, bx, cx)));
+    const c1 = Math.min(n - 1, Math.ceil(Math.max(ax, bx, cx)));
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) {
+        const qx = c + 0.5, qy = r + 0.5;
+        const w0 = ((bx - qx) * (cy - qy) - (cx - qx) * (by - qy)) / det;
+        const w1 = ((cx - qx) * (ay - qy) - (ax - qx) * (cy - qy)) / det;
+        if (w0 >= -1e-6 && w1 >= -1e-6 && 1 - w0 - w1 >= -1e-6) grid[r * n + c] = 1;
+      }
+    }
+  }
+  return { grid, n, cell: (x1 - x0) / n, yOf: (row) => y0 + ((row + 0.5) / n) * (y1 - y0) };
+}
+
+/** Widest run of empty cells lying BETWEEN filled cells, over a band of rows. */
+function widestHole(geo: THREE.BufferGeometry, yLo: number, yHi: number): number {
+  const s = silhouette(geo);
+  let worst = 0;
+  for (let r = 0; r < s.n; r++) {
+    const y = s.yOf(r);
+    if (y < yLo || y > yHi) continue;
+    let first = -1, last = -1;
+    for (let c = 0; c < s.n; c++) if (s.grid[r * s.n + c]) { if (first < 0) first = c; last = c; }
+    if (first < 0) continue;
+    let run = 0;
+    for (let c = first; c <= last; c++) {
+      if (s.grid[r * s.n + c]) run = 0;
+      else { run++; if (run * s.cell > worst) worst = run * s.cell; }
+    }
+  }
+  return worst;
+}
+
+/**
+ * DAYLIGHT THROUGH THE SHOULDER.
+ *
+ * The arm's first ring is buried inside the torso on purpose so the shoulder
+ * reads as a joint rather than a pauldron — but "inside" was only ever asserted
+ * on paper. In the shipped build the torso interpolated straight from the
+ * armpit to the neck root across 176 mm with no ring in between, so at the
+ * height where the deltoid actually starts the torso had already collapsed
+ * narrower than the arm and the two silhouettes came apart. This measures
+ * 137 mm of open sky on the hero at HEAD~1 and 0 mm now.
+ *
+ * The band is deliberately tight: below the armpit an A-pose has a legitimate
+ * gap between the arm and the ribs, and asserting no hole there would be
+ * asserting that the character has his elbows glued to his sides.
+ */
+test.each(BODY_TYPES)('%s: no daylight between the arm and the torso', (body: BodyType) => {
+  for (const female of [false, true]) {
+    const rig = rigFor(body, female);
+    const m = rig.metrics;
+    for (const outer of ['none', 'jacket', 'puffer', 'coat'] as const) {
+      const a = { ...rollAppearance(new Rng(`sh-${body}`), 'civilian'), outer, female, body };
+      const geo = buildHumanoidGeometry(a, rig);
+      const hole = widestHole(geo, m.shoulderY - 0.05, m.shoulderY + 0.06);
+      // One raster cell is 2.5 mm; anything under a cell is quantisation.
+      expect(hole).toBeLessThan(0.004);
+    }
+  }
+});
+
+test('the hero specifically has no daylight through either shoulder', () => {
+  const rig = rigFor(HERO_APPEARANCE.body, HERO_APPEARANCE.female);
+  const geo = buildHumanoidGeometry(HERO_APPEARANCE, rig);
+  expect(widestHole(geo, rig.metrics.shoulderY - 0.05, rig.metrics.shoulderY + 0.06)).toBeLessThan(0.004);
+});
+
+/** Union-find over the index buffer: which surface component is each vertex in? */
+function components(geo: THREE.BufferGeometry): Int32Array {
+  const count = (geo.getAttribute('position') as THREE.BufferAttribute).count;
+  const idx = geo.getIndex()!;
+  const parent = new Int32Array(count);
+  for (let i = 0; i < count; i++) parent[i] = i;
+  const find = (a: number): number => {
+    while (parent[a] !== a) { parent[a] = parent[parent[a]]; a = parent[a]; }
+    return a;
+  };
+  for (let t = 0; t < idx.count; t += 3) {
+    const a = find(idx.getX(t)), b = find(idx.getX(t + 1)), c = find(idx.getX(t + 2));
+    if (a !== b) parent[b] = a;
+    if (find(a) !== c) parent[c] = find(a);
+  }
+  for (let i = 0; i < count; i++) parent[i] = find(i);
+  return parent;
+}
+
+/**
+ * ONE ARM, NOT TWO CAPSULES.
+ *
+ * The upper arm and the forearm used to be two independent tubes meeting at the
+ * elbow. Independent tubes share no vertices, so they are two surfaces: the
+ * normals crease against each other, the radii either side disagree, and the
+ * sweep direction steps. The eye reads that as two objects long before it can
+ * resolve an elbow, which is exactly what the playtest said.
+ *
+ * "Two surfaces" is not an aesthetic judgement, it is a graph property, so it
+ * gets asserted as one: the shoulder, the elbow and the wrist must all be
+ * reachable from each other through the triangle graph. This fails on HEAD~1
+ * for every body type and every garment.
+ */
+test.each(BODY_TYPES)('%s: shoulder, elbow and wrist are one continuous surface', (body: BodyType) => {
+  for (const shortSleeve of [false, true]) {
+    const rig = rigFor(body, false);
+    const a = { ...rollAppearance(new Rng(`el-${body}`), 'civilian'), outer: 'jacket' as const, shortSleeve, body };
+    const geo = buildHumanoidGeometry(a, rig);
+    const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+    const comp = components(geo);
+
+    const at = (p: THREE.Vector3, radius: number): Set<number> => {
+      const out = new Set<number>();
+      for (let i = 0; i < pos.count; i++) {
+        const dx = pos.getX(i) - p.x, dy = pos.getY(i) - p.y, dz = pos.getZ(i) - p.z;
+        if (dx * dx + dy * dy + dz * dz < radius * radius) out.add(comp[i]);
+      }
+      return out;
+    };
+
+    for (const side of ['L', 'R'] as const) {
+      const P = rig.points.joint;
+      const shoulder = at(P[`upperArm${side}`], 0.09);
+      const elbow = at(P[`forearm${side}`], 0.09);
+      const wrist = at(P[`hand${side}`], 0.07);
+      expect(elbow.size).toBeGreaterThan(0);
+      // A short sleeve is a real edge in the world, so the sleeve is allowed to
+      // be its own surface — but the SKIN running shoulder-side to wrist must
+      // still be unbroken through the elbow.
+      const throughElbow = [...elbow].filter((c) => wrist.has(c));
+      expect(throughElbow.length).toBeGreaterThan(0);
+      if (!shortSleeve) {
+        const whole = [...shoulder].filter((c) => elbow.has(c) && wrist.has(c));
+        expect(whole.length).toBeGreaterThan(0);
+      }
+    }
+  }
+});
+
+/**
+ * A NECK.
+ *
+ * The hero's popped collar used to top out 12 mm under his chin — 60 of the
+ * 70 mm between the neck root and the jaw — so the head sat straight on the
+ * jacket and the playtest reported that he had no neck. A turned-up collar
+ * stops at the base of the ear. Measured on the SKIN texture column, because
+ * what matters is how much bare neck is actually visible, not how many rings
+ * the neck tube has.
+ */
+test('the hero has a visible neck between the collar and the jaw', () => {
+  const rig = rigFor(HERO_APPEARANCE.body, HERO_APPEARANCE.female);
+  const m = rig.metrics;
+  const geo = buildHumanoidGeometry(HERO_APPEARANCE, rig);
+  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+  const uv = geo.getAttribute('uv') as THREE.BufferAttribute;
+
+  const chinY = m.headY - 0.010;
+  let collarTop = -Infinity;
+  let skinTop = -Infinity;
+  for (let i = 0; i < pos.count; i++) {
+    if (pos.getY(i) < m.neckY - 0.02) continue;
+    if (Math.abs(pos.getX(i)) > m.neckR * 2.2) continue;
+    const u = uv.getX(i) * ATLAS_SIZE;
+    if (u < 16) skinTop = Math.max(skinTop, pos.getY(i));          // SKIN column
+    else if (u > 48 && u < 64) collarTop = Math.max(collarTop, pos.getY(i)); // OUTER
+  }
+  // The neck geometry has to reach the jaw...
+  expect(skinTop).toBeGreaterThan(chinY);
+  // ...and the collar has to leave a readable column of it uncovered. Twelve
+  // millimetres is what "no neck" measured; a real turned-up collar leaves 30+.
+  expect(chinY - collarTop).toBeGreaterThan(0.025);
+  // And it must still be a popped collar, not a flat neckline.
+  expect(collarTop).toBeGreaterThan(m.neckY + 0.020);
+});
+
+/**
+ * HE MUST NOT BE A CUT-OUT.
+ *
+ * The other half of the mannequin report was that the player renders as a
+ * near-black silhouette in open sunset light. Measured in-engine: his torso
+ * came back at luma 15/255 backlit on the plaza while a pedestrian in a nearly
+ * identical navy suit read at 22 and the pavement at 113. Swapping his material
+ * for plain grey lit him perfectly, so the fault was never the lighting rig —
+ * it was that his garment colours sat at 1-3% linear reflectance, below coal.
+ *
+ * This pins the floor. It is a colour-space assertion, so it is exact and it
+ * does not need a GPU: sRGB decoded to linear, no light involved.
+ */
+test('no garment is darker than real dyed cloth', () => {
+  const linear = (srgb8: number): number => {
+    const c = srgb8 / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  const brightestLinear = (hex: number): number =>
+    Math.max(linear((hex >> 16) & 0xff), linear((hex >> 8) & 0xff), linear(hex & 0xff));
+
+  // The hero is the one the camera is always pointed at, so he is checked by
+  // name and not merely through a roll.
+  for (const slot of ['top', 'outer', 'legs', 'shoes', 'detail'] as const) {
+    expect(brightestLinear(HERO_APPEARANCE.colors[slot])).toBeGreaterThan(0.020);
+  }
+  // And nobody in the crowd is allowed to be a hole in the frame either.
+  const rng = new Rng('albedo');
+  for (let i = 0; i < 200; i++) {
+    const a = rollAppearance(rng, i % 2 ? 'civilian' : 'officeWorker');
+    for (const slot of ['top', 'outer', 'legs', 'shoes'] as const) {
+      expect(brightestLinear(a.colors[slot])).toBeGreaterThan(0.020);
+    }
+  }
+});
+
+/**
+ * ...AND CLOTH HAS TO HAVE A SPECULAR LOBE.
+ *
+ * The albedo floor above is the smaller half of why the player rendered as a
+ * cut-out. The pedestrian he was losing to wears almost exactly his colour; the
+ * difference was that a `suit` sets roughness 0.66 while his `jacket` sat on
+ * the 0.86 default, and at 0.86 there is no grazing sheen. Diffuse off 1-3%
+ * albedo is nothing, so with the sun behind him nothing at all came back.
+ *
+ * Every garment column therefore has to stay inside the range real cloth
+ * occupies. The lower bound matters too: a jacket at 0.3 is a bin liner.
+ */
+test('every garment keeps a specular response', () => {
+  const rng = new Rng('sheen');
+  const looks = [HERO_APPEARANCE, ...Array.from({ length: 60 }, (_, i) =>
+    rollAppearance(rng, (['civilian', 'builder', 'officeWorker'] as const)[i % 3]))];
+  for (const a of looks) {
+    const surface = slotSurface(a);
+    for (const [, s] of surface) {
+      expect(s.roughness).toBeGreaterThan(0.30);
+      expect(s.roughness).toBeLessThan(0.96);
+      // Cloth is a dielectric. Metalness above a trace turns diffuse OFF, which
+      // is the other way to make a character go black.
+      expect(s.metalness).toBeLessThan(0.30);
+    }
+    // Specifically the outer garment, which is most of the silhouette.
+    if (a.outer !== 'none') expect(surface.get(SLOT.OUTER)!.roughness).toBeLessThan(0.86);
+  }
+  // And the hero's own jacket, by name.
+  expect(slotSurface(HERO_APPEARANCE).get(SLOT.OUTER)!.roughness).toBeLessThan(0.76);
 });
 
 /* ------------------------------------------------------------------ */

@@ -63,7 +63,14 @@ export type LegsId = 'jeans' | 'trousers' | 'suitTrousers' | 'workTrousers' | 's
 export type ShoeId = 'boots' | 'workBoots' | 'sneakers' | 'dressShoes' | 'heels';
 export type HairId = 'bald' | 'buzz' | 'short' | 'sweptShort' | 'medium' | 'long' | 'bun' | 'ponytail';
 export type HeadwearId = 'none' | 'cap' | 'beanie' | 'hardHat' | 'peakedCap';
-export type AccessoryId = 'none' | 'lanyard' | 'backpack' | 'satchel' | 'toolBelt' | 'builderHarness' | 'hipBag';
+/**
+ * `sitePass` is the player's one purple thing — see `HERO_APPEARANCE`. It
+ * replaced `builderHarness`, a full shoulder-to-hip brace-and-belt rig in
+ * saturated violet that an immersion review named as the most saturated object
+ * on the character and the least supported by the reference frame, where both
+ * men are in plain clothes.
+ */
+export type AccessoryId = 'none' | 'lanyard' | 'backpack' | 'satchel' | 'toolBelt' | 'sitePass' | 'hipBag';
 
 export interface AppearanceColors {
   skin: number;
@@ -387,8 +394,19 @@ export function rollAppearance(rng: Rng, archetype: PedArchetype = 'civilian'): 
  * ILIE BOLOJAN-AGATINEI — the player.
  *
  * Dark practical clothing (denim jacket over a black tee, dark jeans, work
- * boots) plus exactly one exaggerated purple builder accessory: an oversized
- * luminous purple utility harness. Tired and relentless, per docs/STORY.md.
+ * boots) plus exactly one exaggerated purple builder accessory, per
+ * docs/STORY.md.
+ *
+ * THE ACCESSORY IS NOW A SITE PASS, NOT A HARNESS. It used to be an oversized
+ * luminous violet brace-and-belt rig: two straps over each shoulder, a belt,
+ * a buckle and hip loops, all in `accent`. An immersion review put it plainly —
+ * nothing in `docs/reference/house-under-siege-duo.png` supports it, where both
+ * men are plain-clothed in a navy chore jacket and a black tee, and it was the
+ * most saturated thing anywhere on the character. "One exaggerated purple
+ * accessory" is a story note about a READ, not a licence to paint a quarter of
+ * the silhouette violet: a purple site pass on a purple cord, worn with a
+ * purple wristband, is louder as a character note precisely because it is
+ * small enough to be a choice rather than a uniform.
  */
 export const HERO_APPEARANCE: Appearance = {
   id: 'bolojan-agatinei',
@@ -401,7 +419,7 @@ export const HERO_APPEARANCE: Appearance = {
   shoes: 'workBoots',
   hair: 'short',
   headwear: 'none',
-  accessory: 'builderHarness',
+  accessory: 'sitePass',
   colors: {
     /* The NECK is this colour and the FACE is `CAST.player.skin`, and they were
      * two different men: 0xc9976f against 0x8b6d53 is 29% brighter and a good

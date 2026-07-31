@@ -531,29 +531,33 @@ function windingCensus(g: THREE.BufferGeometry): { tris: number; agree: number; 
 
 describe('winding', () => {
   /**
-   * RATCHET — most of the city's ground is wound inside out.
+   * RATCHET, NOW CLOSED — the city's ground used to be wound inside out.
    *
-   * Measured on the baked city, and confirmed in the running game at
-   * 1600x900 by reading `__GTA_CITY__.root` directly: SURFACE 57 494 / 82 426
-   * triangles wound against their own shading normal, FACADE 9 617 / 53 972,
-   * DETAIL 123 049 / 1 489 224. Every one of those materials is
-   * `THREE.FrontSide`, so each of those triangles is back-face culled from the
-   * side it is lit for: the carriageways, crossings, stop bars, tram beds,
-   * park and square polygons, the roof cap of every imported footprint with
-   * more than four corners, and every `tube` (branches, brackets, handrails)
-   * are simply not drawn. What shows through the gap is the near-black bedrock
-   * underlay, which under a three-degree sun reads as wet asphalt — which is
-   * why no screenshot review ever caught it.
+   * The budgets below were 0.72 / 0.20 / 0.10, standing in for a measured,
+   * live and unfixed defect: SURFACE 57 494 / 82 426 triangles wound against
+   * their own shading normal, FACADE 9 617 / 53 972, DETAIL 123 049 /
+   * 1 489 224. Every city material is `THREE.FrontSide`, so each of those
+   * triangles was back-face culled from the side it was lit for — the
+   * carriageways, crossings, stop bars, tram beds, park and square polygons
+   * and every imported roof cap past a quadrilateral were not drawn at all,
+   * and what showed through was the near-black bedrock underlay, which under a
+   * three-degree sun reads as wet asphalt. That is why three separate reviews
+   * called the ground the weakest surface in the game without anyone noticing
+   * that most of the ground was not on screen.
    *
-   * ROOT CAUSE, src/world/city/builders.ts. See `builders.test.ts` for the
-   * per-emitter census: `SurfaceBuilder.ribbon`, `.tri` and `.poly`,
-   * `FacadeBuilder.cap` past a quadrilateral, and `DetailBuilder.tube` all emit
-   * their index triples in the opposite order to the convention stated at the
-   * top of that file.
+   * FIXED in src/world/city/builders.ts (`ribbon`'s index order, and
+   * `triangulate()`'s handedness for both `poly` and `cap`); `tube` was fixed
+   * earlier in the foliage pass. See `city/builders.test.ts` section 1, which
+   * now asserts all five per-emitter.
    *
-   * Drive these budgets to 0 when the emitters are fixed.
+   * THE BUDGETS ARE NOW THE MEASURED RESIDUAL, not a tolerance. Surface is
+   * exactly zero. The facade's single triangle and the detail pass's 674 are
+   * degenerate slivers off `blob`'s jittered poles and off zero-length plot
+   * edges — they enclose no area and shade nothing. Anything that pushes these
+   * up is a new instance of the same bug class, which has now appeared five
+   * times on this project; do not raise them to make a test pass.
    */
-  const BUDGET: Record<string, number> = { surface: 0.72, facade: 0.20, detail: 0.10 };
+  const BUDGET: Record<string, number> = { surface: 0, facade: 0.0001, detail: 0.001 };
 
   test('city geometry faces the way its normals claim', () => {
     const fam = new Map<string, { tris: number; agree: number; disagree: number }>();

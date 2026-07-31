@@ -29,6 +29,8 @@ import * as THREE from 'three';
 import {
   DetailBuilder, FacadeBuilder, Surf, SurfaceBuilder,
   type DetailOpts, type FacadeParams, type SurfParams, type Vec2,
+  rectFootprint,
+  roundedFrontFootprint,
   signedArea,
 } from './builders';
 
@@ -198,6 +200,25 @@ describe('emitters whose winding matches their normals', () => {
     // case is here so that whoever adds one gets the ordering from a test
     // rather than from a coin flip.
     ['SurfaceBuilder.tri (CW)', () => surf((b) => b.tri(CW[0], CW[1], CW[2], 0, SP))],
+    // FIXED (interbelic/shopfront pass) — these five were the quarantine below.
+    // `ribbon` walked the run axis before the width axis, so cross(run, perp)
+    // pointed DOWN: every carriageway, lane line, crossing, stop bar and tram
+    // bed in the city was culled and what showed through was the near-black
+    // bedrock underlay. `poly` and `cap` both went through `triangulate()`,
+    // whose docstring wrongly promised to preserve the input winding;
+    // ShapeUtils returns positively-handed triples either way round, which in
+    // a y-up frame faces down, so every park, square, junction patch and every
+    // imported roof past four corners was culled too.
+    ['SurfaceBuilder.ribbon (every carriageway and marking)',
+      () => surf((b) => b.ribbon(0, 0, 0, 60, 16, 0, 0.09, SP, 4))],
+    ['SurfaceBuilder.ribbon (run-cambered crossings)',
+      () => surf((b) => b.ribbon(0, 0, 60, 0, 8, 0, 0.02, SP, 4, 0.09, -1, 1))],
+    ['SurfaceBuilder.poly (parks, squares, real outlines)',
+      () => surf((b) => b.poly(CW, 0, SP))],
+    ['SurfaceBuilder.poly (CCW input — normalised to the same handedness)',
+      () => surf((b) => b.poly(CCW, 0, SP))],
+    ['FacadeBuilder.cap (imported footprints with > 4 corners)',
+      () => fac((b) => b.cap(CW_NGON, 12, FP))],
   ];
 
   for (const [name, build] of cases) {
@@ -284,95 +305,132 @@ describe('closed generated meshes are wound outward', () => {
       const v = signedVolume(g);
       expect(`${plan.length}-gon volume ${v > 0 ? 'positive' : 'NEGATIVE'}`)
         .toBe(`${plan.length}-gon volume positive`);
-      // Walls only: exact, and independent of the roof cap, which past four
-      // corners is ear-clipped and comes back inside out (see the quarantine).
+      // Walls only, as an independent check on the extrusion itself.
       const walls = fac((b) => b.extrude(plan, 0, 9, 0, FP, { roof: false }));
       expect(signedVolume(walls)).toBeCloseTo((Math.abs(signedArea(plan)) * 9 * 2) / 3, 2);
+    }
+  });
+
+  /**
+   * THE ROOF CAP NOW CLOSES THE SOLID, at any number of corners.
+   *
+   * Before the `triangulate()` fix the ear-clipped cap was wound the other way
+   * round from the walls, so an imported n-gon's roof SUBTRACTED its own prism
+   * from the divergence integral instead of adding to it — the walls-only
+   * volume above was the only exact assertion the quarantine allowed. With the
+   * cap facing up, walls + roof about the origin plane is exactly the prism.
+   */
+  test('an ear-clipped roof cap is wound the same way as its walls', () => {
+    for (const plan of [CW_NGON,
+      [{ x: -9, z: -2 }, { x: -7, z: 5 }, { x: 1, z: 6 }, { x: 8, z: 2 }, { x: 6, z: -5 }, { x: -2, z: -7 }],
+    ] as Vec2[][]) {
+      const solid = fac((b) => b.extrude(plan, 0, 9, 0, FP));
+      expect(signedVolume(solid)).toBeCloseTo(Math.abs(signedArea(plan)) * 9, 2);
+      expect(census(solid).disagree).toBe(0);
     }
   });
 });
 
 /* ================================================================== */
-/* 3. QUARANTINE — emitters that are inside out TODAY                  */
+/* 3. QUARANTINE — EMPTY. Keep it that way.                            */
 /* ================================================================== */
 
 /**
- * THE CITY'S GROUND, ITS PARKS, ITS IMPORTED ROOFS AND EVERY TUBE ARE DRAWN
- * INSIDE OUT, AND HAVE BEEN SINCE THEY WERE WRITTEN.
+ * THE QUARANTINE IS NOW EMPTY, and this is the FIFTH instance of this bug
+ * class on the project (head, vehicle bodywork, `tube`, `panel`/`disc`, and
+ * these five). It stays here as a landing pad and as the record of what the
+ * defect cost.
  *
- * Measured on the baked city and confirmed in the running game by reading
- * `__GTA_CITY__.root` directly: SURFACE 57 494 / 82 426 triangles wound
- * against their own shading normal, FACADE 9 617 / 53 972, DETAIL
- * 123 049 / 1 489 224. All three city materials are `THREE.FrontSide`
- * (`createCityMaterials` sets no `side`), so every one of those triangles is
- * back-face culled from the side it is lit for. The carriageways, zebra
- * crossings, stop bars, tram beds, park and square polygons, junction patches
- * emitted as triangles, the roof cap of every imported footprint with more
- * than four corners, and every branch, bracket and handrail are NOT DRAWN AT
- * ALL. What shows through is the bedrock underlay — near-black, and under a
+ * WHAT WAS BROKEN, measured on the baked city before the fix: SURFACE
+ * 57 494 / 82 426 triangles wound against their own shading normal, FACADE
+ * 9 617 / 53 972. All three city materials are `THREE.FrontSide`
+ * (`createCityMaterials` sets no `side`), so every one of those triangles was
+ * back-face culled from the side it was lit for. The carriageways, zebra
+ * crossings, stop bars, tram beds, park and square polygons, and the roof cap
+ * of every imported footprint with more than four corners were NOT DRAWN AT
+ * ALL. What showed through was the bedrock underlay — near-black, and under a
  * three-degree sun indistinguishable from wet asphalt, which is why no
- * screenshot review ever caught it.
+ * screenshot review ever caught it, and why three separate reviewers called
+ * the ground the weakest surface in the game without anybody working out that
+ * most of the ground was not on screen.
  *
- * WHY: all five emit their index triples in the opposite order to the
- * convention stated at the top of builders.ts.
+ *   ribbon  emitted `(i0, i3, i2)(i0, i2, i1)`, walking the RUN axis before
+ *           the WIDTH axis: cross(run, leftPerp) = (0, -1, 0) while every
+ *           vertex normal was (0, 1, 0).  FIXED: `(i0, i1, i2)(i0, i2, i3)`.
+ *   poly    both went through `triangulate()`, whose docstring promised
+ *   cap     "winding is preserved, so callers keep control of which way the
+ *           face points". IT WAS NOT. `THREE.ShapeUtils.triangulateShape`
+ *           returns positively-handed triples for BOTH input windings —
+ *           measured — and a positively-handed triple in (x, z) faces DOWN.
+ *           `cap`'s <= 4 corner fan path was always correct; only the
+ *           ear-clipped path was wrong, which is exactly the imported
+ *           footprints.  FIXED in `triangulate()` itself, so both callers get
+ *           it and the retracted promise is now documented there.
+ *   tube    FIXED earlier, in the foliage pass.
  *
- *   ribbon  `idx.push(i0, i3, i2, i0, i2, i1)` where i1 is +1 across the width
- *           and i3 is +1 along the run. cross(run, leftPerp) is (0, -1, 0), so
- *           the quad faces DOWN while every vertex normal is pushed as
- *           (0, 1, 0).  FIX: `idx.push(i0, i1, i2, i0, i2, i3)`.
- *   poly    and
- *   cap     both go through `triangulate()`, whose docstring promises "winding
- *           is preserved, so callers keep control of which way the face
- *           points". IT IS NOT. `THREE.ShapeUtils.triangulateShape` returns
- *           positively-handed triples for BOTH input windings — measured — and
- *           a positively-handed triple in (x, z) faces DOWN. `cap`'s <= 4
- *           vertex fan path preserves the input winding and is correct; only
- *           the ear-clipped path past four corners is wrong, which is exactly
- *           the imported footprints.  FIX: emit `t[0], t[2], t[1]` from
- *           `triangulate()`, in `triangulate()` itself so both callers get it.
- *   tube    FIXED in the foliage pass — see the winding note in builders.ts.
- *           It now emits `i0, i3, i1, i0, i2, i3` and has moved into section 1.
- *
- * These assertions FAIL THE MOMENT THE DEFECT IS FIXED. That is deliberate:
- * when you fix an emitter, delete its entry here and move the case up into
+ * THE STANDING INSTRUCTION, unchanged: if you ever add an entry here, it is a
+ * defect you have measured and not yet fixed. Fix it, move its case up into
  * section 1, and lower the matching budget in `world/worldTruth.test.ts`.
- *
- * builders.ts belongs to the city agent, so this agent measured it rather than
- * changing it.
  */
-describe('KNOWN INSIDE OUT (quarantine — shrink this list, never grow it)', () => {
-  const broken: Array<[string, () => THREE.BufferGeometry]> = [
-    ['SurfaceBuilder.ribbon (every carriageway and marking)',
-      () => surf((b) => b.ribbon(0, 0, 0, 60, 16, 0, 0.09, SP, 4))],
-    ['SurfaceBuilder.ribbon (run-cambered crossings)',
-      () => surf((b) => b.ribbon(0, 0, 60, 0, 8, 0, 0.02, SP, 4, 0.09, -1, 1))],
-    ['SurfaceBuilder.poly (parks, squares, real outlines)',
-      () => surf((b) => b.poly(CW, 0, SP))],
-    ['SurfaceBuilder.poly (CCW input — normalised to the same wrong handedness)',
-      () => surf((b) => b.poly(CCW, 0, SP))],
-    ['FacadeBuilder.cap (imported footprints with > 4 corners)',
-      () => fac((b) => b.cap(CW_NGON, 12, FP))],
-  ];
+test('the quarantine is empty', () => {
+  const stillBroken: Array<[string, () => THREE.BufferGeometry]> = [];
+  expect(stillBroken).toEqual([]);
+});
 
-  for (const [name, build] of broken) {
-    test(`STILL BROKEN: ${name}`, () => {
-      const c = census(build());
-      expect(c.tris).toBeGreaterThan(0);
-      // If this now reads 0, the emitter has been FIXED. Move it to section 1.
-      expect(`${name} inside out: ${c.disagree}/${c.tris}`)
-        .toBe(`${name} inside out: ${c.tris}/${c.tris}`);
+/* ================================================================== */
+/* 4. The interbelic corner block's footprint                          */
+/* ================================================================== */
+
+describe('roundedFrontFootprint', () => {
+  test('keeps the house winding, so the walls still face outward', () => {
+    const fp = roundedFrontFootprint(0, 0, 20, 14, 0, 3);
+    expect(signedArea(fp)).toBeLessThan(0);
+    const g = fac((b) => b.extrude(fp, 0, 12, 0, FP));
+    expect(signedVolume(g)).toBeGreaterThan(0);
+    expect(census(g).disagree).toBe(0);
+    expect(outwardFraction(g, new THREE.Vector3(0, 6, 0))).toBe(1);
+  });
+
+  test('rounds the two STREET-side corners and no others', () => {
+    const fp = roundedFrontFootprint(0, 0, 20, 14, 0, 3, 3);
+    // Local -z is the street. Both front corners become arcs; the back two
+    // stay sharp, because a corner block only turns the corner it stands on.
+    const front = fp.filter((p) => p.z < -5.0);
+    const back = fp.filter((p) => p.z > 6.8);
+    expect(front.length).toBeGreaterThanOrEqual(6);
+    expect(back.length).toBe(2);
+    // The curve is a curve. A plain rectangle bends at exactly four points;
+    // two three-segment arcs add four more.
+    const bend = fp.filter((p, i) => {
+      const a = fp[(i - 1 + fp.length) % fp.length];
+      const c = fp[(i + 1) % fp.length];
+      const cross = (p.x - a.x) * (c.z - p.z) - (p.z - a.z) * (c.x - p.x);
+      return Math.abs(cross) > 1e-6;
     });
-  }
-
-  test('the whole quarantine list, as one number', () => {
-    let tris = 0;
-    let bad = 0;
-    for (const [, build] of broken) {
-      const c = census(build());
-      tris += c.tris;
-      bad += c.disagree;
+    expect(bend.length).toBeGreaterThan(4);
+    expect(signedArea(fp)).toBeGreaterThan(signedArea(rectFootprint(0, 0, 20, 14, 0)));
+    // Every point is inside the bounding rectangle: an arc cuts the corner off,
+    // it never bulges past the wall lines it joins.
+    for (const p of fp) {
+      expect(Math.abs(p.x)).toBeLessThanOrEqual(10 + 1e-9);
+      expect(Math.abs(p.z)).toBeLessThanOrEqual(7 + 1e-9);
     }
-    console.log(`[builders] quarantined emitters: ${bad}/${tris} triangles inside out`);
-    expect(bad).toBe(tris);
+  });
+
+  test('a radius larger than the plot is clamped, not folded inside out', () => {
+    // The infill grammar shrinks plots to fit between two streets, so a
+    // 3 m corner radius routinely meets a 5 m deep plot.
+    const fp = roundedFrontFootprint(0, 0, 9, 5, 0.7, 12);
+    expect(signedArea(fp)).toBeLessThan(0);
+    expect(signedVolume(fac((b) => b.extrude(fp, 0, 9, 0, FP)))).toBeGreaterThan(0);
+  });
+
+  test('rotates with the plot', () => {
+    const a = roundedFrontFootprint(30, -12, 20, 14, 0, 3);
+    const b = roundedFrontFootprint(30, -12, 20, 14, 1.1, 3);
+    expect(a.length).toBe(b.length);
+    // Same shape, different orientation: identical area, different points.
+    expect(Math.abs(signedArea(a))).toBeCloseTo(Math.abs(signedArea(b)), 6);
+    expect(Math.hypot(a[1].x - b[1].x, a[1].z - b[1].z)).toBeGreaterThan(1);
   });
 });

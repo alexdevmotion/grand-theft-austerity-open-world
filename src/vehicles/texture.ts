@@ -347,38 +347,79 @@ function paintDash(g: CanvasRenderingContext2D): void {
   });
 }
 
+/**
+ * The CHROME HUBCAP cell.
+ *
+ * This used to paint a whole wheel — steel rim, dark tyre bead ring, a small
+ * dome in the middle. That was correct when the cell was mapped across the
+ * entire wheel face, and completely wrong once the geometry became a hubcap
+ * dish that fills only the tyre's bead aperture: the dark bead ring landed
+ * inside the cap and turned two thirds of it black, so the Dacia still read as
+ * having featureless dark wheels even with a full-face cap on it.
+ *
+ * The cell is now the CAP ALONE, edge to edge: a polished dish that stays
+ * bright right out to its rim, a ring of stamped slots, and a raised centre.
+ * The atlas multiplies the chrome vertex colour, so anything dark in here is a
+ * direct loss of sheen — the only dark pixels are the slots.
+ */
 function paintHubcap(g: CanvasRenderingContext2D): void {
   withCell(g, UV.hubcap, (c, w, h) => {
     const cx = w / 2, cy = h / 2, R = Math.min(w, h) / 2;
-    c.fillStyle = '#4a4a52';
+    c.fillStyle = '#e8ecf4';
     c.fillRect(0, 0, w, h);
-    // steel rim
-    c.fillStyle = '#8d8d98';
-    c.beginPath(); c.arc(cx, cy, R * 0.97, 0, Math.PI * 2); c.fill();
-    c.fillStyle = '#2b2b33';
-    c.beginPath(); c.arc(cx, cy, R * 0.82, 0, Math.PI * 2); c.fill();
-    // hubcap dome
-    const grd = c.createRadialGradient(cx - R * 0.25, cy - R * 0.25, R * 0.05, cx, cy, R * 0.72);
+    // Polished dish: bright, lit from upper-left, never falling below mid-grey.
+    const grd = c.createRadialGradient(cx - R * 0.34, cy - R * 0.38, R * 0.04, cx, cy, R);
     grd.addColorStop(0, '#ffffff');
-    grd.addColorStop(0.5, '#c9c9d4');
-    grd.addColorStop(1, '#6e6e7a');
+    grd.addColorStop(0.38, '#eef1f7');
+    grd.addColorStop(0.74, '#cfd5e2');
+    grd.addColorStop(1, '#eaeef6');
     c.fillStyle = grd;
-    c.beginPath(); c.arc(cx, cy, R * 0.7, 0, Math.PI * 2); c.fill();
-    // cooling slots
+    c.beginPath(); c.arc(cx, cy, R, 0, Math.PI * 2); c.fill();
+    // Turned-metal banding: the concentric scratch pattern that tells the eye
+    // this is spun steel and not a plastic disc.
+    c.strokeStyle = 'rgba(120,126,142,0.30)';
+    for (let i = 0; i < 9; i++) {
+      c.lineWidth = 1.5;
+      c.beginPath(); c.arc(cx, cy, R * (0.20 + i * 0.085), 0, Math.PI * 2); c.stroke();
+    }
+    // Bright rolled outer flange.
+    c.strokeStyle = '#ffffff';
+    c.lineWidth = Math.max(2, R * 0.07);
+    c.beginPath(); c.arc(cx, cy, R * 0.955, 0, Math.PI * 2); c.stroke();
+    c.strokeStyle = 'rgba(96,102,118,0.55)';
+    c.lineWidth = Math.max(1.5, R * 0.03);
+    c.beginPath(); c.arc(cx, cy, R * 0.88, 0, Math.PI * 2); c.stroke();
+    // Ring of stamped cooling slots — the only genuinely dark pixels here.
     for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2;
-      c.fillStyle = '#20202a';
+      const a = (i / 8) * Math.PI * 2 + 0.2;
+      c.fillStyle = '#16161d';
       c.save();
-      c.translate(cx + Math.cos(a) * R * 0.48, cy + Math.sin(a) * R * 0.48);
-      c.rotate(a);
-      c.fillRect(-R * 0.1, -R * 0.06, R * 0.2, R * 0.12);
+      c.translate(cx + Math.cos(a) * R * 0.60, cy + Math.sin(a) * R * 0.60);
+      c.rotate(a + Math.PI / 2);
+      c.beginPath();
+      const sw = R * 0.085, sh = R * 0.20;
+      c.roundRect(-sw * 0.5, -sh * 0.5, sw, sh, sw * 0.5);
+      c.fill();
       c.restore();
     }
-    c.fillStyle = '#3b3b45';
-    c.beginPath(); c.arc(cx, cy, R * 0.16, 0, Math.PI * 2); c.fill();
-    c.strokeStyle = 'rgba(40,34,30,0.5)';
-    c.lineWidth = 3;
-    c.beginPath(); c.arc(cx, cy, R * 0.88, 0.6, 2.4); c.stroke();
+    // Raised centre boss with the badge ring.
+    const dome = c.createRadialGradient(cx - R * 0.12, cy - R * 0.14, R * 0.02, cx, cy, R * 0.32);
+    dome.addColorStop(0, '#ffffff');
+    dome.addColorStop(0.6, '#d6dae6');
+    dome.addColorStop(1, '#9aa0b0');
+    c.fillStyle = dome;
+    c.beginPath(); c.arc(cx, cy, R * 0.30, 0, Math.PI * 2); c.fill();
+    c.strokeStyle = 'rgba(70,76,92,0.75)';
+    c.lineWidth = Math.max(1.5, R * 0.035);
+    c.beginPath(); c.arc(cx, cy, R * 0.30, 0, Math.PI * 2); c.stroke();
+    c.fillStyle = '#5c6274';
+    c.beginPath(); c.arc(cx, cy, R * 0.10, 0, Math.PI * 2); c.fill();
+    // A little road film at the bottom, so it is not showroom-fresh.
+    const grime = c.createLinearGradient(0, cy * 0.6, 0, h);
+    grime.addColorStop(0, 'rgba(90,80,70,0)');
+    grime.addColorStop(1, 'rgba(74,64,54,0.20)');
+    c.fillStyle = grime;
+    c.beginPath(); c.arc(cx, cy, R, 0, Math.PI * 2); c.fill();
   });
 }
 

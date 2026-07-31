@@ -179,7 +179,25 @@ const TRANSMISSION = /* glsl */`
 		vec3 Vw = normalize( cameraPosition - vSkinWorldPos );
 		vec3 tl = normalize( -uKeyDir + Nw * uTransDistort );
 		float t = pow( clamp( dot( Vw, -tl ), 0.0, 1.0 ), uTransPower ) * uTransScale;
-		float back = clamp( -dot( Nw, uKeyDir ) * 0.5 + 0.5, 0.0, 1.0 );
+		/* THE BACK-LIT GATE, AND WHY IT IS NOT A HALF-LAMBERT.
+		 *
+		 * This was -dot(N,K) * 0.5 + 0.5, which is 0.5 for a surface exactly
+		 * side-on to the key and never reaches zero for anything short of a
+		 * surface aimed straight at it. So a cheek in FULL FRONTAL SUN was still
+		 * being given half of a saturated orange-red, unshadowed, multiplied by a
+		 * key that at midday is 12.5 in intensity. Framed at 0.6 m under a noon
+		 * sun the whole head rendered oxblood — measured 49/22/30 on the cheek,
+		 * against 179/144/124 for the identical frame with uTransScale locked
+		 * to zero through a property getter. Nothing else in the stack moved.
+		 *
+		 * Transmission is light that entered the far side of a thin part and came
+		 * out at the near side. A surface with ANY of the key on its front face
+		 * is not that, by definition. So the gate is a true back-facing test with
+		 * a soft shoulder: full strength when the key is directly behind, zero the
+		 * moment the surface turns into it. Ears, nostril wings and lip edges with
+		 * the sun behind the head — the cases this term exists for — are
+		 * unaffected, because for them -dot(N,K) is near 1. */
+		float back = pow( clamp( -dot( Nw, uKeyDir ), 0.0, 1.0 ), 1.4 );
 		reflectedLight.directDiffuse +=
 			uKeyColor * uTransColor * diffuseColor.rgb * ( t * back * vSkinAttr.y );
 	}
@@ -257,9 +275,17 @@ export function createSkinMaterial(opts: SkinMaterialOptions = {}): SkinMaterial
       .replace('#include <lights_physical_pars_fragment>', `#include <lights_physical_pars_fragment>\n${SKIN_RE}`)
       .replace('#include <aomap_fragment>', `#include <aomap_fragment>
         {
+          // Cavity against the AMBIENT, softened. The same term is already a
+          // multiplier on direct diffuse and a 0.20 multiplier on the authored
+          // albedo, so applying it here at full strength was the third bite out
+          // of the same vertex: a crease at the 0.22 floor was returning 0.16 of
+          // its neighbour, which renders as a drawn black line rather than as a
+          // fold. Ambient occlusion is also the wrong place to be aggressive on
+          // this head — the key is low and often behind it, so ambient IS the
+          // light, and crushing ambient crushes the face.
           float cav = mix( 1.0, vSkinAttr.z, uCavityStrength );
-          reflectedLight.indirectDiffuse *= cav;
-          reflectedLight.indirectSpecular *= mix( 1.0, cav, 0.65 );
+          reflectedLight.indirectDiffuse *= mix( 1.0, cav, 0.72 );
+          reflectedLight.indirectSpecular *= mix( 1.0, cav, 0.55 );
         }`)
       .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>\n${TRANSMISSION}`);
   };

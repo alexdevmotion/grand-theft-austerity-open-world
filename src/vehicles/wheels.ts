@@ -34,6 +34,7 @@ const RUBBER_WORN = lin(0x2a2a31);
 const RIM_STEEL = lin(0x8d919c);
 const RIM_DARK = lin(0x2a2a32);
 const CHROME = lin(0xbcc2d2);
+const CHROME_DULL = lin(0x8d93a4);
 
 const cache = new Map<string, THREE.BufferGeometry>();
 
@@ -80,29 +81,71 @@ export function wheelGeometry(
       i === 3 ? tyre : wall, true);
   }
 
-  const faceX = sx * (hw - W * 0.08);
+  /**
+   * The plane the rim detail lives in.
+   *
+   * The tyre carcass closes at `hw` with a flat bead annulus running down to
+   * `R * 0.66`, so everything inside that radius is an APERTURE you look
+   * through. The face used to be struck at `hw - W*0.08` — a full 8% of the
+   * tread width down inside the rim well, where nothing but bounced light ever
+   * reaches it. That is why every wheel in the city read as a featureless black
+   * disc: the chrome was there, it was just at the bottom of a hole. The face
+   * now sits essentially flush with the tyre's outer sidewall, which is also
+   * where a real hubcap sits.
+   */
+  const faceX = sx * (hw - W * 0.03);
   const innerX = sx * (-hw + W * 0.05);
+  /** Radius at which the tyre's bead annulus closes — the aperture a cap fills. */
+  const apertureR = R * 0.66;
 
   if (style === 'scooter') {
     b.cyl(R * 0.72, R * 0.72, W * 0.55, seg, T(0, 0, 0, 0, 0, Math.PI / 2), { color: RIM_DARK, rough: 0.4, metal: 0.85, coat: 0.3 });
     b.cyl(R * 0.16, R * 0.16, W * 1.4, 8, T(0, 0, 0, 0, 0, Math.PI / 2), { color: RIM_STEEL, rough: 0.3, metal: 0.95, coat: 0.3 });
   } else if (style === 'hubcap') {
-    // Steel wheel with a chromed hubcap — the Dacia's signature small wheel.
-    b.cyl(R * 0.70, R * 0.70, W * 0.78, seg, T(0, 0, 0, 0, 0, Math.PI / 2), { color: RIM_DARK, rough: 0.55, metal: 0.6, coat: 0.2 });
-    b.cyl(R * 0.70, R * 0.64, W * 0.11, seg, T(faceX - sx * W * 0.05, 0, 0, 0, 0, -sx * Math.PI / 2), {
-      color: CHROME, rough: 0.12, metal: 1, coat: 0.4, uv: UV.hubcap,
-    });
-    // Slightly domed centre.
-    b.sphere(R * 0.36, 12, T(faceX + sx * W * 0.02, 0, 0, 0, 0, 0, 0.32, 1, 1), {
-      color: CHROME, rough: 0.10, metal: 1, coat: 0.45, uv: UV.hubcap,
-    });
-    // Chrome lug ring.
-    b.torus(R * 0.46, R * 0.032, 6, seg, Math.PI * 2, T(faceX + sx * W * 0.02, 0, 0, 0, Math.PI / 2, 0), {
-      color: CHROME, rough: 0.14, metal: 1, coat: 0.4,
-    });
+    /**
+     * Steel wheel behind a FULL-FACE CHROME HUBCAP — the Dacia's signature.
+     *
+     * Look at `docs/reference/world/dacia-1300.jpg`: the cap is not a small
+     * button in the middle of a black wheel, it is a dish covering roughly
+     * two thirds of the tyre's diameter, sitting in the plane of the sidewall
+     * with a bright rolled outer flange, a ring of stamped slots and a
+     * polished raised centre. It is the single brightest thing on the lower
+     * half of the car and the reason a parked 1300 does not read as four
+     * black holes.
+     */
+    const capR = apertureR;
+    // metal 0.86, not 1: a fully metallic surface has NO diffuse term, so in the
+    // shadow of its own arch — which is where a wheel spends its life — it has
+    // nothing but the environment lobe to show and goes black. Real hubcaps are
+    // dulled, scratched chrome; leaving a little diffuse in keeps them readable
+    // on the shaded side of the car without making them look painted.
+    const cap: Surf = { color: CHROME, rough: 0.13, metal: 0.86, coat: 0.5, uv: UV.hubcap };
+    const capDull: Surf = { color: CHROME_DULL, rough: 0.26, metal: 0.95, coat: 0.3 };
+    // Rim well behind the cap, so no daylight shows through the slots.
+    b.cyl(R * 0.655, R * 0.655, W * 0.80, seg, T(0, 0, 0, 0, 0, Math.PI / 2),
+      { color: RIM_DARK, rough: 0.55, metal: 0.6, coat: 0.2 });
+    // Full-face dish. Two shallow cones: a rolled flange that catches the sun,
+    // then the dished face that carries the hubcap cell of the atlas.
+    b.cyl(capR * 0.955, capR, W * 0.055, seg, T(faceX - sx * W * 0.028, 0, 0, 0, 0, -sx * Math.PI / 2), cap);
+    b.cyl(capR * 0.62, capR * 0.955, W * 0.05, seg, T(faceX - sx * W * 0.080, 0, 0, 0, 0, -sx * Math.PI / 2), cap);
+    // Bright rolled lip right on the tyre bead — the highlight that separates
+    // chrome from rubber at any distance.
+    b.torus(capR * 0.965, R * 0.022, 5, seg, Math.PI * 2,
+      T(faceX - sx * W * 0.010, 0, 0, 0, Math.PI / 2, 0), cap);
+    // Ring of stamped cooling slots.
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2 + 0.2;
+      b.cyl(R * 0.052, R * 0.052, W * 0.07, 6,
+        T(faceX - sx * W * 0.070, Math.sin(a) * capR * 0.74, Math.cos(a) * capR * 0.74, 0, 0, -sx * Math.PI / 2),
+        { color: lin(0x0a0a0f), rough: 0.9, metal: 0.1, coat: 0 });
+    }
+    // Polished centre pan and boss.
+    b.cyl(capR * 0.56, capR * 0.62, W * 0.05, seg, T(faceX - sx * W * 0.050, 0, 0, 0, 0, -sx * Math.PI / 2), cap);
+    b.torus(capR * 0.58, R * 0.016, 5, seg, Math.PI * 2, T(faceX - sx * W * 0.040, 0, 0, 0, Math.PI / 2, 0), capDull);
+    b.sphere(capR * 0.30, 12, T(faceX - sx * W * 0.010, 0, 0, 0, 0, 0, 0.44, 1, 1), cap);
   } else if (style === 'alloy') {
     b.cyl(R * 0.74, R * 0.74, W * 0.76, seg, T(0, 0, 0, 0, 0, Math.PI / 2), { color: RIM_DARK, rough: 0.35, metal: 0.9, coat: 0.3 });
-    b.cyl(R * 0.72, R * 0.66, W * 0.10, seg, T(faceX, 0, 0, 0, 0, -sx * Math.PI / 2), { color: RIM_STEEL, rough: 0.22, metal: 0.95, coat: 0.4 });
+    b.cyl(apertureR * 0.92, apertureR, W * 0.10, seg, T(faceX, 0, 0, 0, 0, -sx * Math.PI / 2), { color: RIM_STEEL, rough: 0.22, metal: 0.95, coat: 0.4 });
     for (let i = 0; i < 5; i++) {
       const a = (i / 5) * Math.PI * 2;
       b.box(W * 0.1, R * 0.15, R * 0.64,
@@ -128,14 +171,16 @@ export function wheelGeometry(
         { color: CHROME, rough: 0.22, metal: 1, coat: 0.35 });
     }
   } else {
-    // Plain painted steel wheel with a small chrome cap.
-    b.cyl(R * 0.70, R * 0.70, W * 0.76, seg, T(0, 0, 0, 0, 0, Math.PI / 2), { color: RIM_DARK, rough: 0.6, metal: 0.55, coat: 0.2 });
-    b.cyl(R * 0.68, R * 0.50, W * 0.12, seg, T(faceX, 0, 0, 0, 0, -sx * Math.PI / 2), { color: RIM_STEEL, rough: 0.42, metal: 0.8, coat: 0.3, uv: UV.hubcap });
-    b.cyl(R * 0.20, R * 0.20, W * 0.08, 10, T(faceX + sx * W * 0.06, 0, 0, 0, 0, -sx * Math.PI / 2), { color: CHROME, rough: 0.18, metal: 1, coat: 0.4 });
+    // Plain painted steel wheel (1310, ARO, Oltcit) with a small chrome cap.
+    // Same rule as the hubcap: the face closes the tyre's bead aperture instead
+    // of hiding at the bottom of the rim well.
+    b.cyl(R * 0.655, R * 0.655, W * 0.76, seg, T(0, 0, 0, 0, 0, Math.PI / 2), { color: RIM_DARK, rough: 0.6, metal: 0.55, coat: 0.2 });
+    b.cyl(apertureR * 0.80, apertureR, W * 0.10, seg, T(faceX - sx * W * 0.03, 0, 0, 0, 0, -sx * Math.PI / 2), { color: RIM_STEEL, rough: 0.42, metal: 0.8, coat: 0.3, uv: UV.hubcap });
+    b.cyl(apertureR * 0.36, apertureR * 0.42, W * 0.07, 12, T(faceX - sx * W * 0.01, 0, 0, 0, 0, -sx * Math.PI / 2), { color: CHROME, rough: 0.18, metal: 1, coat: 0.4 });
     for (let i = 0; i < 4; i++) {
       const a = (i / 4) * Math.PI * 2 + 0.4;
-      b.cyl(R * 0.045, R * 0.045, W * 0.08, 6,
-        T(faceX + sx * W * 0.05, Math.sin(a) * R * 0.30, Math.cos(a) * R * 0.30, 0, 0, -sx * Math.PI / 2),
+      b.cyl(R * 0.042, R * 0.042, W * 0.07, 6,
+        T(faceX - sx * W * 0.02, Math.sin(a) * R * 0.34, Math.cos(a) * R * 0.34, 0, 0, -sx * Math.PI / 2),
         { color: CHROME, rough: 0.24, metal: 1, coat: 0.3 });
     }
   }

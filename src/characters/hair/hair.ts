@@ -249,6 +249,23 @@ export function createHairMaterial(opts: HairMaterialOptions): THREE.MeshPhysica
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>\n${HAIR_FRAG_HEAD}`)
       .replace('#include <lights_physical_pars_fragment>', `#include <lights_physical_pars_fragment>\n${HAIR_RE}`)
+      /* IBL specular off hair, cut hard.
+       *
+       * `RE_Direct` is overridden above so the DIRECT specular is Kajiya-Kay and
+       * behaves; nothing was overriding the INDIRECT half, so every card was
+       * also being given three's full smooth-dielectric environment reflection
+       * at roughness 0.5, off a sky that at midday is the brightest thing in the
+       * scene. Framed at 0.6 m under a noon key the crop rendered as bright
+       * silver — a tinfoil wig on a man whose hair the brief describes as
+       * "short greying", which reads as thirty years older than he is.
+       *
+       * A head of hair is not a smooth dielectric surface: it is a bundle of
+       * fibres, most of an environment lobe misses the fibre entirely, and what
+       * is left is already accounted for by the KK secondary lobe. 0.30 is the
+       * fraction that survives; it keeps a sky bounce on the crown at dusk,
+       * which is real, and removes the chrome. */
+      .replace('#include <aomap_fragment>', `#include <aomap_fragment>
+        reflectedLight.indirectSpecular *= 0.30;`)
       .replace(
         '#include <color_fragment>',
         `#include <color_fragment>

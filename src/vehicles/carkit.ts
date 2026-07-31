@@ -482,9 +482,12 @@ function bodyStations(d: CarDesign): Station[] {
   range(nose - d.noseRound, nose, 2);
   // Stations exactly on the door edges, so the door cut has a clean seam.
   for (const zz of [...d.frontDoorZ, ...d.rearDoorZ]) push(zz);
+  // Nine stations across each arch, not five. At five the opening is a coarse
+  // polygon with a flat top, which reads as a slot cut in the flank rather than
+  // as a pressed arch, and the corners of that polygon sit close enough to the
+  // tyre to look like a skirt.
   for (const ax of [d.frontAxleZ, d.rearAxleZ]) {
-    push(ax - d.archRadius); push(ax - d.archRadius * 0.55); push(ax);
-    push(ax + d.archRadius * 0.55); push(ax + d.archRadius);
+    for (const f of [-1, -0.76, -0.5, -0.26, 0, 0.26, 0.5, 0.76, 1]) push(ax + d.archRadius * f);
   }
   return Array.from(zs)
     .filter((z) => z >= tail - 1e-6 && z <= nose + 1e-6)
@@ -537,7 +540,10 @@ function lowerBody(c: Ctx): DoorSlot[] {
   // Wheel-well liners. An arch cut into a hollow lofted shell shows daylight
   // straight through the car; a dark liner behind the tyre is what makes the
   // arch read as a wheel well.
-  const liner: Surf = { color: lin(0x0a0a0e), rough: 0.96, metal: 0, coat: 0 };
+  // Not pure black: an arch that reads as a hole punched in the flank is as
+  // wrong as one that shows daylight through the car. This is a dirty inner
+  // wing that still takes a little bounce off the road.
+  const liner: Surf = { color: lin(0x16141c), rough: 0.94, metal: 0.04, coat: 0 };
   for (const sx of [-1, 1]) {
     for (const az of [d.frontAxleZ, d.rearAxleZ]) {
       b.cyl(d.archRadius * 0.97, d.archRadius * 0.97, 0.09, 14,
@@ -784,19 +790,34 @@ function frontEnd(c: Ctx): void {
   const grilleH = d.grille === 'suvBar' ? 0.24 : d.grille === 'fineSlats' ? 0.22 : 0.17;
   const grilleY = lampY + (d.grille === 'modernBar' ? 0.02 : 0);
   b.box(grilleW, grilleH, 0.05, T(0, c.y(grilleY), zF - 0.03), {
-    color: d.grille === 'fineSlats' ? lin(0x101016) : lin(0x16161c),
+    color: d.grille === 'fineSlats' ? lin(0x22222a) : lin(0x16161c),
     rough: 0.5, metal: 0.35, coat: 0.3, uv: UV.grille,
   });
   if (d.grille === 'fineSlats') {
-    // Fine horizontal slats in a chrome surround, Dacia 1300.
-    b.box(grilleW + 0.06, 0.03, 0.055, T(0, c.y(grilleY + grilleH * 0.5 + 0.015), zF - 0.02), chrome);
-    b.box(grilleW + 0.06, 0.03, 0.055, T(0, c.y(grilleY - grilleH * 0.5 - 0.015), zF - 0.02), chrome);
-    for (const sx of [-1, 1]) b.box(0.03, grilleH + 0.06, 0.055, T(sx * (grilleW * 0.5 + 0.015), c.y(grilleY), zF - 0.02), chrome);
-    for (let i = 0; i < 5; i++) {
-      b.box(grilleW * 0.985, 0.009, 0.052, T(0, c.y(grilleY - grilleH * 0.36 + i * grilleH * 0.18), zF - 0.018), chromeDull);
+    /**
+     * Dacia 1300: a FINE horizontal-slat grille inside a bright chrome frame.
+     *
+     * The previous version had five slats across a near-black panel, which at
+     * any real distance collapsed into one dark rectangle — the "dark slat
+     * grille" the review objected to. A 1300's grille is charcoal, not black,
+     * and the slat pitch is fine enough that it reads as texture rather than
+     * as five bars.
+     */
+    b.box(grilleW + 0.07, 0.032, 0.058, T(0, c.y(grilleY + grilleH * 0.5 + 0.016), zF - 0.018), chrome);
+    b.box(grilleW + 0.07, 0.032, 0.058, T(0, c.y(grilleY - grilleH * 0.5 - 0.016), zF - 0.018), chrome);
+    for (const sx of [-1, 1]) b.box(0.028, grilleH + 0.064, 0.058, T(sx * (grilleW * 0.5 + 0.016), c.y(grilleY), zF - 0.018), chrome);
+    const slats = 11;
+    for (let i = 0; i < slats; i++) {
+      const t = (i + 0.5) / slats - 0.5;
+      b.box(grilleW * 0.985, 0.0065, 0.054, T(0, c.y(grilleY + t * grilleH * 0.92), zF - 0.016), chromeDull);
     }
-    // Dacia badge bar down the middle.
-    b.box(0.10, grilleH * 0.9, 0.05, T(0, c.y(grilleY), zF - 0.012), chromeDull);
+    // Dacia badge: a black centre plinth flanked by two uprights, with a small
+    // chrome shield on it — the 1300's grille is split down the middle.
+    b.box(0.105, grilleH * 0.96, 0.052, T(0, c.y(grilleY), zF - 0.014), { color: lin(0x0b0b10), rough: 0.62, metal: 0.25 });
+    for (const bx of [-1, 1]) {
+      b.box(0.016, grilleH * 0.96, 0.05, T(bx * 0.068, c.y(grilleY), zF - 0.012), { color: lin(0x0b0b10), rough: 0.62, metal: 0.25 });
+    }
+    b.box(0.052, 0.062, 0.05, T(0, c.y(grilleY + grilleH * 0.12), zF - 0.004), chrome);
   } else if (d.grille === 'blackSlats') {
     for (let i = 0; i < 4; i++) {
       b.box(grilleW * 0.98, 0.013, 0.05, T(0, c.y(grilleY - grilleH * 0.34 + i * grilleH * 0.23), zF - 0.016), { color: lin(0x2a2a33), rough: 0.55, metal: 0.3 });
@@ -824,21 +845,57 @@ function frontEnd(c: Ctx): void {
     const indL = sx < 0 ? L.indL : L.indR;
     switch (d.lamps) {
       case 'rect1300': {
-        // RECTANGULAR outboard headlamp in a chrome bezel...
-        b.box(0.30, 0.135, 0.045, T(x, c.y(lampY + 0.035), zF - 0.012), chrome);
-        b.box(0.265, 0.105, 0.055, T(x, c.y(lampY + 0.035), zF - 0.004), {
-          color: LAMP_WHITE, rough: 0.06, metal: 0.02, coat: 0.9, uv: UV.headlampGlass, light: L.head,
+        /**
+         * The 1300's face, per `docs/reference/world/dacia-1300.jpg`:
+         * a RECTANGULAR outboard headlamp ringed by a BRIGHT CHROME SURROUND,
+         * a ROUND auxiliary lamp standing proud of the grille below it, and an
+         * amber indicator in the outer corner.
+         *
+         * The surround is built as four chrome bars around the aperture rather
+         * than as one chrome slab behind the lens. A slab is hidden by the lens
+         * it is supposed to frame, which is exactly how this ended up reading
+         * as "a white block": no visible bezel, no lamp, just a pale rectangle.
+         */
+        const lw = 0.155, lh = 0.058;   // lens half-extents
+        const bez = 0.020;              // chrome frame thickness
+        const zBez = zF - 0.006;
+        const ly = lampY + 0.035;
+        // Four-sided chrome surround, standing 12 mm proud of the lens.
+        b.box(lw * 2 + bez * 2, bez, 0.062, T(x, c.y(ly + lh + bez * 0.5), zBez), chrome);
+        b.box(lw * 2 + bez * 2, bez, 0.062, T(x, c.y(ly - lh - bez * 0.5), zBez), chrome);
+        for (const ex of [-1, 1]) {
+          b.box(bez, lh * 2 + bez * 2, 0.062, T(x + ex * (lw + bez * 0.5), c.y(ly), zBez), chrome);
+        }
+        // Dark reflector housing, so the lens has something behind it and does
+        // not float as a white rectangle painted on the wing.
+        b.box(lw * 2, lh * 2, 0.05, T(x, c.y(ly), zF - 0.030), { color: lin(0x101016), rough: 0.35, metal: 0.5 });
+        // Fluted glass. Dimmer than white by day — it is glass over a silvered
+        // reflector, and the emissive channel is what makes it a LAMP at dusk.
+        b.box(lw * 2 - 0.008, lh * 2 - 0.008, 0.052, T(x, c.y(ly), zF - 0.014), {
+          color: lin(0xb9c2cf), rough: 0.055, metal: 0.15, coat: 0.95, uv: UV.headlampGlass, light: L.head,
         });
-        // ...with a ROUND auxiliary lamp below it, inboard, standing PROUD of
-        // the grille slats. Sunk level with them it simply disappears.
-        b.torus(0.058, 0.015, 5, 12, Math.PI * 2, T(x - sx * 0.03, c.y(lampY - 0.105), zF + 0.022), chrome);
-        b.cyl(0.052, 0.05, 0.055, 12, T(x - sx * 0.03, c.y(lampY - 0.105), zF + 0.006, Math.PI / 2, 0, 0), {
-          color: LAMP_WHITE, rough: 0.08, metal: 0.02, coat: 0.9, uv: UV.headlampGlass, light: L.head,
+        // Chrome centre bar across the lens — the 1300's lamps are split.
+        b.box(lw * 2 - 0.02, 0.008, 0.056, T(x, c.y(ly), zF - 0.004), chromeDull);
+
+        // ROUND auxiliary lamp, inboard and low.
+        //
+        // It has to stand IN FRONT OF THE BUMPER, not level with the grille.
+        // The chrome bumper face is 0.088 proud of `zF`, so an auxiliary at
+        // `zF + 0.026` is buried in it up to its axle and renders as a chrome
+        // semicircle — which is what it was doing.
+        const auxX = x - sx * 0.062;
+        const auxY = lampY - 0.115;
+        const auxZ = zF + 0.086;
+        b.box(0.026, 0.075, 0.05, T(auxX, c.y(auxY + 0.05), auxZ - 0.045), chromeDull);   // bracket
+        b.torus(0.062, 0.017, 5, 14, Math.PI * 2, T(auxX, c.y(auxY), auxZ + 0.012), chrome);
+        b.cyl(0.058, 0.050, 0.062, 14, T(auxX, c.y(auxY), auxZ - 0.012, Math.PI / 2, 0, 0), {
+          color: lin(0xc6cfdd), rough: 0.06, metal: 0.1, coat: 0.95, uv: UV.headlampGlass, light: L.head,
         });
         // amber indicator in the outer corner, under the headlamp
-        b.box(0.10, 0.075, 0.045, T(sx * (hw - 0.04), c.y(lampY - 0.02), zF - 0.012), {
+        b.box(0.095, 0.07, 0.05, T(sx * (hw - 0.035), c.y(lampY - 0.055), zF - 0.010), {
           color: LENS_AMBER, rough: 0.12, metal: 0.03, coat: 0.85, uv: UV.tailLens, light: indL,
         });
+        b.box(0.105, 0.012, 0.052, T(sx * (hw - 0.035), c.y(lampY - 0.096), zF - 0.010), chromeDull);
         break;
       }
       case 'rect1310': {
@@ -1048,10 +1105,19 @@ function sides(c: Ctx): void {
       color: d.cladding ? lin(0x24242a) : c.s.interior.clone().lerp(lin(0x2f2a24), 0.66),
       rough: 0.9, metal: 0.08, uv: UV.bodyBattered,
     });
-    // wheel-arch lips
+    /**
+     * Wheel-arch lips — struck from the HUB, exactly like `archY`.
+     *
+     * These used to be centred on `sill * 0.92`, i.e. 0.08–0.1 m BELOW the hub,
+     * with the same radius as the opening. The lip therefore did not trace the
+     * arch: its crown fell below the top of the tyre and, seen from the side,
+     * drew a dark arc straight across the upper third of the wheel. That is the
+     * "the rear arch half-skirts the wheel" reading — the opening was open all
+     * along, the trim on it was not.
+     */
     for (const az of [d.frontAxleZ, d.rearAxleZ]) {
-      b.torus(d.archRadius * 0.96, d.cladding ? 0.042 : 0.02, 5, 12, Math.PI * 0.94,
-        T(sx * (d.halfWidth + d.archBlister), c.y(d.sill * 0.92), az, 0, (Math.PI / 2) * sx, 0.04),
+      b.torus(d.archRadius * 0.985, d.cladding ? 0.042 : 0.021, 5, 14, Math.PI * 1.06,
+        T(sx * (d.halfWidth + d.archBlister), c.y(d.wheelRadius), az, 0, (Math.PI / 2) * sx, -0.03),
         d.cladding ? { color: lin(0x1e1e24), rough: 0.86, metal: 0.05 } : c.trim);
     }
     // Mirror, mounted ON the shoulder at the base of the A pillar rather than

@@ -374,7 +374,20 @@ export interface BrowSpec {
  * washed out. This is the same shape, given the mass it needs to survive a key
  * light pointed straight at it.
  */
-export const HEAVY_BROW: BrowSpec = { thickness: 0.0046, angle: 0.0062, innerDrop: 0.0026, hairs: 300, extend: 0.11, asymmetry: 0.0022 };
+/* Heavier and longer again, and for a reason that is about SILHOUETTE rather
+ * than about density. The immersion review, looking at a head it could barely
+ * see, still named "the flat heavy brow is absent" — and a brow reads as flat
+ * and heavy from its OUTLINE, not from how many hairs are in it. Two things
+ * were stopping that outline forming: the mass ended before the outer third of
+ * the fitted curve (`extend` 0.11 of a curve that is itself short), so the brow
+ * tapered to nothing exactly where Bolojan's stays thick and turns down; and at
+ * 9.2 mm of full height it was an ordinary brow on a face whose whole
+ * identifying feature is that his are not ordinary. 11.2 mm and a third again
+ * as many hairs is at the top of the human range, which is where he sits.
+ *
+ * `angle` also goes up: the down-turned outer end is what makes the pair read
+ * as flat-and-scowling rather than as arched. */
+export const HEAVY_BROW: BrowSpec = { thickness: 0.0056, angle: 0.0078, innerDrop: 0.0026, hairs: 420, extend: 0.14, asymmetry: 0.0022 };
 export const LEAN_BROW: BrowSpec = { thickness: 0.0021, angle: 0.0018, innerDrop: 0.0010, hairs: 68, extend: 0.06, asymmetry: 0.0008 };
 export const SOFT_BROW: BrowSpec = { thickness: 0.0019, angle: 0.000, innerDrop: 0.0008, hairs: 62, extend: 0.05, asymmetry: 0.0006 };
 
@@ -551,7 +564,19 @@ export function BEARD_TOP(az: number): number {
    * is the shape the reference has. The moustache and the soul patch are emitted
    * separately below and are unaffected either way; the chin keeps its weight
    * because the curve near az = 0 is unchanged. */
-  return (-40 + 15 * smoothstep(0.18, 0.78, a)) * DEG;
+  /* And then the review, judging the head through the darkness, still reported
+   * "the beard mass is absent" — which is the third time this boundary has been
+   * moved on the strength of how much beard was VISIBLE in a render, when the
+   * thing making it invisible was never the boundary. The beard's albedo band
+   * was painted at 0.014 linear (see `beardColor` in heroHead.ts); at that
+   * reflectance the difference between a beard reaching the mouth corner and
+   * one reaching the cheekbone is the difference between a black patch and a
+   * slightly larger black patch. With the paint fixed, the boundary can go back
+   * to what the reference photograph actually shows — the beard covers the
+   * whole jaw and climbs the cheek to about two-thirds of the way from the
+   * mouth corner to the zygomatic arch — and it will read as coverage rather
+   * than as a smudge. -37 at the chin and -21 at the ear. */
+  return (-37 + 16 * smoothstep(0.18, 0.78, a)) * DEG;
 }
 
 /**

@@ -148,10 +148,16 @@ const dacia1300 = car({
   wheelRadius: 0.30, tyreWidth: 0.175, rideHeight: 0.62,
   wheelStyle: 'hubcap', seats: 4,
   sill: 0.235, belt: 0.90, bonnetY: 0.905, bonnetRake: -0.022,
-  noseY: 0.795, tailY: 0.855, bootY: 0.938,
+  // bootY was 0.938 — 38 mm ABOVE the door belt line, which put a visible
+  // kick-up in the shoulder behind the C pillar. On a 1300 the shoulder runs
+  // dead straight from the headlamp to the tail lamp and the boot lid is flat
+  // and level with the doors; 6 mm is a panel gap, not a kick.
+  noseY: 0.795, tailY: 0.855, bootY: 0.906,
   noseRound: 0.17, tailRound: 0.17,
   halfWidth: 0.82, noseTaper: 0.30, tailTaper: 0.26,
-  archBlister: 0.016,
+  // Modest haunch over the wheels, and an arch opening a third larger than the
+  // tyre so the wheel sits IN an arch rather than filling a hole.
+  archBlister: 0.020, archRadius: 0.388,
   wsBase: 0.955, wsTop: 0.600, rsBase: -1.285, rsTop: -1.010, bPillarZ: -0.135,
   hwTop: 0.732, hwBelt: 0.786, glassX: 0.756, roofCrown: 0.006,
   rear: 'saloon',

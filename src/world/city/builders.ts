@@ -331,8 +331,23 @@ export class SurfaceBuilder {
         const i1 = i0 + 1;
         const i2 = i0 + (cols + 1) + 1;
         const i3 = i0 + (cols + 1);
-        // Clockwise-from-above ordering for an upward normal.
-        this.idx.push(i0, i3, i2, i0, i2, i1);
+        /*
+         * WINDING — was `(i0, i3, i2)(i0, i2, i1)`, which faces DOWN.
+         *
+         * i1 steps +1 ACROSS the width (along the left-hand perpendicular
+         * `p = (-uz, ux)`) and i3 steps +1 ALONG the run (`u`). The geometric
+         * normal of (i0, i3, i2) is therefore cross(run, leftPerp), and with
+         * a y-up frame cross(u, p) = (0, -1, 0): every carriageway, lane line,
+         * zebra crossing, stop bar and tram bed in the city was a downward-
+         * facing sheet whose vertices all claimed (0, 1, 0). All three city
+         * materials are FrontSide, so none of it was drawn at all and what
+         * showed through was the near-black bedrock underlay — which under a
+         * three-degree sun is indistinguishable from wet asphalt.
+         *
+         * `(i0, i1, i2)(i0, i2, i3)` walks across the width first, giving
+         * cross(leftPerp, run) = (0, 1, 0). Asserted in builders.test.ts.
+         */
+        this.idx.push(i0, i1, i2, i0, i2, i3);
       }
     }
   }
@@ -706,21 +721,36 @@ export function signedArea(p: ReadonlyArray<Vec2>): number {
 const _tmpShape: THREE.Vector2[] = [];
 
 /**
- * Ear-clip an arbitrary simple polygon into index triples.
- * Winding is preserved, so callers keep control of which way the face points.
+ * Ear-clip an arbitrary simple polygon into index triples for a HORIZONTAL
+ * face, wound so that the face points UP — the same handedness `cap`'s <= 4
+ * corner fan and `rect` already use.
+ *
+ * IT USED TO PROMISE "winding is preserved, so callers keep control of which
+ * way the face points". IT DOES NOT AND CANNOT. `THREE.ShapeUtils
+ * .triangulateShape` returns POSITIVELY-HANDED triples in the (x, z) plane for
+ * BOTH input windings — measured, both ways round — and in a y-up frame a
+ * positively-handed triple in (x, z) has geometric normal (0, -1, 0) while both
+ * callers push (0, 1, 0) on every vertex. Every park outline, square, junction
+ * patch and the roof cap of every imported footprint past four corners was
+ * therefore back-face culled and simply not drawn.
+ *
+ * So the handedness is fixed HERE, once, for both callers, and the promise the
+ * old docstring made is retracted: the caller does not control the facing, this
+ * function does, and it always faces up.
  */
 export function triangulate(p: ReadonlyArray<Vec2>): number[][] {
   _tmpShape.length = 0;
   for (const v of p) _tmpShape.push(new THREE.Vector2(v.x, v.z));
   const tris = THREE.ShapeUtils.triangulateShape(_tmpShape, []);
   // Degenerate rings (collinear, self-touching) come back empty; fall back to a
-  // fan so the caller still gets a closed surface rather than a hole.
+  // fan so the caller still gets a closed surface rather than a hole. The fan
+  // already matches `cap`'s correct <= 4 corner path, so it is NOT reversed.
   if (!tris.length) {
     const out: number[][] = [];
     for (let i = 1; i < p.length - 1; i++) out.push([0, i, i + 1]);
     return out;
   }
-  return tris;
+  return tris.map((t) => [t[0], t[2], t[1]]);
 }
 
 /**
@@ -773,6 +803,59 @@ export function rectFootprint(cx: number, cz: number, w: number, d: number, rot 
     [-hw, -hd], [-hw, hd], [hw, hd], [hw, -hd],
   ];
   return pts.map(([x, z]) => ({ x: cx + x * cs + z * sn, z: cz - x * sn + z * cs }));
+}
+
+/**
+ * Rectangle with its two STREET-SIDE corners turned in a quarter circle.
+ *
+ * THE INTERBELIC CORNER BLOCK, which is a species and not a decoration.
+ * Bucharest's 1930s corner buildings — Calea Victoriei, Magheru, Piața Romană,
+ * and the block in `docs/reference/world/lipscani-oldtown.jpg` — do not meet at
+ * a right angle. They sweep round in a drum three to five metres across, carry
+ * the balcony bands and the cornice round it unbroken, and often stand a
+ * storey taller on the curve. That curve is the entire silhouette difference
+ * between the interbelic species and the box next to it, and no facade shader
+ * can produce it: `u` restarts at every arris, so a shader can only PAINT a
+ * corner, and a painted corner still meets the sky at 90 degrees.
+ *
+ * Rounding costs `2 * (seg - 1)` extra footprint vertices, i.e. four extra
+ * wall quads at seg 3 — eight triangles for the whole building, whatever its
+ * height, because the massing is quads. Everything hung off the footprint
+ * (cornice, parapet, string courses, roof cap) follows it for free.
+ *
+ * Corners are given in the site's own frame, where local -z faces the street,
+ * and the ring keeps `rectFootprint`'s clockwise-from-above winding.
+ */
+export function roundedFrontFootprint(
+  cx: number, cz: number, w: number, d: number, rot: number,
+  radius: number, seg = 3,
+): Vec2[] {
+  const hw = w / 2;
+  const hd = d / 2;
+  const r = Math.max(0.4, Math.min(radius, hw * 0.45, hd * 0.7));
+  const cs = Math.cos(rot);
+  const sn = Math.sin(rot);
+  const out: Vec2[] = [];
+  const put = (x: number, z: number): void => {
+    out.push({ x: cx + x * cs + z * sn, z: cz - x * sn + z * cs });
+  };
+  /** Quarter arc about (ox, oz), sweeping 90 degrees clockwise from `a0`. */
+  const arc = (ox: number, oz: number, a0: number): void => {
+    for (let i = 0; i <= seg; i++) {
+      const a = a0 - (i / seg) * (Math.PI / 2);
+      put(ox + Math.cos(a) * r, oz + Math.sin(a) * r);
+    }
+  };
+  // Same traversal as rectFootprint — west edge, north edge, east edge, front —
+  // with the two front corners replaced by arcs.
+  put(-hw, -hd + r);
+  put(-hw, hd);
+  put(hw, hd);
+  put(hw, -hd + r);
+  arc(hw - r, -hd + r, 0);            // +x round to -z
+  put(-hw + r, -hd);
+  arc(-hw + r, -hd + r, -Math.PI / 2); // -z round to -x
+  return out;
 }
 
 /** L-shaped footprint (clockwise) — cuts a notch out of the +x/+z corner. */

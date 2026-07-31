@@ -421,7 +421,18 @@ export class PropBuilder {
     for (const p of [P(-hw, -hd), P(-hw, hd), P(hw, hd), P(hw, -hd)]) {
       this.v(p[0], p[1], p[2], 0, 1, 0, o);
     }
-    this.idx.push(base, base + 2, base + 1, base, base + 3, base + 2);
+    /*
+     * WINDING — was `(0, 2, 1)(0, 3, 2)`, which is the reverse of the house
+     * convention and faces DOWN while every vertex normal says (0, 1, 0).
+     *
+     * The corner order here is the same clockwise-from-above ring `rect` uses,
+     * so it takes the same `(0, 1, 2)(0, 2, 3)` triples. Nobody had measured
+     * this one: the quarantine in geometryOrientation.test.ts covered `panel`
+     * and `disc` but never `ground`, so every scattered paper, leaf patch,
+     * oil stain and painted ground mark in the city was back-face culled and
+     * has never been drawn.
+     */
+    this.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
   }
 
   /**
@@ -448,11 +459,23 @@ export class PropBuilder {
     const d = P(-hw, hh);
     const base = this.pos.length / 3;
     for (const p of [a, b, c, d]) this.v(p[0], p[1], p[2], fx, 0, fz, o);
-    this.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    /*
+     * WINDING — both faces used to carry the OTHER one's normal.
+     *
+     * `right` here is `-(up x forward)`, so the quad (a, b, c, d) emitted as
+     * `(0, 1, 2)(0, 2, 3)` has geometric normal `-forward` while every vertex
+     * was pushed `+forward`; the back face was the mirror of both. Neither
+     * face was ever CULLED — a sign stayed visible from either side, which is
+     * why this survived — but every one of them was SHADED BY THE LIGHT
+     * BEHIND IT. Under a three-degree sun that is the whole difference between
+     * a lit shopfront fascia and a black one, across every sign, poster, road
+     * sign, number plate and lamp lens in the city.
+     */
+    this.idx.push(base, base + 2, base + 1, base, base + 3, base + 2);
     if (twoSided) {
       const b2 = this.pos.length / 3;
       for (const p of [a, b, c, d]) this.v(p[0], p[1], p[2], -fx, 0, -fz, o);
-      this.idx.push(b2, b2 + 2, b2 + 1, b2, b2 + 3, b2 + 2);
+      this.idx.push(b2, b2 + 1, b2 + 2, b2, b2 + 2, b2 + 3);
     }
   }
 
@@ -474,7 +497,10 @@ export class PropBuilder {
       const u = Math.sin(a) * r;
       this.v(cx + rx * s, cy + u, cz + rz * s, fx, 0, fz, o);
     }
-    for (let i = 0; i < seg; i++) this.idx.push(base, base + i + 1, base + i + 2);
+    // Same reversal as `panel` above, and for the same reason: the fan wound
+    // (centre, i, i+1) about `-(up x forward)` faces AWAY from the normal it
+    // was given, so every lamp lens and round sign face was lit from behind.
+    for (let i = 0; i < seg; i++) this.idx.push(base, base + i + 2, base + i + 1);
     // Back face, so a sign is not invisible from behind.
     const b2 = this.pos.length / 3;
     this.v(cx, cy, cz, -fx, 0, -fz, o);
@@ -484,7 +510,7 @@ export class PropBuilder {
       const u = Math.sin(a) * r;
       this.v(cx + rx * s, cy + u, cz + rz * s, -fx, 0, -fz, o);
     }
-    for (let i = 0; i < seg; i++) this.idx.push(b2, b2 + i + 2, b2 + i + 1);
+    for (let i = 0; i < seg; i++) this.idx.push(b2, b2 + i + 1, b2 + i + 2);
   }
 
   /**

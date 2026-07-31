@@ -943,6 +943,52 @@ export class VehicleSystem implements System, VehicleService {
         size: [m.spec.length, m.spec.width, m.spec.height],
       })),
       bodyStats: () => cachedBodyStats(),
+      /**
+       * Full render-side truth for one vehicle: every mesh under its group,
+       * with world-space bounding boxes.
+       *
+       * This exists because "the car is drawn twice, stacked" is invisible to
+       * `list()` — the duplicate has the same position and the same id. Only a
+       * walk of the object tree distinguishes "one body built twice" from "two
+       * vehicles parked inside each other".
+       */
+      dump: (id: string) => {
+        const v = this.vehicles.get(id);
+        if (!v) return null;
+        const bb = new THREE.Box3();
+        const nodes: Array<{ path: string; type: string; visible: boolean; tris: number; box: number[] }> = [];
+        v.object.updateWorldMatrix(true, true);
+        v.object.traverse((o) => {
+          const m = o as THREE.Mesh;
+          if (!m.isMesh) return;
+          const geo = m.geometry as THREE.BufferGeometry;
+          bb.setFromObject(m);
+          const path: string[] = [];
+          for (let p: THREE.Object3D | null = o; p && p !== v.object; p = p.parent) path.unshift(p.name || p.type);
+          nodes.push({
+            path: path.join('/'),
+            type: geo.attributes.position ? `v${geo.attributes.position.count}` : 'empty',
+            visible: m.visible,
+            tris: geo.attributes.position ? geo.attributes.position.count / 3 : 0,
+            box: [bb.min.x, bb.min.y, bb.min.z, bb.max.x, bb.max.y, bb.max.z].map((n) => +n.toFixed(3)),
+          });
+        });
+        const whole = new THREE.Box3().setFromObject(v.object);
+        return {
+          id: v.id, model: v.model.id, meshes: nodes.length,
+          pos: [v.position.x, v.position.y, v.position.z].map((n) => +n.toFixed(3)),
+          box: [whole.min.y, whole.max.y].map((n) => +n.toFixed(3)),
+          nodes,
+        };
+      },
+      /** Every vehicle whose centre is within `r` of `id` — finds stacked spawns. */
+      near: (id: string, r = 3) => {
+        const v = this.vehicles.get(id);
+        if (!v) return null;
+        return this.list
+          .filter((o) => o !== v && o.position.distanceTo(v.position) < r)
+          .map((o) => ({ id: o.id, model: o.model.id, d: +o.position.distanceTo(v.position).toFixed(3) }));
+      },
       doors: (id: string) => {
         const v = this.vehicles.get(id);
         return v ? v.doors.map((d) => ({ id: d.part.id, open: +d.open.toFixed(2), target: d.target })) : null;
@@ -1003,6 +1049,55 @@ export class VehicleSystem implements System, VehicleService {
 
   /* ---------------- spawning ---------------- */
 
+  /**
+   * Find a point near `want` that is not already occupied by another vehicle.
+   *
+   * WHY THIS EXISTS. `spawn` used to place the rigid body wherever it was
+   * asked, with no regard for what was already parked there. Two calls with
+   * the same target — which is not exotic, it is what `__GTA_DEBUG__
+   * .giveVehicle` does every time it is called twice at the same landmark, and
+   * what `tools/shot.mjs` does across its `hero`, `chase` and `interior`
+   * shots — created two cars at the identical point. Rapier then resolved the
+   * penetration the only way it can, by stacking them, and the capture showed
+   * ONE car with a doubled rear fascia, doubled arches, doubled wheels and
+   * doubled decals. Two reviewers read that as `builder.ts` double-building
+   * the body; the geometry was single all along (`__VEH__.dump` proves it:
+   * 16 meshes, one shell, a 1.46 m tall bounding box). The duplicate was a
+   * second vehicle.
+   *
+   * The search walks BACKWARD along the heading first, because a road slot is
+   * a queue: the natural free space behind a parked car is behind it.
+   */
+  private clearSpawnPoint(want: THREE.Vector3, headingRad: number, spec: VehicleSpec): THREE.Vector3 {
+    const out = want.clone();
+    if (this.list.length === 0) return out;
+    const fx = Math.sin(headingRad);
+    const fz = Math.cos(headingRad);
+    const occupied = (x: number, z: number): boolean => {
+      for (const o of this.list) {
+        // Radii of the two footprints, plus half a metre of daylight.
+        const gap = (spec.length + o.tuning.spec.length) * 0.5 * 0.86 + 0.5;
+        const dx = o.position.x - x;
+        const dz = o.position.z - z;
+        if (dx * dx + dz * dz < gap * gap) return true;
+      }
+      return false;
+    };
+    if (!occupied(out.x, out.z)) return out;
+    const step = spec.length * 0.5 + 1.4;
+    for (let i = 1; i <= 8; i++) {
+      // -1 first: behind, then in front, alternating outward.
+      const dir = i % 2 === 1 ? -1 : 1;
+      const d = step * Math.ceil(i / 2) * dir;
+      const x = want.x + fx * d;
+      const z = want.z + fz * d;
+      if (!occupied(x, z)) return out.set(x, want.y, z);
+    }
+    // Last resort: a lane's width to the side, so the worst case is a car
+    // parked awkwardly rather than a car inside another car.
+    return out.set(want.x - fz * 3.2, want.y, want.z + fx * 3.2);
+  }
+
   spawn(
     kind: VehicleClass,
     position: THREE.Vector3,
@@ -1017,14 +1112,27 @@ export class VehicleSystem implements System, VehicleService {
     const v = new Vehicle(id, kind, faction, this.phys, modelFor(kind, variant, hero));
     const tuning = v.tuning;
 
+    const place = this.clearSpawnPoint(position, headingRad, tuning.spec);
+
     const q = new THREE.Quaternion().setFromAxisAngle(UP, headingRad);
     const bodyDesc = this.phys.rapier.RigidBodyDesc.dynamic()
-      .setTranslation(position.x, position.y + tuning.spec.rideHeight + 0.05, position.z)
+      .setTranslation(place.x, place.y + tuning.spec.rideHeight + 0.05, place.z)
       .setRotation({ x: q.x, y: q.y, z: q.z, w: q.w })
       .setLinearDamping(0.05)
       .setAngularDamping(1.9)
       .setCcdEnabled(true);
     v.body = this.phys.world.createRigidBody(bodyDesc);
+    // Publish the transform NOW rather than at the first `simulate`.
+    //
+    // `v.position` used to stay at the origin until the next physics tick, so
+    // anything that looked at a vehicle in the same frame it was created — the
+    // debug list, and critically `clearSpawnPoint` itself — saw every fresh
+    // vehicle sitting at (0,0,0). Three spawns in one call therefore all
+    // measured "nothing nearby" and all landed on the same point.
+    v.position.set(place.x, place.y + tuning.spec.rideHeight + 0.05, place.z);
+    v.rotation.copy(q);
+    v.object.position.copy(v.position);
+    v.object.quaternion.copy(v.rotation);
 
     // The collider contributes NO mass — everything comes from the explicit
     // mass properties below, otherwise Rapier adds the two together and the

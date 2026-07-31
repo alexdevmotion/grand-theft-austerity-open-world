@@ -356,22 +356,51 @@ export function sculpt(
    * and rounded": the silhouette bulged outboard of the ears at the mouth and
    * came back in at the temples, which is exactly backwards. Taking 6 mm out
    * of the mid-jaw leaves the gonial corner and the cheekbone untouched, so the
-   * jaw keeps its heaviness and only stops being a balloon. */
-  const lowCheek = g2(ax, 0.318, 0.125, y, -0.300, 0.145);
-  dx -= side * 0.033 * lowCheek;
+   * jaw keeps its heaviness and only stops being a balloon.
+   *
+   * IT DID NOT WORK, and the reason is measurable rather than aesthetic. Slice
+   * the built head at fractions of its own height above the chin and the widths
+   * came out 0.138 / 0.164 / 0.1675 / 0.156 / 0.155 / 0.160 / 0.140 at 0.10 to
+   * 0.58 — the maximum is at 0.26, which is MOUTH level, and it is 4.7% wider
+   * than the eye line. The paragraph above describes the right fix and then
+   * applies a third of it, because the term that actually sets the width in
+   * that band is not this one, it is the gonial `ramus` push below, which adds
+   * 0.069 outward at y = -0.36 and sits directly inside the same band. Taking
+   * 6 mm out here while adding 12 mm there nets out as a wider jaw.
+   *
+   * All three lower-face terms are re-balanced together, with the profile
+   * re-measured after: the widest point has to move to the eye line and the
+   * silhouette has to taper monotonically below it. That is what "narrow face"
+   * means as a number, and the immersion review's "the narrow face is absent"
+   * and "the jaw silhouette is lumpy and sagging" are both this one profile. */
+  // Centre dropped from -0.300 to -0.335 and the vertical sigma tightened. At
+  // the wider amplitude this term needs to keep its hands off the ala: it is a
+  // CHEEK term, and `measureNose` reads the alar width as a relief crossing on
+  // the surrounding cheek, so a few tenths of a millimetre of extra pull up at
+  // y = -0.25 moves the nose ratios (ally fell to bridgeOverAlar 0.482).
+  const lowCheek = g2(ax, 0.318, 0.125, y, -0.335, 0.128);
+  dx -= side * 0.042 * lowCheek;
 
   // Mandibular taper. The jaw has to be narrower than the zygion — on the
   // reference it is by a clear margin, and Bolojan's "heavier jaw" is depth and
   // a square gonial corner, not a jaw as wide as the cheekbones. Without this
   // the silhouette is a rectangle from the eyes to the chin.
   const mandible = g2(ax, 0.290, 0.150, y, -0.450, 0.150);
-  dx -= side * 0.030 * mandible;
+  dx -= side * 0.044 * mandible;
 
-  // Mandible: the gonial angle and the jawline edge. A jaw has a corner, and
-  // Bolojan's is square and heavy — `jawPush` rides on top of an already
-  // stronger ramus.
-  const ramus = g2(ax, A.gonialX, 0.105, y, A.gonialY, 0.115);
-  dx += side * (0.028 + opts.jawPush * 0.9) * ramus;
+  /* Mandible: the gonial angle and the jawline edge. A jaw has a corner, and
+   * Bolojan's is square and heavy — `jawPush` rides on top of an already
+   * stronger ramus.
+   *
+   * The base comes down from 0.028 to 0.019 and the y-sigma goes up from 0.115
+   * to 0.150. Both changes are about the same defect: a narrow, strong outward
+   * gaussian at the gonion is not a corner, it is a BULGE with the jawline
+   * running through the middle of it, and that is the "lumpy" reading. A real
+   * gonial angle is a change of DIRECTION over a couple of centimetres, so the
+   * mass has to be spread over the whole ramus and the corner has to come from
+   * `jawEdge` below, which is a crease term and does not add width. */
+  const ramus = g2(ax, A.gonialX, 0.105, y, A.gonialY, 0.150);
+  dx += side * (0.019 + opts.jawPush * 0.9) * ramus;
   // Masseter: the muscle bulk on the ramus, which is the volume that comes
   // BACK after the sub-malar hollow. Hollow with no masseter reads gaunt.
   const masseter = g2(ax, 0.300, 0.105, y, -0.320, 0.115) * front;

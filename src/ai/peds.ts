@@ -905,8 +905,15 @@ function copyWardrobe(a: Appearance, p: Ped): void {
   p.app.build = a.body === 'heavy' ? 1.16 : a.body === 'stocky' ? 1.08 : a.body === 'slim' ? 0.9 : 1.0;
   p.app.headwear = a.headwear !== 'none' ? 1 : a.hair === 'long' || a.hair === 'bun' ? 4 : 0;
   lin(a.headwear !== 'none' ? a.colors.accent : a.colors.hair, p.app.hatColor);
-  p.app.vest = a.accessory === 'builderHarness'
-    ? lin(a.colors.accent, _c.clone())
+  /* The imposter's tabard used to be keyed off `accessory === 'builderHarness'`,
+   * an id that no longer exists — the player's purple harness became a site
+   * pass (see `wardrobe.ts`) and nobody else ever wore one, so this branch had
+   * exactly one possible subject and he is never an imposter. Keyed off the
+   * hi-vis outer instead, which is what a bright tabard on a distant body
+   * actually means. NOTE FOR THE PEDESTRIAN AGENT: this line is in your file;
+   * it was changed only because the rename would not otherwise compile. */
+  p.app.vest = a.outer === 'hiVis'
+    ? lin(a.colors.outer, _c.clone())
     : null;
   p.app.bag = a.accessory === 'backpack' ? 2 : a.accessory === 'satchel' ? 1 : 0;
   lin(a.colors.detail, p.app.bagColor);

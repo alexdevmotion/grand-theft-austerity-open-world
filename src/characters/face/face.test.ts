@@ -7,13 +7,14 @@
 import { expect, test } from 'bun:test';
 import * as THREE from 'three';
 import { CAST } from './heroHead';
-import { buildHeadGeometry, HEAD_TO_BODY, type HeadResult } from './headMesh';
+import { ALBEDO_FLOOR, buildHeadGeometry, HEAD_TO_BODY, type HeadResult } from './headMesh';
 import { eyeLayerGeometries } from './eyes';
 import {
   measureEyeSeating, measureHairClearance, measureMidlineSeam, measureNose,
   measureOrientation, measureProportions,
 } from './checks';
-import { buildBeard, buildBrows, buildHairCards, buildHairShell, buildLashes } from '../hair/styles';
+import { BEARD_TOP, buildBeard, buildBrows, buildHairCards, buildHairShell, buildLashes } from '../hair/styles';
+import { HERO_APPEARANCE } from '../wardrobe';
 import { BODY_TYPES, NOMINAL_HEIGHT, bodyMetrics } from '../rig';
 import type { CastId } from './fitData';
 
@@ -351,4 +352,168 @@ test.each(CAST_IDS)('%s: brows, lashes and beard build without throwing', (id: C
   expect(buildBrows(anchors, cfg.brow, `b|${id}`)).not.toBeNull();
   expect(buildLashes(anchors, `l|${id}`)).not.toBeNull();
   buildBeard(anchors, cfg.beard, `d|${id}`);
+});
+
+/* ------------------------------------------------------------------ */
+/* 4. PHOTOMETRY — the head is not painted black                       */
+/*                                                                     */
+/* The immersion review's headline finding was "the player's head       */
+/* renders NEAR-BLACK in full sun while the jacket directly below it    */
+/* lights correctly", and the diagnosis was that nothing in the shading  */
+/* stack was at fault: the head with albedo forced to white renders in   */
+/* line with the pavement beside it. What was wrong was the PAINT. So    */
+/* the paint is what gets bounded here, because it is the only part of   */
+/* "is this head visible" that can be measured without a GPU.           */
+/* ------------------------------------------------------------------ */
+
+/** Rec.709 luminance of a linear triple. */
+function lum(r: number, g: number, b: number): number {
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function srgbToLinear(c: number): number {
+  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+}
+
+/** Linear reflectance of an sRGB hex, as authored in the cast table. */
+function hexLinear(h: number): [number, number, number] {
+  return [
+    srgbToLinear(((h >> 16) & 255) / 255),
+    srgbToLinear(((h >> 8) & 255) / 255),
+    srgbToLinear((h & 255) / 255),
+  ];
+}
+
+/**
+ * The head built the way the game builds it. `head()` above deliberately omits
+ * the hairline and beard boundary, which switches off the two largest dark
+ * regions on the head — so it is the wrong geometry to measure paint on.
+ */
+const painted = new Map<CastId, HeadResult>();
+function paintedHead(id: CastId): HeadResult {
+  let r = painted.get(id);
+  if (!r) {
+    const cfg = CAST[id];
+    r = buildHeadGeometry({
+      cloud: cfg.cloud(), chinY: CHIN_Y, crownY: CROWN_Y, skin: cfg.skin,
+      beard: cfg.beardShade, beardColor: cfg.beardColor, hairColor: cfg.hairColor,
+      tired: cfg.tired, age: cfg.age, jawPush: cfg.jawPush, browPush: cfg.browPush,
+      hairline: cfg.hair.hairline, beardLine: BEARD_TOP, seed: 0x51a5e,
+    });
+    painted.set(id, r);
+  }
+  return r;
+}
+
+/** Mean linear albedo over the vertices whose normals face the camera. */
+function frontAlbedo(id: CastId): [number, number, number] {
+  const { geometry, anchors } = paintedHead(id);
+  const col = geometry.getAttribute('color') as THREE.BufferAttribute;
+  const nrm = geometry.getAttribute('normal') as THREE.BufferAttribute;
+  let r = 0, g = 0, b = 0, n = 0;
+  for (let i = 0; i < anchors.skullVertexCount; i++) {
+    if (nrm.getZ(i) < 0.75) continue;
+    r += col.getX(i); g += col.getY(i); b += col.getZ(i); n++;
+  }
+  return [r / n, g / n, b / n];
+}
+
+test.each(CAST_IDS)('%s: no vertex on the head is painted below the albedo floor', (id: CastId) => {
+  const col = paintedHead(id).geometry.getAttribute('color') as THREE.BufferAttribute;
+  let min: [number, number, number] = [1, 1, 1];
+  for (let i = 0; i < col.count; i++) {
+    min = [
+      Math.min(min[0], col.getX(i)),
+      Math.min(min[1], col.getY(i)),
+      Math.min(min[2], col.getZ(i)),
+    ];
+  }
+  /* Every term in `paintVertices` is subtractive and they compose
+   * multiplicatively — scalp times stubble times orbital times cavity — so the
+   * darkest vertices ended up at products no single term intended. There is no
+   * material on a human head below about 0.02 linear; below that a surface
+   * cannot return light under any key light this game has, and the review's
+   * "near-black" is literally this number. */
+  expect(min[0]).toBeGreaterThanOrEqual(ALBEDO_FLOOR[0] - 1e-6);
+  expect(min[1]).toBeGreaterThanOrEqual(ALBEDO_FLOOR[1] - 1e-6);
+  expect(min[2]).toBeGreaterThanOrEqual(ALBEDO_FLOOR[2] - 1e-6);
+});
+
+test('the player\'s face is painted in the same range as the body\'s own skin', () => {
+  /* THE MEASUREMENT THAT WAS NEVER TAKEN. The neck is `wardrobe.ts`'s
+   * `HERO_APPEARANCE.colors.skin`, it is one centimetre from the jaw, and it is
+   * lit by the same key in the same frame. Sampled off a 1600x900 capture at
+   * 0.6 m the neck read 186/158/130 and the shaded parts of the face read
+   * 33-40 — one man, two materials, five stops apart.
+   *
+   * The face is legitimately darker than the neck: it is beard, brow shadow,
+   * orbital and cavity, and none of that is on a neck. But not by more than
+   * about a stop, and never brighter. */
+  const body = lum(...hexLinear(HERO_APPEARANCE.colors.skin));
+  const face = lum(...frontAlbedo('player'));
+  expect(face).toBeGreaterThan(body * 0.5);
+  expect(face).toBeLessThan(body * 1.05);
+});
+
+test.each(CAST_IDS)('%s: hair, beard and brow paint stays above the keratin floor', (id: CastId) => {
+  const cfg = CAST[id];
+  /* Human hair does not go below roughly 0.04 linear even when it reads jet
+   * black — the "black" is contrast against skin, not an absence of
+   * reflectance. The player's beard was authored at 0.014 and his brows at
+   * 0.0033, which is darker than any pigment that exists, and both rendered as
+   * holes: the review reported the beard mass and the heavy brow as ABSENT
+   * when both were present in full and simply could not return light. */
+  for (const [name, hex] of [
+    ['beard', cfg.beardColor], ['beard cards', cfg.beardCardColor],
+    ['hair', cfg.hairColor], ['brow', cfg.browColor],
+  ] as Array<[string, number]>) {
+    const l = lum(...hexLinear(hex));
+    // The label rides along so a failure names which colour, not just a number.
+    expect({ name, luminance: l > 0.008 }).toEqual({ name, luminance: true });
+  }
+  // And still unmistakably darker than the skin they sit on, or it is not hair.
+  const skin = lum(...hexLinear(cfg.skin));
+  expect(lum(...hexLinear(cfg.browColor))).toBeLessThan(skin * 0.45);
+});
+
+/* ------------------------------------------------------------------ */
+/* 5. The face is narrow, and tapers                                   */
+/* ------------------------------------------------------------------ */
+
+/** Width of the front half of the skull at a fraction of head height. */
+function widthAtFraction(id: CastId, frac: number): number {
+  const { geometry, anchors } = paintedHead(id);
+  const pos = geometry.getAttribute('position') as THREE.BufferAttribute;
+  const y0 = anchors.chinY + (anchors.crownY - anchors.chinY) * frac;
+  let mx = 0;
+  for (let i = 0; i < anchors.skullVertexCount; i++) {
+    if (Math.abs(pos.getY(i) - y0) < 0.004 && pos.getZ(i) > 0) {
+      mx = Math.max(mx, Math.abs(pos.getX(i)));
+    }
+  }
+  return mx * 2;
+}
+
+test.each(CAST_IDS)('%s: the widest point of the face is the cheekbones, not the jaw', (id: CastId) => {
+  /* An adult male face is widest at the zygion, at the eye line, and tapers
+   * from there to the chin. The built head was widest at 0.26 of its own height
+   * above the chin — mouth level — by 4.7% over the eye line, which is an
+   * infant's proportion and reads front-on as a pear. `anatomy.ts` already
+   * carried a paragraph saying exactly this and two terms trying to fix it;
+   * what it did not have was the measurement, and the term actually setting the
+   * width in that band (the gonial ramus push, scaled by `jawPush`) was pushing
+   * the other way half again as hard as the two taper terms pulled.
+   *
+   * Bounded as a PROFILE rather than as one number, because a single width can
+   * be right while the silhouette is still wrong. */
+  const jaw = widthAtFraction(id, 0.26);
+  const eye = widthAtFraction(id, 0.50);
+  expect(jaw).toBeLessThan(eye);
+  // Monotone taper from the chin up to the eye line: no bulge in between.
+  let prev = 0;
+  for (const f of [0.10, 0.18, 0.26, 0.34, 0.42, 0.50]) {
+    const w = widthAtFraction(id, f);
+    expect(w).toBeGreaterThan(prev - 0.002);
+    prev = w;
+  }
 });

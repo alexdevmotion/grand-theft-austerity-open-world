@@ -21,6 +21,7 @@
  */
 
 import * as THREE from 'three';
+import { Rng } from '../core/rng';
 import type { LocomotionState } from '../core/services';
 import type { PhysicsWorld } from '../physics/physics';
 import { applyLookAt, solveFootIk, type FootIkState } from './ik';
@@ -172,27 +173,43 @@ const IDLE_GAIT: Gait = {
   lean: 0.012, shoulderDrop: 0.05, headBob: 0,
 };
 
+/**
+ * WALK. The arm, trunk and bob channels were all authored a third of the way
+ * to life and an immersion review called the result a floating mannequin.
+ *
+ *   armA      0.36 -> 0.58   ±21° of shoulder swing is what a treadmill study
+ *                            measures and what a game reads as "dead arms".
+ *                            Games sit nearer ±33°, and the arms are the first
+ *                            thing the eye uses to decide a walk is a walk.
+ *   elbow /   0.26 / 0.20    the elbow barely moved through the cycle, so the
+ *   elbowSwing               hand travelled less than the shoulder did.
+ *   bob       0.030 -> 0.044 15 mm of pelvis rise. A real walk is 20-25 mm,
+ *                            and below that the body slides rather than steps.
+ *   lateral   0.022 -> 0.034 the pelvis has to move ONTO the stance leg.
+ *   pelvisYaw /              trunk counter-rotation: the difference between a
+ *   chestYaw                 spine and a broom handle.
+ */
 const WALK_GAIT: Gait = {
   speed: 1.7, stride: 1.44, duty: 0.62,
   thighA: 0.42, thighBias: 0.03, kneeLoad: 0.30, kneeSwing: 1.04, kneeBase: 0.06,
-  ankPush: 0.40, ankLift: 0.24, bob: 0.030, lateral: 0.022, hipRoll: 0.055,
-  pelvisYaw: 0.10, chestYaw: 0.085, armA: 0.36, armBias: 0.02, elbow: 0.26, elbowSwing: 0.20,
+  ankPush: 0.40, ankLift: 0.24, bob: 0.044, lateral: 0.034, hipRoll: 0.072,
+  pelvisYaw: 0.15, chestYaw: 0.145, armA: 0.58, armBias: 0.02, elbow: 0.36, elbowSwing: 0.44,
   lean: 0.045, shoulderDrop: 0.04, headBob: 0.35,
 };
 
 const JOG_GAIT: Gait = {
   speed: 4.3, stride: 2.34, duty: 0.40,
   thighA: 0.62, thighBias: 0.06, kneeLoad: 0.46, kneeSwing: 1.62, kneeBase: 0.10,
-  ankPush: 0.54, ankLift: 0.36, bob: 0.055, lateral: 0.015, hipRoll: 0.062,
-  pelvisYaw: 0.14, chestYaw: 0.135, armA: 0.74, armBias: 0.10, elbow: 1.18, elbowSwing: 0.34,
+  ankPush: 0.54, ankLift: 0.36, bob: 0.061, lateral: 0.024, hipRoll: 0.082,
+  pelvisYaw: 0.20, chestYaw: 0.205, armA: 0.86, armBias: 0.10, elbow: 1.18, elbowSwing: 0.50,
   lean: 0.135, shoulderDrop: 0.02, headBob: 0.55,
 };
 
 const SPRINT_GAIT: Gait = {
   speed: 7.4, stride: 3.20, duty: 0.30,
   thighA: 0.88, thighBias: 0.10, kneeLoad: 0.52, kneeSwing: 2.10, kneeBase: 0.12,
-  ankPush: 0.64, ankLift: 0.44, bob: 0.072, lateral: 0.010, hipRoll: 0.070,
-  pelvisYaw: 0.18, chestYaw: 0.175, armA: 1.08, armBias: 0.16, elbow: 1.58, elbowSwing: 0.42,
+  ankPush: 0.64, ankLift: 0.44, bob: 0.076, lateral: 0.016, hipRoll: 0.090,
+  pelvisYaw: 0.24, chestYaw: 0.255, armA: 1.16, armBias: 0.16, elbow: 1.58, elbowSwing: 0.52,
   lean: 0.27, shoulderDrop: 0.0, headBob: 0.66,
 };
 
@@ -200,7 +217,7 @@ const CROUCH_WALK_GAIT: Gait = {
   speed: 1.4, stride: 0.95, duty: 0.66,
   thighA: 0.30, thighBias: 0.86, kneeLoad: 0.22, kneeSwing: 0.62, kneeBase: 1.28,
   ankPush: 0.22, ankLift: 0.18, bob: 0.016, lateral: 0.020, hipRoll: 0.040,
-  pelvisYaw: 0.07, chestYaw: 0.06, armA: 0.20, armBias: 0.42, elbow: 0.95, elbowSwing: 0.10,
+  pelvisYaw: 0.07, chestYaw: 0.06, armA: 0.24, armBias: 0.42, elbow: 0.95, elbowSwing: 0.14,
   lean: 0.34, shoulderDrop: 0.10, headBob: 0.30,
 };
 
@@ -244,6 +261,114 @@ function lerpGait(a: Gait, b: Gait, t: number, out: Gait): Gait {
   out.shoulderDrop = a.shoulderDrop + (b.shoulderDrop - a.shoulderDrop) * t;
   out.headBob = a.headBob + (b.headBob - a.headBob) * t;
   return out;
+}
+
+/* ------------------------------------------------------------------ */
+/* Per-person gait                                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * HOW THIS PARTICULAR PERSON WALKS.
+ *
+ * One shared `Gait` table drives every character in the game, which is correct
+ * — there is one human gait — and was also the loudest thing wrong with the
+ * crowd: eighty people crossing Piața Victoriei in perfect lockstep is uncanny
+ * in a way no single body is. Real difference between two walkers is not a
+ * different clip, it is the same clip with different constants: stride length,
+ * how much arm they use, how bent they carry the elbow, whether they stoop,
+ * how much they bounce, how much they swing the hips, and — for about one in
+ * fourteen people on a real pavement — a hitch on one side.
+ *
+ * Derived once per actor from the actor's seed, so it is stable across a save,
+ * identical on every machine, and costs nothing per frame.
+ *
+ * STRIDE IS COUPLED TO LEG AMPLITUDE on purpose. Phase is advanced by distance
+ * travelled divided by `stride`, so lengthening someone's stride without also
+ * lengthening the arc their foot sweeps makes the foot slide — the exact defect
+ * the last locomotion pass was written to kill.
+ */
+export interface GaitStyle {
+  /** Stride-length multiplier. >1 is a long, loping step at a lower cadence. */
+  stride: number;
+  /** Arm swing multiplier. Some people walk with their arms nearly still. */
+  arm: number;
+  /** Difference between the two arms, radians — nobody is symmetric. */
+  armAsym: number;
+  /** Constant elbow flex: arms carried high and bent, or hanging long. */
+  armCarriage: number;
+  /** Constant lateral flare of the upper arms. Wide for heavy/built walkers. */
+  armOut: number;
+  /** Constant forward flexion of the trunk. */
+  stoop: number;
+  /** Vertical bob multiplier. */
+  bounce: number;
+  /** Pelvis/thorax counter-rotation multiplier. */
+  swagger: number;
+  /** Lateral pelvis-shift multiplier. */
+  sway: number;
+  /** External rotation of the feet, radians. */
+  toeOut: number;
+  /** Constant head pitch (down = looking at the pavement). */
+  headDown: number;
+  /** Constant head roll. */
+  headTilt: number;
+  /** Constant shoulder-height difference, radians. */
+  shoulderTilt: number;
+  /** 0 = sound. Above 0, an antalgic hitch loading `limpSide`. */
+  limp: number;
+  /** Which leg is sore: 0 = left, 1 = right. */
+  limpSide: 0 | 1;
+}
+
+/** The gait every clip was authored against. Variation multiplies onto this. */
+export const NEUTRAL_GAIT_STYLE: GaitStyle = {
+  stride: 1, arm: 1, armAsym: 0, armCarriage: 0, armOut: 0, stoop: 0,
+  bounce: 1, swagger: 1, sway: 1, toeOut: 0, headDown: 0, headTilt: 0,
+  shoulderTilt: 0, limp: 0, limpSide: 0,
+};
+
+function clamp(x: number, lo: number, hi: number): number {
+  return x < lo ? lo : x > hi ? hi : x;
+}
+
+/**
+ * Roll one person's walk.
+ *
+ * `variation` scales the whole spread and gates the limp: the player is given
+ * a reduced spread and no limp, because the one body the camera lives behind
+ * for six hours should not have a quirk you cannot un-see.
+ */
+export function gaitStyleFor(seed: number, variation = 1): GaitStyle {
+  const v = clamp(variation, 0, 1);
+  if (v <= 0) return { ...NEUTRAL_GAIT_STYLE };
+  const r = new Rng(`gait:${seed | 0}`);
+  const g = (): number => r.gauss();
+  // Drawn unconditionally so the rest of the stream does not shift when the
+  // limp is gated off — the same seed has to describe the same person.
+  const limpRoll = r.next();
+  const limpSide: 0 | 1 = r.next() < 0.5 ? 0 : 1;
+  return {
+    stride: clamp(1 + 0.13 * v * g(), 0.80, 1.24),
+    // The top of this range is a hard clamp, not a tail to be generous with:
+    // at 1.45 the hand already covers 800 mm fore-and-aft at walking pace, and
+    // anything past it reads as windmilling rather than as a brisk walker.
+    arm: clamp(1 + 0.34 * v * g(), 0.52, 1.45),
+    armAsym: 0.045 * v * g(),
+    armCarriage: Math.max(0, g()) * 0.30 * v,
+    armOut: 0.055 * v * g(),
+    stoop: Math.max(0, g()) * 0.075 * v,
+    bounce: clamp(1 + 0.28 * v * g(), 0.55, 1.55),
+    swagger: clamp(1 + 0.42 * v * g(), 0.35, 1.85),
+    sway: clamp(1 + 0.34 * v * g(), 0.45, 1.70),
+    toeOut: 0.055 + 0.075 * v * g(),
+    headDown: 0.055 * v * g(),
+    headTilt: 0.042 * v * g(),
+    shoulderTilt: 0.038 * v * g(),
+    // About one pavement in fourteen. Reduced-spread bodies (the player) never
+    // draw one at all.
+    limp: v > 0.6 && limpRoll < 0.07 ? 0.35 + (limpRoll / 0.07) * 0.65 : 0,
+    limpSide,
+  };
 }
 
 /** Distance around the unit circle. */
@@ -346,6 +471,8 @@ export class AnimationController {
   private readonly rig: Rig;
   private readonly m: BodyMetrics;
   private readonly seed: number;
+  /** This character's own walk. See `gaitStyleFor`. */
+  readonly style: GaitStyle;
 
   private state: Internal = 'locomotion';
   private requested: LocomotionState = 'idle';
@@ -404,10 +531,15 @@ export class AnimationController {
     return this.pose.limit > CORE_BONE_COUNT;
   }
 
-  constructor(rig: Rig, seed = 0) {
+  /**
+   * `variation` is how far this character's walk is allowed to stray from the
+   * authored one — 1 for the crowd, less for the player (see `gaitStyleFor`).
+   */
+  constructor(rig: Rig, seed = 0, variation = 1) {
     this.rig = rig;
     this.m = rig.metrics;
     this.handDetail = false;
+    this.style = gaitStyleFor(seed, variation);
     this.seed = (seed % 1000) * 0.618;
     this.phase = (this.seed * 7.3) % 1;
     this.clock = this.seed * 3.1;
@@ -504,7 +636,7 @@ export class AnimationController {
   advanceClockOnly(dt: number): void {
     if (dt <= 0) return;
     this.clock += dt;
-    const stride = Math.max(0.4, this.gait.stride);
+    const stride = Math.max(0.4, this.gait.stride * this.style.stride);
     this.phase = (this.phase + (this.speed / stride) * dt) % 1;
   }
 
@@ -538,7 +670,7 @@ export class AnimationController {
     // a backpedal cover less ground per stride than a stride forward, so the
     // cadence has to come up or the feet skate exactly as they would have.
     const dirStride = 0.62 + 0.38 * Math.abs(this.dirF);
-    const stride = Math.max(0.45, this.gait.stride * dirStride);
+    const stride = Math.max(0.45, this.gait.stride * dirStride * this.style.stride);
     const cadenceFloor = this.locoWeight > 0.02 && this.smoothSpeed > 0.15 ? 0.32 : 0;
     // Turning on the spot advances the cycle from yaw rate instead of speed.
     const turnCadence = Math.min(1.35, Math.abs(this.turnStepRate) * 0.34);
@@ -657,6 +789,7 @@ export class AnimationController {
    */
   private gaitClip(out: Pose): void {
     const g = this.gait;
+    const st = this.style;
     const p = this.phase;
     const w = this.locoWeight;
 
@@ -680,6 +813,27 @@ export class AnimationController {
     const latDrive = strafe * lat + (turnStep > 0 ? Math.sign(this.turnStepRate) * turnStep : 0);
     const cycle = Math.max(w, turnStep * 0.75);
 
+    /* ---- this person's stride ----
+     *
+     * Phase is advanced by distance / stride, so a long strider MUST sweep a
+     * proportionally longer arc with the leg or the foot slides. Held to 35% +
+     * 65% of the stride multiplier so an extreme roll never produces a goose
+     * step; the residual slip is smaller than the slip the shared gait already
+     * carries. */
+    const legK = 0.35 + 0.65 * st.stride;
+    const thighA = g.thighA * legK;
+    const ankPush = g.ankPush * legK;
+
+    /* ---- the antalgic hitch ----
+     *
+     * A limp is not an asymmetric leg, it is a body avoiding a leg: stance on
+     * the sore side is cut short, the pelvis drops away from it, the trunk
+     * lurches over it to take the load off, and the body sinks as it lands.
+     * All four come off one lobe centred on the sore leg's stance. */
+    const soreStance = st.limpSide === 0 ? p : (p + 0.5) % 1;
+    const limpLoad = st.limp > 0 ? st.limp * lobe(soreStance, 0.22, 0.17) * cycle * sag : 0;
+    const limpSgn = st.limpSide === 0 ? 1 : -1;
+
     /* ---- legs ---- */
     for (let side = 0; side < 2; side++) {
       const lp0 = side === 0 ? p : (p + 0.5) % 1;
@@ -689,30 +843,36 @@ export class AnimationController {
       const shin = side === 0 ? BI.shinL : BI.shinR;
       const foot = side === 0 ? BI.footL : BI.footR;
       const toe = side === 0 ? BI.toeL : BI.toeR;
+      // The sore leg is kept stiffer and does less work; the sound one takes up
+      // the slack, which is why a limp is visible from behind at fifty metres.
+      const isSore = side === st.limpSide;
+      const sore = isSore ? st.limp : 0;
+      // Stance is cut short on the sore side and lengthened on the sound one.
+      const duty = g.duty + (isSore ? -0.09 : 0.06) * st.limp;
 
       const swingC = Math.cos(TAU * lp);
       const thighPitch = g.thighBias * (back ? -0.4 : 1)
-        + g.thighA * swingC * w * sag * (back ? -1 : 1)
+        + thighA * (1 - sore * 0.30) * swingC * w * sag * (back ? -1 : 1)
         + idleW * (0.02 + shift * sgn * 0.03);
       const kneeFlex = g.kneeBase
-        + (g.kneeLoad * lobe(lp, 0.14, 0.11) + g.kneeSwing * lobe(lp, 0.76, 0.135)) * cycle
+        + (g.kneeLoad * lobe(lp, 0.14, 0.11) + g.kneeSwing * (1 - sore * 0.45) * lobe(lp, 0.76, 0.135)) * cycle
           * Math.max(sag, lat * 0.55, turnStep)
         + idleW * (0.02 - shift * sgn * 0.05);
       const anklePitch =
-        (-g.ankPush * lobe(lp, g.duty - 0.03, 0.075) + g.ankLift * lobe(lp, 0.86, 0.13)) * w * sag
+        (-ankPush * (1 - sore * 0.5) * lobe(lp, duty - 0.03, 0.075) + g.ankLift * lobe(lp, 0.86, 0.13)) * w * sag
         - kneeFlex * 0.18 + thighPitch * 0.10;
-      const toePitch = -g.ankPush * 0.9 * lobe(lp, g.duty - 0.01, 0.06) * w * sag;
+      const toePitch = -ankPush * 0.9 * lobe(lp, duty - 0.01, 0.06) * w * sag;
 
       // Lateral channel. +Z rotation swings the tip to the character's RIGHT,
       // so travelling LEFT (strafe > 0) needs a negative term. One leg reaches
       // out while the other closes up — that is a side-step.
-      const abduct = -latDrive * (g.thighA * 0.72) * swingC * Math.max(cycle, turnStep);
+      const abduct = -latDrive * (thighA * 0.72) * swingC * Math.max(cycle, turnStep);
 
       // Stance/swing plant weight for foot IK.
-      const planted = lp < g.duty ? 1 : 0;
+      const planted = lp < duty ? 1 : 0;
       const edge = 0.06;
       const pw = planted
-        ? THREE.MathUtils.smoothstep(Math.min(lp, g.duty - lp) / edge, 0, 1)
+        ? THREE.MathUtils.smoothstep(Math.min(lp, duty - lp) / edge, 0, 1)
         : 0;
       this.footPlant[side] = cycle < 0.05 ? 1 : Math.max(pw, 1 - cycle);
 
@@ -723,57 +883,142 @@ export class AnimationController {
         sgn * (0.02 + g.hipRoll * 0.25 * swingC * w * sag) + abduct,
       );
       out.setEuler(shin, -kneeFlex, 0, 0);
-      out.setEuler(foot, anklePitch, 0, sgn * -0.015 - abduct * 0.35);
+      // The foot's long axis points FORWARD, so its local +Z swings the toe to
+      // the character's left — the reverse of every downward-pointing bone in
+      // the rig. `sgn * toeOut` is therefore genuinely toes-out, which is where
+      // a relaxed human foot sits and where these used to be very slightly not.
+      out.setEuler(foot, anklePitch, 0, sgn * st.toeOut - abduct * 0.35);
       out.setEuler(toe, toePitch, 0, 0);
     }
 
     /* ---- pelvis ---- */
-    const bob = -g.bob * 0.5 * Math.cos(2 * TAU * p) * cycle;
-    const latShift = g.lateral * Math.cos(TAU * p) * w + idleW * shift * 0.016;
+    const bob = -g.bob * st.bounce * 0.5 * Math.cos(2 * TAU * p) * cycle - limpLoad * 0.045;
+    const latShift = g.lateral * st.sway * Math.cos(TAU * p) * w + idleW * shift * 0.016;
     out.root.set(latShift, bob, 0);
     // Pelvis/chest counter-rotation belongs to a forward gait; a side-step has
     // almost none of it, and a backpedal has it reversed.
     const twist = w * fwd;
-    const pelvisYaw = -g.pelvisYaw * Math.cos(TAU * p) * twist;
-    const pelvisRoll = -g.hipRoll * Math.cos(TAU * p) * w * sag + idleW * shift * 0.03;
+    const pelvisYaw = -g.pelvisYaw * st.swagger * Math.cos(TAU * p) * twist;
+    const pelvisRoll = -g.hipRoll * Math.cos(TAU * p) * w * sag + idleW * shift * 0.03
+      // The unsupported hip drops away from the sore leg (Trendelenburg).
+      + limpLoad * 0.20 * limpSgn;
     const leanIn = THREE.MathUtils.clamp(this.lean * 0.09, -0.16, 0.16) * Math.min(1, this.smoothSpeed / 3);
     // Forward lean follows travel: leaning FORWARD while backing up is the
     // single loudest tell that a backpedal is a mis-used forward clip.
     const bodyLean = g.lean * fwd;
     // Lean into the side-step, the way anyone carrying their weight sideways does.
     const sideLean = -strafe * lat * 0.16 * w;
+    /* The trunk pitches twice a cycle: it is thrown forward as the body vaults
+     * over the stance leg and checks at heel strike. Small — a couple of
+     * degrees — but its absence is most of what "rigid torso" means, because
+     * the spine is otherwise a rigid link between two things that do move. */
+    const trunkPitch = g.bob * st.bounce * 0.85 * Math.cos(2 * TAU * (p - 0.07)) * cycle * sag;
     out.setEuler(BI.hips, bodyLean * 0.35, pelvisYaw, pelvisRoll + leanIn + sideLean * 0.35);
 
-    /* ---- spine ---- */
-    const chestYaw = g.chestYaw * Math.cos(TAU * p) * twist;
-    out.setEuler(BI.spine, bodyLean * 0.30, chestYaw * 0.45, -pelvisRoll * 0.35 + idleW * sway * 0.012 + sideLean * 0.3);
-    out.setEuler(BI.chest, bodyLean * 0.24, chestYaw * 0.55, -leanIn * 0.5 + sideLean * 0.25);
-    out.setEuler(BI.upperChest, bodyLean * 0.14, chestYaw * 0.30, 0);
+    /* ---- spine ----
+     *
+     * THE THORAX LAGS THE PELVIS. The two counter-rotate, but not as a rigid
+     * see-saw: the spine is a torsion spring and the shoulders arrive about an
+     * eighth of a cycle after the hips. Driving both off the same cosine — the
+     * way this did — produces a body hinged at the waist, which reads as
+     * mechanical however large you make the angles.
+     *
+     * The trunk also side-bends over the loaded leg, opposite the pelvic drop,
+     * which is what keeps the head over the feet.
+     */
+    const chestYaw = g.chestYaw * st.swagger * Math.cos(TAU * (p - 0.12)) * twist;
+    const trunkBend = -pelvisRoll * 0.42 - limpLoad * 0.16 * limpSgn;
+    const stoop = st.stoop * sag;
+    out.setEuler(
+      BI.spine,
+      bodyLean * 0.30 + stoop * 0.42 + trunkPitch * 0.55,
+      chestYaw * 0.45,
+      trunkBend * 0.85 + idleW * sway * 0.012 + sideLean * 0.3,
+    );
+    out.setEuler(
+      BI.chest,
+      bodyLean * 0.24 + stoop * 0.34 + trunkPitch * 0.35,
+      chestYaw * 0.55,
+      trunkBend * 0.55 - leanIn * 0.5 + sideLean * 0.25,
+    );
+    out.setEuler(BI.upperChest, bodyLean * 0.14 + stoop * 0.24, chestYaw * 0.30, trunkBend * 0.30);
 
-    /* ---- head stabilisation: cancel most of the pelvis motion ---- */
-    const totalLean = bodyLean * (0.35 + 0.30 + 0.24 + 0.14);
-    out.setEuler(BI.neck, -totalLean * 0.55 - g.headBob * bob * 1.2, -chestYaw * 0.6, -pelvisRoll * 0.25);
-    out.setEuler(BI.head, -totalLean * 0.35 + idleW * Math.sin(this.clock * 0.23 + this.seed) * 0.02, -chestYaw * 0.35, 0);
+    /* ---- head stabilisation ----
+     *
+     * The head is the one part of a walking person that barely moves: the
+     * vestibulo-ocular reflex holds it level while everything under it
+     * oscillates. So the neck cancels most of the trunk's bob, pitch, twist and
+     * side-bend — and the stoop, or a stooped pedestrian would walk staring at
+     * his own boots. What is left over is this person's own carriage. */
+    const totalLean = bodyLean * (0.35 + 0.30 + 0.24 + 0.14) + stoop;
+    out.setEuler(
+      BI.neck,
+      -totalLean * 0.55 - g.headBob * bob * 1.2 - trunkPitch * 0.75 + st.headDown * 0.45,
+      -chestYaw * 0.62,
+      -trunkBend * 0.55 + st.headTilt * 0.45,
+    );
+    out.setEuler(
+      BI.head,
+      -totalLean * 0.35 - trunkPitch * 0.35 + st.headDown * 0.55
+        + idleW * Math.sin(this.clock * 0.23 + this.seed) * 0.02,
+      -chestYaw * 0.35,
+      -trunkBend * 0.25 + st.headTilt * 0.55,
+    );
 
-    /* ---- arms ---- */
+    /* ---- arms ----
+     *
+     * ARM SWING IS NOT A DECORATION. It is the counterweight that cancels the
+     * angular momentum the legs put into the body, and it is the first thing an
+     * eye uses to decide whether it is looking at a person or at a puppet on a
+     * stick. Three things were wrong here:
+     *
+     *  1. THE ELBOW WAS PHASED BACKWARDS. `max(0, sgn*cos)` peaks when the
+     *     same-side LEG is forward — which is exactly when the arm is BEHIND
+     *     the body. So the elbow straightened on the forward swing and folded
+     *     on the backswing, and the hand's travel cancelled a large part of the
+     *     shoulder's. Measured on a walking pedestrian, the hand covered 375 mm
+     *     fore-and-aft while the shoulder was authored for well over half a
+     *     metre. The elbow now flexes THROUGH the forward swing, lagging it
+     *     slightly, and extends behind — which is what an arm does.
+     *  2. THE SHOULDER GIRDLE WAS BOLTED DOWN. The clavicle carried a constant
+     *     and nothing else. It now protracts with the arm and rides the trunk's
+     *     side-bend, so the shoulder line lives instead of translating.
+     *  3. EVERYONE'S ARMS WERE THE SAME. Amplitude, carriage and left/right
+     *     asymmetry all come off the ped's own seed now.
+     */
+    const armPh = rev(p);
     for (let side = 0; side < 2; side++) {
       const sgn = side === 0 ? 1 : -1;
       const clav = side === 0 ? BI.clavicleL : BI.clavicleR;
       const upper = side === 0 ? BI.upperArmL : BI.upperArmR;
       const fore = side === 0 ? BI.forearmL : BI.forearmR;
       const hand = side === 0 ? BI.handL : BI.handR;
-      // Counter-phased to the same-side leg, and only as far as the sagittal
-      // travel warrants: side-stepping does not swing the arms fore and aft.
-      const swing = -sgn * g.armA * Math.cos(TAU * rev(p)) * w * sag * (back ? -0.55 : 1);
-      const armPitch = g.armBias * (back ? 0.5 : 1) + swing;
-      const elbowFlex = g.elbow + g.elbowSwing * Math.max(0, sgn * Math.cos(TAU * p)) * w * sag;
+      // +1 = fully forward. Counter-phased to the same-side leg, and only as
+      // far as the sagittal travel warrants: side-stepping does not swing the
+      // arms fore and aft.
+      const norm = -sgn * Math.cos(TAU * armPh);
+      // The arm on the sore side is held still — people guard a limp with it.
+      const sideArm = st.arm * (1 + sgn * st.armAsym) * (side === st.limpSide ? 1 - st.limp * 0.45 : 1);
+      const swing = g.armA * sideArm * norm * w * sag * (back ? -0.55 : 1);
+      const armPitch = (g.armBias + st.armCarriage * 0.20) * (back ? 0.5 : 1) + swing;
+      // Flexion peaks a tenth of a cycle after the arm passes the hip on its
+      // way forward, and bottoms out at full extension behind.
+      const flex = Math.max(0, -sgn * Math.cos(TAU * (armPh - 0.10)));
+      const elbowFlex = g.elbow + st.armCarriage + g.elbowSwing * flex * w * sag;
       // Arms tuck in as speed rises; they hang wide when idle, and wider still
       // when the body is carrying itself sideways.
-      const tuck = -0.13 * w * sag - 0.02 + lat * 0.10 * w;
-      out.setEuler(clav, -g.shoulderDrop * 0.4 + swing * 0.10, 0, sgn * (g.shoulderDrop + idleW * shift * 0.02));
+      const tuck = -0.13 * w * sag - 0.02 + lat * 0.10 * w + st.armOut;
+      out.setEuler(
+        clav,
+        // Protraction: the whole shoulder girdle travels with the arm.
+        -g.shoulderDrop * 0.4 + swing * 0.17,
+        swing * 0.09,
+        sgn * (g.shoulderDrop + idleW * shift * 0.02 - trunkBend * 0.45) + st.shoulderTilt,
+      );
       out.setEuler(upper, armPitch, sgn * -0.10 * w * sag, sgn * (tuck + Math.abs(swing) * 0.10));
       out.setEuler(fore, elbowFlex, sgn * 0.22 * w, sgn * 0.05);
-      out.setEuler(hand, -0.04 + swing * 0.15, 0, sgn * 0.06);
+      // The hand lags the forearm — a wrist is not welded.
+      out.setEuler(hand, -0.04 + swing * 0.20 - elbowFlex * 0.10, 0, sgn * 0.06);
     }
 
     this.handsClip(out, 0, 0);

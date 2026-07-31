@@ -24,6 +24,7 @@ import {
   insetPolygon,
   lFootprint,
   rectFootprint,
+  roundedFrontFootprint,
   type DetailOpts,
   type FacadeParams,
   type Vec2,
@@ -38,9 +39,26 @@ import { FacadeStyle } from './materials';
 /** Decoded exactly once — see the colour-space note in `render/materials.ts`. */
 const lin = srgb;
 
+/*
+ * THE DETAIL PASS MUST NOT BE BRIGHTER THAN THE WALL IT SITS ON.
+ *
+ * `stone` was 0xd2c5b0 — 0.65 linear — against the facade palette's own
+ * measured limestone at 0.40 (`C.stone` in materials.ts, authored against the
+ * reference frame's histogram). Every cornice, parapet, balcony slab, coping,
+ * step and bollard in the city was therefore two thirds of a stop brighter
+ * than the masonry it was carved out of. With the sun three degrees up, a
+ * parapet is the one horizontal surface on a building that the key actually
+ * hits square, so it went to white and ruled a hot line along every roofline
+ * in every frame — which is exactly the "near-white unlit facade" a reviewer
+ * flagged, seen from below where the parapet is most of what you get.
+ *
+ * Weathered precast measures 0.15-0.25 linear and weathered limestone
+ * 0.35-0.40. These are authored to sit just BELOW the shader's wall values so
+ * the relief reads as shadow rather than as highlight.
+ */
 export const DetailColor = {
-  stone: lin(0xd2c5b0),
-  stoneDark: lin(0x8d8274),
+  stone: lin(0xa89b86),
+  stoneDark: lin(0x6f6558),
   concrete: lin(0x726c76),
   concreteDark: lin(0x4a4650),
   metal: lin(0x3d434c),
@@ -222,7 +240,7 @@ export function buildBuilding(
   const floorH = rng.range(spec.floorH[0], spec.floorH[1]);
   const bayW = rng.range(spec.bayW[0], spec.bayW[1]);
   const groundH = rng.range(spec.groundH[0], spec.groundH[1]);
-  const style = opts.forceStyle ?? spec.style;
+  let style = opts.forceStyle ?? spec.style;
 
   // Height snapped to whole storeys so the grammar's floor lines meet the roof.
   // Two populations, never one wide range — see TowerSpec in districts.ts.
@@ -255,6 +273,27 @@ export function buildBuilding(
   }
   const h = groundH + floors * floorH;
 
+  /*
+   * `plain` IS A ONE-STOREY GRAMMAR AND NOTHING ELSE.
+   *
+   * Style 6 draws a rendered wall with NO WINDOWS at all — it exists for park
+   * pavilions, podiums and blank party walls. It reaches real buildings via
+   * `DISTRICTS.parc.style`, and the park zones are not only Cișmigiu: they are
+   * every fbm pocket over 0.70 in the outer ring, and imported footprints
+   * landing in one take their storey count from the survey. The result was a
+   * 20 m windowless cream slab standing on Calea Victoriei — the largest
+   * unbroken, unlit, unarticulated surface anywhere in the city and, measured
+   * off the capture, the brightest thing in the frame. A reviewer read it as a
+   * lighting fault; it is a grammar applied at eight times the height it can
+   * carry.
+   *
+   * Above two storeys the plot gets ordinary city fabric instead. The park
+   * pavilions it was written for are all P+1.
+   */
+  if (style === FacadeStyle.plain && floors > 2) {
+    style = rng.bool(0.55) ? FacadeStyle.interbelic : FacadeStyle.centruVechi;
+  }
+
   const seed = rng.range(0, 97);
   const p: FacadeParams = {
     style,
@@ -276,11 +315,30 @@ export function buildBuilding(
   // A real outline already has a shape of its own and never wants one.
   const lPlan = !opts.footprint
     && style !== FacadeStyle.glassCorporate && rng.bool(0.26) && w > 18 && dep > 14;
+  /*
+   * THE INTERBELIC CORNER BLOCK — the second species, and the one the massing
+   * had no way of expressing.
+   *
+   * `docs/reference/world/calea-victoriei.jpg` and `lipscani-oldtown.jpg` both
+   * open on the same object: a 1930s block whose street corner is a drum, with
+   * the cornice, the string courses and the balcony bands carried round it
+   * unbroken. The grammar shader already draws a "corner expression" band, but
+   * a painted corner still meets the sky at ninety degrees, and against a dusk
+   * sky the silhouette is the whole of what you read. Rounded here instead, in
+   * the massing, for eight triangles.
+   *
+   * Not every interbelic plot — a mid-terrace block does not curve. Roughly two
+   * in five, and only where there is enough frontage to carry a real radius.
+   */
+  const cornerBlock = !opts.footprint && style === FacadeStyle.interbelic
+    && w > 15 && dep > 10 && rng.bool(0.42);
   const base: Vec2[] = opts.footprint
     ? (opts.footprint as Vec2[])
-    : lPlan
-      ? lFootprint(cx, cz, w, dep, w * rng.range(0.3, 0.45), dep * rng.range(0.3, 0.45), rot)
-      : rectFootprint(cx, cz, w, dep, rot);
+    : cornerBlock
+      ? roundedFrontFootprint(cx, cz, w, dep, rot, rng.range(2.2, 4.4), 3)
+      : lPlan
+        ? lFootprint(cx, cz, w, dep, w * rng.range(0.3, 0.45), dep * rng.range(0.3, 0.45), rot)
+        : rectFootprint(cx, cz, w, dep, rot);
 
   const setback = !opts.footprint && rng.bool(spec.setback) && h > groundH + floorH * 5;
   let topOfBase = h;
@@ -328,20 +386,56 @@ export function buildBuilding(
     bayW, style, tier, rng,
   );
 
+  /* ---------------- the corner drum ---------------- */
+
+  /*
+   * A corner block usually stands a storey taller ON THE CURVE — an attic
+   * drum, sometimes a cupola. It is the thing that stops a boulevard of
+   * six-storey blocks reading as one continuous extrusion, because it is the
+   * only place the roofline steps up locally rather than between plots.
+   */
+  if (cornerBlock && tier >= 1 && rng.bool(0.5)) {
+    cornerDrum(d, site, base, h, rng);
+  }
+
   /* ---------------- street-level articulation ---------------- */
 
   if (tier >= 1) {
     entrance(d, site, groundH, style, rng);
-    if (style === FacadeStyle.centruVechi && tier === 2) awnings(d, site, groundH, rng);
+    shopfronts(d, site, groundH, style, tier, rng);
   }
 
   /* ---------------- balconies ---------------- */
 
-  if (tier === 2 && (style === FacadeStyle.bulevard || style === FacadeStyle.cartier)) {
-    balconies(d, site, groundH, floorH, Math.min(floors, 12), topOfBase, rng);
+  /*
+   * BALCONIES RUN AT TIER 1 AS WELL AS TIER 2, and that is the whole answer to
+   * "one building species only".
+   *
+   * `detailTier` is keyed to distance from the hero crossroads, not to the
+   * camera — the city is baked once and the player then walks all over it. At
+   * the old thresholds every articulation pass in this file was tier-2 only,
+   * so outside a 420 m bubble around Builders House EVERY building in the game
+   * was a bare extruded box with a shader on it, whatever its style. Magheru,
+   * Calea Victoriei and the whole old town sit outside that bubble. A reviewer
+   * walking the city therefore correctly reported one species: past 420 m
+   * there genuinely was only one.
+   *
+   * Balcony slabs are the cheapest silhouette an apartment block has — 24
+   * triangles a floor, and they are what breaks the elevation against the sky —
+   * so they now run wherever the building is drawn with any detail at all,
+   * with a smaller budget out in the mid field.
+   */
+  if (tier >= 1 && (style === FacadeStyle.bulevard || style === FacadeStyle.cartier)) {
+    balconies(d, site, groundH, floorH, Math.min(floors, 12), tier, rng);
   }
-  if (tier === 2 && style === FacadeStyle.interbelic) {
-    continuousBalconies(d, site, groundH, floorH, Math.min(floors, 10), rng);
+  if (tier >= 1 && style === FacadeStyle.interbelic) {
+    continuousBalconies(d, site, groundH, floorH, Math.min(floors, 10), tier, rng);
+  }
+
+  /* ---------------- the bolted-on layer (blocs) ---------------- */
+
+  if (tier >= 1 && (style === FacadeStyle.cartier || style === FacadeStyle.bulevard)) {
+    boltedOn(d, site, groundH, floorH, floors, style, tier, rng);
   }
 
   /* ---------------- facade signage ---------------- */
@@ -847,19 +941,294 @@ function entrance(
 
 const FocusGlass = FacadeStyle.glassCorporate as number;
 
-function awnings(d: DetailBuilder, site: BuildingSite, groundH: number, rng: Rng): void {
+/* ------------------------------------------------------------------ */
+/* GROUND-FLOOR SHOPFRONT CLUTTER                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Saturated shop-sign inks. Advertising is the only pure hue on a Bucharest
+ * street — everything above the fascia is render, concrete, rust and grime —
+ * and it is what the eye reads first at pavement level.
+ */
+const SIGN_INK = [
+  lin(0xd8232a), lin(0x1a4fa0), lin(0x159a4c), lin(0xe8a013),
+  lin(0xff2f8e), lin(0x6a3fb5), lin(0xe8e2d4),
+];
+const SIGN_W = [3.2, 2.4, 1.8, 2.2, 1.4, 1.0, 1.6];
+
+/** Awning canvas. Bucharest awnings are dark red, green, blue or bleached. */
+const AWNING_INK = [
+  lin(0x7a2338), lin(0x1f5138), lin(0x1d3a6b), lin(0xc7bda8), lin(0x8a5a15),
+];
+const AWNING_W = [3, 2.2, 2, 1.6, 1.2];
+
+/**
+ * THE GROUND FLOOR, WHICH IS WHERE THE CAMERA LIVES.
+ *
+ * `magheru-boulevard.jpg` and `lipscani-oldtown.jpg` are both, at street
+ * level, almost entirely SIGNAGE: a continuous ribbon of fascia boards,
+ * projecting flag signs hung perpendicular to the wall so they read down the
+ * pavement, awnings, a lit soffit under each of them, and a scatter of
+ * A-boards and stands on the paving. Nothing above the first floor line is
+ * doing anything like as much work, because a third-person camera at chest
+ * height sees a hundred metres of ground floor and only a raking sliver of
+ * everything else.
+ *
+ * The shader already draws the glazing, the pier and a fascia BAND. What it
+ * cannot do is project: a painted-on fascia has no soffit to catch light, no
+ * shadow on the pavement, and — crucially — no sign standing out at right
+ * angles to the wall, which is the single most legible element of a shopping
+ * street because it is the only one presenting its face to somebody walking
+ * along it rather than across it.
+ *
+ * BUDGET. A full unit is ~70 triangles (fascia 12, three letter blocks 36,
+ * flag sign 12 + bracket 6, soffit strip 12 where it is lit). Units are 5-9 m
+ * so a 40 m block carries five: ~350 triangles at tier 2, and at tier 1 only
+ * the fascia and the flag sign survive, ~120. Compare the 1.5k a tier-2
+ * storey-relief pass spends on the same building.
+ */
+function shopfronts(
+  d: DetailBuilder,
+  site: BuildingSite,
+  groundH: number,
+  style: number,
+  tier: 0 | 1 | 2,
+  rng: Rng,
+): void {
+  // Curtain-wall lobbies, ministries and sheds do not have shops in them.
+  if (style === FocusGlass || style === FacadeStyle.guvern
+    || style === FacadeStyle.industrial || style === FacadeStyle.plain) return;
+  const span = site.w;
+  if (span < 6 || groundH < 2.8) return;
+  const front = -site.d / 2;
+  const rot = site.rot;
+
+  // Shop units are 5-9 m of frontage, as they are on Magheru.
+  const n = Math.max(1, Math.min(8, Math.round(span / rng.range(5.2, 8.8))));
+  const uw = span / n;
+  // The fascia band the shader paints sits between groundH-1.20 and
+  // groundH-0.30; the projecting board has to land on it, not float above it.
+  const fasciaH = Math.min(0.86, groundH * 0.20);
+  const fasciaY = groundH - 0.72;
+  // Old town is arcaded and low, so its signs hang lower and project further.
+  const old = style === FacadeStyle.centruVechi;
+
+  for (let i = 0; i < n; i++) {
+    const u = (i + 0.5) / n * span - span / 2;
+    const ink = rng.weighted(SIGN_INK, SIGN_W);
+    // Vacant units: every Bucharest street has them, and a continuous
+    // unbroken run of lit signage reads as a film set.
+    if (rng.bool(0.16)) continue;
+    const lit = rng.bool(tier === 2 ? 0.82 : 0.7);
+
+    /* ---- fascia board over the shopfront ---- */
+    const bw = uw * rng.range(0.74, 0.94);
+    const [bx, bz] = local(site, u, front - 0.16);
+    d.box(bx, fasciaY, bz, bw, fasciaH, 0.22, rot, {
+      color: ink, mr: [0, 0.62],
+      emissive: lit ? emi(ink, 0.75) : emi(ink, 0.05),
+    });
+    if (tier === 2) {
+      // Lettering: three pale blocks. At the distance a fascia is ever read
+      // that is indistinguishable from a word, at 12 triangles a block.
+      const pale = lin(0xf4efe2);
+      for (let k = 0; k < 3; k++) {
+        const t = (k - 1) * bw * 0.26;
+        const [lx, lz] = local(site, u + t, front - 0.29);
+        d.box(lx, fasciaY, lz, bw * 0.17, fasciaH * 0.46, 0.05, rot, {
+          color: pale, mr: [0, 0.5], emissive: lit ? emi(pale, 1.5) : emi(pale, 0.1),
+        });
+      }
+      /* ---- lit soffit ---- */
+      // A shopfront throws light DOWN onto the pavement. Without this the
+      // ground floor is a bright band with a dead black strip under it.
+      const [sx, sz] = local(site, u, front - 0.36);
+      d.box(sx, fasciaY - fasciaH * 0.56, sz, bw * 0.9, 0.06, 0.5, rot, {
+        color: DetailColor.sodium, mr: [0, 0.35],
+        emissive: emi(DetailColor.sodium, lit ? 2.6 : 0.4),
+      });
+    }
+
+    /* ---- projecting flag sign ---- */
+    /*
+     * PERPENDICULAR TO THE WALL, which is the point of it. A fascia presents
+     * its face only to somebody standing across the street; a flag sign
+     * presents its face to everybody walking along the pavement, so down a
+     * receding elevation these are the only signs that are readable at all —
+     * exactly what makes the Magheru photograph's right-hand side legible.
+     */
+    if (rng.bool(old ? 0.55 : 0.4)) {
+      const fw = rng.range(0.7, 1.25);
+      const fh = fw * rng.range(0.85, 1.7);
+      const out = rng.range(0.85, 1.5);
+      const fy = old ? groundH * 0.62 : Math.min(groundH - 1.6, fasciaY - fasciaH - fh * 0.55);
+      if (fy > 2.2) {
+        const fInk = rng.weighted(SIGN_INK, SIGN_W);
+        const [fx, fz] = local(site, u + uw * rng.range(-0.24, 0.24), front - out);
+        // Sign faces are ACROSS the frontage, i.e. the local +z thickness is
+        // the sign's own depth and its width runs into the street.
+        d.box(fx, fy, fz, 0.06, fh, fw, rot, {
+          color: fInk, mr: [0, 0.55],
+          emissive: emi(fInk, lit ? 2.0 : 0.12),
+        });
+        // Bracket back to the wall.
+        const [wx, wz] = local(site, u + uw * rng.range(-0.24, 0.24), front);
+        d.tube(wx, fy + fh * 0.36, wz, fx, fy + fh * 0.36, fz, 0.035, 3,
+          { color: DetailColor.metal, mr: MR.metal });
+      }
+    }
+
+    /* ---- awning ---- */
+    if (tier === 2 && rng.bool(old ? 0.5 : 0.3)) {
+      const aw = uw * 0.84;
+      const proj = rng.range(1.1, 1.8);
+      const aY = Math.max(2.5, fasciaY - fasciaH - 0.35);
+      const canvas = rng.weighted(AWNING_INK, AWNING_W);
+      // Sloping canvas: a quad from the wall down to the front rail. `box`
+      // only turns about Y, so the slope has to be a real quad.
+      const [w0x, w0z] = local(site, u - aw / 2, front);
+      const [w1x, w1z] = local(site, u + aw / 2, front);
+      const [f0x, f0z] = local(site, u - aw / 2, front - proj);
+      const [f1x, f1z] = local(site, u + aw / 2, front - proj);
+      const drop = 0.42;
+      d.quad(
+        [w0x, aY + drop, w0z], [f0x, aY, f0z], [f1x, aY, f1z], [w1x, aY + drop, w1z],
+        { color: canvas, mr: MR.paint },
+      );
+      // Valance hanging off the front rail — the scalloped strip that is most
+      // of what you actually see of an awning from underneath it.
+      const [vx, vz] = local(site, u, front - proj);
+      d.box(vx, aY - 0.14, vz, aw, 0.28, 0.05, rot, { color: canvas, mr: MR.paint });
+    }
+
+    /* ---- pavement stand ---- */
+    if (tier === 2 && rng.bool(0.22)) {
+      const [ax, az] = local(site, u + uw * rng.range(-0.3, 0.3), front - rng.range(1.9, 2.8));
+      d.box(ax, 0.6, az, 0.62, 0.9, 0.1, rot + rng.range(-0.5, 0.5), {
+        color: rng.bool(0.5) ? lin(0x2a2530) : ink, mr: [0, 0.7],
+        emissive: lit ? emi(ink, 0.25) : NO_EMI,
+      });
+    }
+  }
+}
+
+const NO_EMI = [0, 0, 0];
+
+/* ------------------------------------------------------------------ */
+/* The bolted-on layer — what eighty years of tenants add to a bloc     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * AIR CONDITIONERS, DISHES AND GLAZED-IN LOGGIAS.
+ *
+ * In `magheru-boulevard.jpg` every communist slab is peppered with white AC
+ * boxes and satellite dishes, hung at whatever height the tenant could reach,
+ * on no grid at all. They are the single most repeated object in the frame
+ * after the windows themselves, and their randomness is precisely what stops a
+ * bloc reading as a rendered grid: a facade whose only variation is on a pitch
+ * looks manufactured, and one with forty small objects scattered off the pitch
+ * looks lived in.
+ *
+ * 12 triangles per AC unit, ~16 per dish, so a heavily-encrusted block is
+ * about 250 — cheap enough to run through the mid field, which is where most
+ * of the city's blocs are.
+ */
+function boltedOn(
+  d: DetailBuilder,
+  site: BuildingSite,
+  groundH: number,
+  floorH: number,
+  floors: number,
+  style: number,
+  tier: 0 | 1 | 2,
+  rng: Rng,
+): void {
   const span = site.w;
   const front = -site.d / 2;
-  const n = Math.max(1, Math.floor(span / 7));
-  for (let i = 0; i < n; i++) {
-    if (!rng.bool(0.55)) continue;
-    const t = (i + 0.5) / n - 0.5;
-    const [ax, az] = local(site, t * span, front - 0.9);
-    d.box(
-      ax, groundH - 1.3, az,
-      (span / n) * 0.8, 0.14, 1.8, site.rot,
-      { color: DetailColor.awning, mr: MR.paint },
-    );
+  const rot = site.rot;
+  const top = groundH + Math.min(floors, 14) * floorH;
+  if (top - groundH < floorH) return;
+
+  // Blocs carry far more of this than a boulevard block does.
+  const bloc = style === FacadeStyle.cartier;
+
+  /*
+   * THE STAIRCASE BAY — the rhythm that makes a bloc a bloc.
+   *
+   * A Romanian panel block is not a continuous elevation; it is a row of
+   * SCĂRI, four to six metres wide, each with its own entrance, its own
+   * mailboxes and a full-height strip of small landing windows and NO
+   * balconies. That vertical break every twelve to sixteen metres is the
+   * defining rhythm of the type — it is why a 90 m bloc reads as five things
+   * and not as one thing — and it is the only part of the species the balcony
+   * pass cannot express, because it is defined by the ABSENCE of balconies.
+   *
+   * Built as a shallow full-height pier (blocs express the stair core as a
+   * projecting or recessed strip) plus a canopy over the door. 12 triangles a
+   * pier, 12 a canopy: a five-scară block costs 120.
+   */
+  if (bloc && span > 22) {
+    const scari = Math.max(2, Math.min(6, Math.round(span / rng.range(12, 17))));
+    for (let i = 1; i < scari; i++) {
+      const u = (i / scari - 0.5) * span;
+      const [px, pz] = local(site, u, front - 0.16);
+      d.box(px, groundH + (top - groundH) / 2, pz,
+        rng.range(1.5, 2.4), top - groundH, 0.3, rot,
+        { color: DetailColor.concreteDark, mr: MR.concrete });
+    }
+    for (let i = 0; i < scari; i++) {
+      const u = ((i + 0.5) / scari - 0.5) * span;
+      // Entrance canopy: a thin slab on two stubby brackets, always grubby.
+      const [cx2, cz2] = local(site, u, front - 0.75);
+      d.box(cx2, Math.min(groundH - 0.5, 2.6), cz2, 2.2, 0.14, 1.5, rot,
+        { color: DetailColor.concrete, mr: MR.concrete });
+      if (tier === 2) {
+        const [lx, lz] = local(site, u, front - 0.5);
+        d.box(lx, Math.min(groundH - 0.72, 2.38), lz, 0.34, 0.1, 0.34, rot, {
+          color: DetailColor.sodium, mr: [0, 0.4],
+          emissive: emi(DetailColor.sodium, rng.bool(0.75) ? 2.4 : 0.05),
+        });
+      }
+    }
+  }
+  const nAc = tier === 2
+    ? (bloc ? rng.int(6, 16) : rng.int(2, 7))
+    : (bloc ? rng.int(3, 9) : rng.int(1, 4));
+
+  for (let i = 0; i < nAc; i++) {
+    const u = rng.range(-0.46, 0.46) * span;
+    // Hung just under a window head, which is where a split unit's outdoor
+    // half goes, and never on the ground floor.
+    const fl = 1 + rng.int(0, Math.max(0, Math.min(floors, 14) - 1));
+    const y = groundH + fl * floorH - rng.range(0.35, 0.95);
+    if (y > top - 0.3) continue;
+    const w = rng.range(0.72, 0.95);
+    const [ax, az] = local(site, u, front - 0.22);
+    d.box(ax, y, az, w, rng.range(0.5, 0.62), 0.34, rot, {
+      // Bleached white plastic that has been outside for fifteen years.
+      color: rng.bool(0.78) ? lin(0xbdb8ad) : DetailColor.metalPale,
+      mr: [0.05, 0.66],
+    });
+    // Grille shadow line, so it is not a featureless white pill at 20 m.
+    d.box(ax, y, az, w * 0.62, 0.05, 0.42, rot, {
+      color: DetailColor.metal, mr: MR.metal,
+    });
+  }
+
+  // Facade-mounted dishes: on the parapet of a balcony or bolted to the wall.
+  const nDish = tier === 2 ? (bloc ? rng.int(1, 5) : rng.int(0, 3)) : rng.int(0, 2);
+  for (let i = 0; i < nDish; i++) {
+    const u = rng.range(-0.44, 0.44) * span;
+    const fl = 1 + rng.int(0, Math.max(0, Math.min(floors, 12) - 1));
+    const y = groundH + fl * floorH + rng.range(0.2, 1.0);
+    if (y > top - 0.6) continue;
+    const [dx, dz] = local(site, u, front - 0.55);
+    const r = rng.range(0.24, 0.4);
+    d.cyl(dx, y, dz, 0.03, r, r * 0.5, 6,
+      { color: DetailColor.metalPale, mr: [0.2, 0.62] }, false);
+    const [bx2, bz2] = local(site, u, front - 0.06);
+    d.tube(bx2, y - 0.05, bz2, dx, y, dz, 0.03, 3,
+      { color: DetailColor.metal, mr: MR.metal });
   }
 }
 
@@ -869,14 +1238,17 @@ function balconies(
   groundH: number,
   floorH: number,
   floors: number,
-  _topOfBase: number,
+  tier: 0 | 1 | 2,
   rng: Rng,
 ): void {
   const span = site.w;
   const front = -site.d / 2;
   const bays = Math.max(1, Math.floor(span / 4.2));
   const proj = 1.25;
-  let budget = 11;
+  // Mid-field blocks get a thinner scatter of the same slabs rather than none
+  // at all: what has to survive out there is the BROKEN ELEVATION, not the
+  // count. See the note at the call site.
+  let budget = tier === 2 ? 11 : 6;
 
   for (let fl = 1; fl < floors && budget > 0; fl += 1) {
     const y = groundH + fl * floorH;
@@ -889,15 +1261,31 @@ function balconies(
       d.box(bx, y + 0.09, bz, bw, 0.18, proj, site.rot, {
         color: DetailColor.concrete, mr: MR.concrete,
       });
-      // Front panel — glazed-in loggia on some, open rail on others.
-      const glazed = rng.bool(0.45);
+      /*
+       * GLAZED-IN LOGGIAS, and every one of them glazed by a different owner.
+       *
+       * Enclosing your balcony in whatever joinery was going that year is the
+       * defining act of a Romanian bloc, and the reason no two bays on one
+       * elevation match: white PVC, brown aluminium, raw timber, or still
+       * open with a concrete parapet. Picking ONE glazing colour per building
+       * put a manufactured grid back on the facade that the real thing has
+       * never had.
+       */
+      const enclosure = rng.next();
       const [px, pz] = local(site, t * span, front - proj * 0.95);
       d.box(
         px, y + 0.6, pz, bw, 1.05, 0.1, site.rot,
-        glazed
-          ? { color: DetailColor.glassDark, mr: MR.glass }
-          : { color: DetailColor.concreteDark, mr: MR.concrete },
+        enclosure < 0.30 ? { color: DetailColor.glassDark, mr: MR.glass }
+          : enclosure < 0.44 ? { color: lin(0xc8c4b8), mr: [0, 0.55] }
+            : enclosure < 0.54 ? { color: lin(0x4a3524), mr: [0.1, 0.6] }
+              : { color: DetailColor.concreteDark, mr: MR.concrete },
       );
+      // Enclosed loggias have a frame across them and a lit room behind.
+      if (enclosure < 0.30) {
+        const [mx, mz] = local(site, t * span, front - proj * 1.0);
+        d.box(mx, y + 0.6, mz, bw * 0.04, 1.0, 0.04, site.rot,
+          { color: lin(0xc8c4b8), mr: [0, 0.55] });
+      }
       budget--;
     }
   }
@@ -913,7 +1301,8 @@ function balconies(
  * bay — that unbroken horizontal line, repeated up the building, is what makes
  * Magheru's blocks read as 1930s modernism instead of as punched masonry.
  *
- * ~24 triangles per banded floor, hero-area buildings only.
+ * ~24 triangles per banded floor. Cheap enough to run through the mid field,
+ * which is where Magheru actually is relative to the hero crossroads.
  */
 function continuousBalconies(
   d: DetailBuilder,
@@ -921,18 +1310,20 @@ function continuousBalconies(
   groundH: number,
   floorH: number,
   floors: number,
+  tier: 0 | 1 | 2,
   rng: Rng,
 ): void {
   const front = -site.d / 2;
   const proj = rng.range(0.95, 1.45);
   // Balconies stop short of the vertical corner pier, as they really do.
   const runLen = site.w * 0.88;
+  const chance = tier === 2 ? 0.55 : 0.40;
 
   for (let fl = 1; fl < floors; fl++) {
     // The shader picks banded floors from the same kind of hash; an exact
     // match is not needed, only that roughly half the floors carry one and
     // that the slab lines up with a floor line.
-    if (!rng.bool(0.55)) continue;
+    if (!rng.bool(chance)) continue;
     const y = groundH + fl * floorH + 0.30;
     // Slab.
     const [cx, cz] = local(site, 0, front - proj / 2);
@@ -944,6 +1335,46 @@ function continuousBalconies(
     d.box(px, y + 0.52, pz, runLen, 0.86, 0.12, site.rot, {
       color: DetailColor.stone, mr: MR.stone,
     });
+  }
+}
+
+/**
+ * THE ATTIC DRUM over a rounded corner.
+ *
+ * Two cylinders and a coping: a low drum standing on the curve with a moulded
+ * band round it, and on a minority of them a shallow cupola. ~60 triangles,
+ * and it is worth every one of them because it lands on the SKYLINE, at the
+ * one point of the block a pedestrian standing at the crossroads is looking at.
+ */
+function cornerDrum(
+  d: DetailBuilder,
+  site: BuildingSite,
+  fp: ReadonlyArray<Vec2>,
+  top: number,
+  rng: Rng,
+): void {
+  // The curve is the run of footprint points nearest the street; its centroid
+  // is where the drum stands.
+  const lb = localBounds(fp, site);
+  const side = rng.bool(0.5) ? 1 : -1;
+  const u = side * (lb.u1 - lb.u0) * 0.5 * 0.78;
+  const v = lb.v0 + (lb.v1 - lb.v0) * 0.20;
+  const [dx, dz] = local(site, u, v);
+  const r = Math.min(2.6, (lb.u1 - lb.u0) * 0.16, (lb.v1 - lb.v0) * 0.28);
+  if (r < 1.0) return;
+  const dh = rng.range(2.4, 4.2);
+  d.cyl(dx, top, dz, r, r * 0.96, dh, 10,
+    { color: DetailColor.stone, mr: MR.stone });
+  // Moulded band at the head, which is what makes it read as architecture
+  // rather than as a tank.
+  d.cyl(dx, top + dh - 0.34, dz, r * 1.12, r * 1.12, 0.34, 10,
+    { color: DetailColor.stoneDark, mr: MR.stone }, false);
+  if (rng.bool(0.45)) {
+    // Shallow lead cupola.
+    d.cyl(dx, top + dh, dz, r * 1.02, r * 0.16, r * rng.range(0.7, 1.1), 10,
+      { color: DetailColor.metalPale, mr: [0.6, 0.42] });
+    d.cyl(dx, top + dh + r * 0.9, dz, 0.05, 0.05, rng.range(1.0, 2.2), 4,
+      { color: DetailColor.metal, mr: MR.metal }, false);
   }
 }
 
@@ -1764,7 +2195,27 @@ export function bollard(d: DetailBuilder, x: number, z: number): void {
   d.cyl(x, 0.17, z, 0.24, 0.19, 1.0, 6, { color: DetailColor.stone, mr: MR.stone });
 }
 
-/** Mesh crowd-control barrier — a run of `n` panels. */
+/**
+ * Mesh crowd-control barrier — a run of `n` panels along (dirX, dirZ).
+ *
+ * IT USED TO BE BUILT AGAINST THE WORLD AXES, ON STREETS THAT RUN AT EVERY
+ * ANGLE. `DetailBuilder.box` only knows a Y rotation, and this passed it
+ * `lean` (a +/- 0.05 rad wobble) while picking each rail's dimensions with
+ * `Math.abs(dirX) > 0.5 ? panel : 0.05`. On the grid that was fine, because
+ * dir was always exactly one of four unit vectors. On the imported streets —
+ * which is now most of the city, and all of the interesting part — a road at
+ * 45 degrees satisfies BOTH tests, so every rail came out as a 2.1 x 2.1 m
+ * horizontal SLAB, unrotated, while the run marched away diagonally
+ * underneath it. A roadworks barrier at a junction rendered as a fan of
+ * detached plates and posts strewn across the carriageway, and because the
+ * palette was `metalPale` at 0.78 metalness they were the brightest thing in
+ * the frame: a starburst of white bars lying in the road. That is the same
+ * class of bug the `BuildingSite` note above records, in the one street prop
+ * that was never converted with it.
+ *
+ * Built in the RUN'S OWN FRAME now: `rot` puts local +x along the run, exactly
+ * as `storeyRelief`'s mullions do, and every piece is sized in that frame.
+ */
 export function crowdBarrier(
   d: DetailBuilder,
   x: number, z: number,
@@ -1772,26 +2223,38 @@ export function crowdBarrier(
   n: number,
   rng: Rng,
 ): void {
+  const len = Math.hypot(dirX, dirZ) || 1;
+  const ux = dirX / len;
+  const uz = dirZ / len;
+  // DetailBuilder.box maps local +x to world (cos, -sin); see the mullion note.
+  const rot = Math.atan2(-uz, ux);
   const panel = 2.1;
-  const col = { color: DetailColor.metalPale, mr: MR.metal };
+  /*
+   * GALVANISED STEEL THAT HAS BEEN OUTSIDE. `metalPale` at 0.78 metalness and
+   * 0.38 roughness is showroom chrome, and under a three-degree sun a
+   * horizontal chrome rail is a specular line at clipping. Real barrier tube
+   * is dull hot-dip galvanising: mid metalness, and rough enough that the
+   * highlight spreads instead of blowing.
+   */
+  const col: DetailOpts = { color: DetailColor.metal, mr: [0.45, 0.62] };
   for (let i = 0; i < n; i++) {
-    const px = x + dirX * panel * i;
-    const pz = z + dirZ * panel * i;
-    const lean = rng.range(-0.05, 0.05);
-    // Top and bottom rails.
+    const px = x + ux * panel * i;
+    const pz = z + uz * panel * i;
+    // A run of barriers is never straight — they get knocked and re-set.
+    const lean = rot + rng.range(-0.05, 0.05);
+    const mid = (t: number): [number, number] => [px + ux * panel * t, pz + uz * panel * t];
+    // Top and bottom rails, along the run.
+    const [mx, mz] = mid(0.5);
     for (const y of [1.06, 0.42]) {
-      d.box(
-        px + dirX * panel * 0.5, y + 0.17, pz + dirZ * panel * 0.5,
-        Math.abs(dirX) > 0.5 ? panel : 0.05, 0.05, Math.abs(dirZ) > 0.5 ? panel : 0.05, lean, col,
-      );
+      d.box(mx, y + 0.17, mz, panel, 0.055, 0.055, lean, col);
     }
     // Verticals.
     for (let k = 0; k <= 3; k++) {
-      const t = k / 3;
-      d.box(px + dirX * panel * t, 0.17 + 0.74, pz + dirZ * panel * t, 0.045, 0.72, 0.045, lean, col);
+      const [vx, vz] = mid(k / 3);
+      d.box(vx, 0.17 + 0.74, vz, 0.045, 0.72, 0.045, lean, col);
     }
-    // Feet.
-    d.box(px, 0.19, pz, 0.5, 0.06, 0.5, lean, col);
+    // Feet: a flat plate across the run, which is what stops it falling over.
+    d.box(px, 0.19, pz, 0.12, 0.06, 0.62, lean, col);
   }
 }
 

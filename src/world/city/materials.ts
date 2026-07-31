@@ -117,6 +117,52 @@ float rectMask(vec2 p, vec2 half_) {
 }
 
 /**
+ * A LIT SHOP FASCIA THAT READS AS TYPE, NOT AS CAMOUFLAGE.
+ *
+ * This used to be step(0.55, fbm2(vec2(u * 7.0, v * 3.0))). A hard threshold
+ * on fractal noise is a CAMOUFLAGE generator — that is literally how disruptive
+ * pattern is made — and since the fascia band runs unbroken along every ground
+ * floor in the city, the single most prominent thing at street level was a
+ * continuous ribbon of red-and-black leopard print at eye height, on every
+ * building, on every street. It is the loudest artefact in any street-level
+ * capture of this city and it survived because "letters" in the source read as
+ * an intention rather than as a measurement.
+ *
+ * Type has structure noise does not: a fixed baseline, a fixed cap height, a
+ * regular advance, word gaps and vertical strokes. So it is built as that —
+ * glyph cells on a 0.42 m advance inside a word run, words separated by a gap,
+ * each cell either inked or not from a per-shop hash, and clipped to a band
+ * between baseline and cap. At the ten to forty metres a fascia is ever read
+ * that is indistinguishable from lettering, and it costs the same as the noise.
+ *
+ * su is metres along the fascia FROM THE SHOP'S OWN ORIGIN, sv is 0..1 up the
+ * fascia band, id is the shop's hash.
+ */
+float fasciaLetters(float su, float sv, float id) {
+  // Baseline and cap: type occupies the middle 56% of a fascia, never all of it.
+  float inBand = step(0.24, sv) * step(sv, 0.80);
+  // Words: runs of 3..7 glyphs, then a space.
+  float advance = 0.36 + 0.16 * h11(id * 3.3);
+  float gi = floor(su / advance);
+  float word = floor(gi / (3.0 + floor(h11(id * 7.7) * 5.0)));
+  float wordGap = step(0.86, fract(gi / (3.0 + floor(h11(id * 7.7) * 5.0))));
+  /*
+   * Each glyph is a stem with a COUNTER punched out of its middle third.
+   * Solid blocks at 64% of the advance read as a row of dominoes; real type
+   * is mostly the space between the strokes, and the counter is what makes a
+   * lit fascia sparkle rather than glow as a bar.
+   */
+  float inked = step(0.30, h11(gi * 1.7 + word * 11.0 + id * 5.0));
+  float g = fract(su / advance);
+  float stem = step(0.18, g) * step(g, 0.74);
+  // Counter: a hole in about half the glyphs, in the middle band only.
+  float bowl = step(0.34, g) * step(g, 0.58)
+    * step(0.38, sv) * step(sv, 0.68)
+    * step(0.45, h11(gi * 2.9 + id * 3.1));
+  return inBand * inked * stem * (1.0 - wordGap) * (1.0 - bowl);
+}
+
+/**
  * GEOMETRIC RELIEF FROM A PROCEDURAL HEIGHT FIELD.
  *
  * A curtain wall painted as a flat rectangle with a grid drawn on it is the
@@ -311,11 +357,18 @@ Fac facadeGrammar() {
     float stone = clamp(corner + band3, 0.0, 1.0);
 
     if (stone > 0.5) {
-      // Travertine: horizontal bedding planes, open pitting, sawn coursing.
-      // Authored BRIGHT on purpose — this is the frame's warm anchor.
+      /*
+       * Travertine: horizontal bedding planes, open pitting, sawn coursing.
+       * This is the frame's warm anchor and it is meant to be the brightest
+       * large surface in the city — but "bright" has to mean bright FOR ITS
+       * LIGHTING, not an albedo the variation term can push to 1.26x the
+       * measured value (0.33 linear -> 0.42). A podium standing in its own
+       * shadow was then coming back brighter than the sunlit stone above it,
+       * which is the second half of the "near-white unlit facade" report.
+       */
       float bed = fbm2(vec2(u * 0.75, v * 4.4));
       float pit = smoothstep(0.74, 0.96, fbm2(vec2(u * 7.0, v * 7.0)));
-      f.albedo = uTravertine * (0.80 + bed * 0.46) * (1.0 - pit * 0.34);
+      f.albedo = uTravertine * (0.72 + bed * 0.28) * (1.0 - pit * 0.34);
       f.rough = 0.64 + bed * 0.16 + pit * 0.2;
       f.metal = 0.0;
       f.env = 0.85;
@@ -441,7 +494,8 @@ Fac facadeGrammar() {
     /* ---- 4. travertine podium at street level ---- */
     if (isGround > 0.5) {
       float grain = fbm2(vec2(u * 2.2, v * 5.0));
-      f.albedo = uTravertine * (0.86 + grain * 0.50);
+      // Same ceiling as the cladding above: variation subtracts, never adds.
+      f.albedo = uTravertine * (0.74 + grain * 0.26);
       f.metal = 0.0;
       f.rough = 0.68 - grain * 0.14;
       f.env = 0.85;
@@ -559,8 +613,9 @@ Fac facadeGrammar() {
       // Fascia sign band above the glazing.
       float fascia = step(groundH - 1.25, v) * step(v, groundH - 0.35);
       f.albedo = mix(f.albedo, mix(uRust, uNeon, sh) * 0.25, fascia);
-      float letters = step(0.55, fbm2(vec2(u * 7.0, v * 3.0)));
-      f.emissive += sign * fascia * letters * 0.10 * uLitGain;
+      float letters = fasciaLetters(u - shopIdx * bayW * 2.0,
+                                    (v - (groundH - 1.25)) / 0.90, sh * 71.0 + seed);
+      f.emissive += sign * fascia * letters * 0.22 * uLitGain;
       // Plinth.
       f.albedo = mix(f.albedo, uStone * 0.22, step(v, 0.75));
     }
@@ -696,9 +751,23 @@ Fac facadeGrammar() {
 
   /* ---------------- 4: monumental government stone ---------------- */
   if (style < 4.5) {
-    vec3 stone = uStone * (1.02 + tint * 0.16);
+    /*
+     * NEVER BRIGHTER THAN THE AUTHORED ALBEDO.
+     *
+     * This was uStone * (1.02 + tint * 0.16) * (0.78 + grain * 0.34), whose
+     * upper bound is 1.32x the palette value — i.e. the style BRIGHTENED a
+     * limestone that C.stone had already been measured against the reference
+     * histogram at 0.40 linear, up to 0.53. A ministry flank standing in its
+     * own shadow, lit only by the magenta ambient, therefore came back at a
+     * higher value than anything the sun was actually hitting, which is
+     * exactly the "near-white unlit facade wall" a reviewer flagged: not a
+     * lighting fault at all, an albedo that could exceed 1.0 in the highlight
+     * of a variation term. Weathering only ever takes value AWAY from stone;
+     * the multiplier is now strictly <= 1.
+     */
+    vec3 stone = uStone * (0.88 + tint * 0.12);
     float grain = fbm2(vec2(u * 3.0, v * 2.4));
-    f.albedo = stone * (0.78 + grain * 0.34);
+    f.albedo = stone * (0.70 + grain * 0.30);
     // Weathered limestone, not a polished slab.
     f.rough = 0.84;
 
@@ -781,9 +850,16 @@ Fac facadeGrammar() {
   /* ---------------- 6: plain rendered wall ---------------- */
   if (style < 6.5) {
     float grain = fbm2(vec2(u * 1.6, v * 1.4));
-    f.albedo = mix(uStucco, uConcrete, tint) * (0.55 + grain * 0.55);
+    // Same ceiling as the government stone above: a variation term must not be
+    // able to push a wall past the albedo it was authored at (0.55 + 0.55
+    // topped out at 1.10x). A blank party wall is the largest unbroken area in
+    // any street frame and the first thing to blow out.
+    f.albedo = mix(uStucco, uConcrete, tint) * (0.52 + grain * 0.46);
     f.rough = 0.90;
     f.albedo *= 1.0 - 0.22 * smoothstep(2.0, 0.0, v);
+    // Even a blank wall is stained: rain runs off the parapet and streaks it.
+    float streak = smoothstep(0.40, 0.95, fbm2(vec2(u * 3.6, v * 0.11)));
+    f.albedo *= 1.0 - 0.26 * streak;
     return f;
   }
 
@@ -920,8 +996,9 @@ Fac facadeGrammar() {
       // Fascia band over the shopfront.
       float fascia = step(groundH - 1.20, v) * step(v, groundH - 0.30);
       f.albedo = mix(f.albedo, mix(uRust, uNeon, sh) * 0.24, fascia);
-      float letters = step(0.55, fbm2(vec2(u * 7.0, v * 3.0)));
-      f.emissive += sign * fascia * letters * 0.10 * uLitGain;
+      float letters = fasciaLetters(u - shopIdx * bayW * 1.6,
+                                    (v - (groundH - 1.20)) / 0.90, sh * 53.0 + seed);
+      f.emissive += sign * fascia * letters * 0.22 * uLitGain;
       f.albedo = mix(f.albedo, uStone * 0.24, step(v, 0.8));
     }
     return f;
@@ -1001,6 +1078,26 @@ Surf surfaceShade() {
     // carriageway collapsed into one reflectivity.
     s.rough = 0.78 - grain * 0.12;
 
+    /*
+     * THE CROSS-SECTION ONLY EXISTS ON A RIBBON.
+     *
+     * SurfaceBuilder.ribbon writes uv.x as metres ACROSS the carriageway
+     * from its left edge, which is what makes (uvm.x - halfW) a signed
+     * distance from the centreline. poly and rect — every junction patch,
+     * every square, every grid crossroads apron — write WORLD METRES instead,
+     * so across came out as an absolute world coordinate in the hundreds and
+     * everything downstream of it was garbage: camber saturated, so every
+     * patch was pinned at pooling 0.55 and permanently soaked while the road
+     * around it cambered normally, and gutter flipped to 1 wherever world x
+     * happened to pass halfW, laying a 1.1 m stripe of standing water across
+     * the city at an arbitrary line. That is the HARD TWO-TONE SEAM ACROSS THE
+     * ROAD a reviewer flagged: dark hard-edged octagons of wrong wetness at
+     * every junction, which only became visible at all once poly stopped
+     * being back-face culled.
+     *
+     * lanes is the discriminator and costs nothing: every ribbon carries the
+     * real lane count, every patch is emitted with b = 0.
+     */
     float across = uvm.x - halfW;         // signed metres from centreline
     float along = uvm.y;
     float laneW = 3.6;
@@ -1031,31 +1128,47 @@ Surf surfaceShade() {
       s.rough = mix(s.rough, 0.62, paint);
     }
 
-    // Tyre polish in the wheel tracks — bitumen worn smooth by rubber.
-    float track = 0.0;
-    for (int i = 0; i < 3; i++) {
-      float o = (float(i) - 1.0) * laneW + 0.9;
-      track = max(track, band(abs(across) - abs(o), 0.55));
-    }
-    s.rough -= track * 0.14;
+    if (nl > 0) {
+      // Tyre polish in the wheel tracks — bitumen worn smooth by rubber.
+      float track = 0.0;
+      for (int i = 0; i < 3; i++) {
+        float o = (float(i) - 1.0) * laneW + 0.9;
+        track = max(track, band(abs(across) - abs(o), 0.55));
+      }
+      s.rough -= track * 0.14;
 
-    /*
-     * A DRY CROWN WITH WET GUTTERS. A carriageway is cambered: it sheds water
-     * to its edges, so after rain the centre is merely damp and the gutter line
-     * holds standing water. Flooding the whole plane uniformly — which is what
-     * a global wetness constant does — gives a lake, and a lake has none of the
-     * structure that makes the reference's road read as a wet ROAD.
-     */
-    float camber = abs(across) / max(halfW, 1.0);
-    pooling = smoothstep(0.55, 1.0, camber) * 0.55;
-    // The gutter itself: a 1.1 m strip of standing water against the kerb.
-    float gutter = smoothstep(halfW, halfW - 1.1, abs(across));
-    pooling += gutter * 0.5;
-    // ...and the crown sheds, so it is drier than the base mask says.
-    pooling -= (1.0 - smoothstep(0.0, 0.42, camber)) * 0.30;
-    s.albedo *= 1.0 - gutter * 0.22;
-    // Standing water in the wheel tracks: ruts hold it.
-    pooling += track * 0.16;
+      /*
+       * A DRY CROWN WITH WET GUTTERS. A carriageway is cambered: it sheds
+       * water to its edges, so after rain the centre is merely damp and the
+       * gutter line holds standing water. Flooding the whole plane uniformly —
+       * which is what a global wetness constant does — gives a lake, and a
+       * lake has none of the structure that makes the reference's road read as
+       * a wet ROAD.
+       */
+      float camber = abs(across) / max(halfW, 1.0);
+      pooling = smoothstep(0.55, 1.0, camber) * 0.55;
+      // The gutter itself: a 1.1 m strip of standing water against the kerb.
+      float gutter = smoothstep(halfW, halfW - 1.1, abs(across));
+      pooling += gutter * 0.5;
+      // ...and the crown sheds, so it is drier than the base mask says.
+      pooling -= (1.0 - smoothstep(0.0, 0.42, camber)) * 0.30;
+      s.albedo *= 1.0 - gutter * 0.22;
+      // Standing water in the wheel tracks: ruts hold it.
+      pooling += track * 0.16;
+    } else {
+      /*
+       * A JUNCTION APRON is a flat plate with no camber, no kerb line and no
+       * lane discipline: traffic turns across the whole of it, so it polishes
+       * evenly and it drains to whatever the low-frequency mask says. Slightly
+       * drier than the road's gutters and slightly wetter than its crown, so
+       * it reads as continuous with both instead of as a patch laid on top.
+       */
+      pooling = -0.06;
+      s.rough -= 0.04;
+      // Turning traffic scrubs the aggregate off, so an apron is a shade paler
+      // and a shade smoother than the carriageway that feeds it.
+      s.albedo *= 1.04;
+    }
   } else if (kind < 1.5) {
     /* ---- pavement: cast slabs with joints ---- */
     vec2 g = wp / vec2(0.62, 0.62);
@@ -1298,8 +1411,62 @@ Surf surfaceShade() {
   // Keyed above 0.6 so dusk and the storm preset, which still have a sky,
   // are untouched.
   float nightGain = 1.0 + 2.6 * smoothstep(0.60, 1.0, uNight);
-  s.env = 1.0 + wetAmt * mix(0.55, 1.0, fres) * (0.55 + 2.40 * standing)
+  /*
+   * THE GAIN WAS CALIBRATED AGAINST A ROAD THAT WAS NOT ON SCREEN.
+   *
+   * Every previous measurement of "the ground" on this project — including the
+   * one that took the ground band from p50 151 to 34 last session — was taken
+   * while SurfaceBuilder.ribbon was emitting its triangles inside out. All
+   * three city materials are FrontSide, so not one carriageway, crossing, stop
+   * bar or tram bed was drawn: what those probes metered was the near-black
+   * bedrock underlay showing through the hole. The wet response was therefore
+   * tuned to make an underlay look like wet asphalt, and the moment the winding
+   * was fixed and the real road appeared, the same numbers put the carriageway
+   * at near p50 65 / mid p50 112 with the whole frame at p50 65 — i.e. the road
+   * was no darker than the average of the picture, in a reference frame whose
+   * road is the darkest large mass in it.
+   *
+   * (0.55 + 2.40 * standing) peaks at a 3.95x multiplier on probe radiance.
+   * A PERFECT MIRROR IS 1.0x. The three-quarters of that which is over unity
+   * was invisible while it was multiplying a surface nobody could see. Peak is
+   * now 1.30 — over unity only because the probe is prefiltered and loses the
+   * sun core that a real specular streak concentrates.
+   *
+   * MEASURED at 19.4 on three imported carriageways, near band (screen y
+   * 0.72-0.98) / mid band (0.55-0.72):
+   *   3.95x peak:  magheru 46/94   romana 65/112  victoriei 39/57
+   *   1.30x peak:  see the note in the session report.
+   * The night gain is untouched: after dark the reflection genuinely is the
+   * only thing on the tarmac.
+   */
+  s.env = 1.0 + wetAmt * mix(0.55, 1.0, fres) * (0.30 + 0.85 * standing)
                 * nightGain * nearFade * farFade;
+
+  /*
+   * ROUGHNESS HAS A FLOOR SET BY THE PIXEL FOOTPRINT.
+   *
+   * A ground plane seen at a grazing angle covers metres of world per pixel,
+   * and a 0.10-roughness mirror at that footprint asks the prefiltered probe
+   * to resolve a solid angle far smaller than one texel of it. A sub-pixel
+   * puddle is not a mirror, it is roughness, so the floor is tied to the same
+   * world-space texel measure the relief fade above uses: under a couple of
+   * centimetres per pixel nothing changes and the foreground keeps its real
+   * reflections; past that the mirror widens into a blur, which is what a
+   * distant wet road actually looks like.
+   *
+   * HONEST NOTE ON WHAT THIS DID AND DID NOT FIX. It was added chasing the
+   * comb of one-pixel vertical white strokes that fills the receding ground in
+   * every on-foot capture. It did NOT remove it. That artefact survives with
+   * this floor in place, and it disappears entirely when uEnvGain is locked to
+   * 0 — so it is a reflection, but a SCREEN-SPACE one: the post chain runs a
+   * WetReflectionEffect (src/render/postfx.ts, pass 2, effect 0) whose smear
+   * is vertical in screen space, which is exactly the shape of the artefact
+   * and is not something this material can produce. Reported to the render
+   * owner. This floor is kept because it is correct on its own terms and
+   * costs one fwidth, not because it was shown to change the frame.
+   */
+  float texel = max(fwidth(vWPosS.x), fwidth(vWPosS.z));
+  s.rough = max(s.rough, smoothstep(0.02, 0.40, texel) * 0.42);
 
   // The sun's own reflection stays analytic: a PMREM cube at 128 px cannot
   // hold a sun disc, and this specular streak running down the carriageway

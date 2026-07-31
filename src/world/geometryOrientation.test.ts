@@ -382,25 +382,38 @@ describe('PropBuilder primitives face the way their normals claim', () => {
 
 
   /**
-   * QUARANTINE — `panel` and `disc` emit BOTH faces, and both of them carry
-   * the normal of the other one.
+   * FIXED (interbelic / shopfront pass) — `panel`, `disc` AND `ground`.
    *
-   * The front quad is wound (a, b, c, d) with `right = up x forward`, whose
-   * geometric normal is -forward, while every vertex is given +forward; the
-   * back quad is the mirror of both. So neither face is culled — a sign is
-   * visible from either side, which is why this never looked broken — but
-   * every one of them is SHADED BY THE LIGHT BEHIND IT. Under a three-degree
-   * sun that is the difference between a lit shopfront sign and a black one,
-   * across every fascia, poster, road sign, number plate and lamp lens in the
-   * city.
+   * `panel` and `disc` emitted BOTH faces, and each face carried the normal of
+   * the other one: the front quad was wound with `right = -(up x forward)`, so
+   * its geometric normal was -forward while every vertex was given +forward.
+   * Neither face was ever culled — a sign stayed visible from either side,
+   * which is why it never looked broken — but every one of them was SHADED BY
+   * THE LIGHT BEHIND IT. Under a three-degree sun that is the difference
+   * between a lit shopfront fascia and a black one, across every sign, poster,
+   * road sign, number plate and lamp lens in the city.
    *
-   * FIX (src/world/props/kit.ts): swap the two normals, or reverse both index
-   * orders. Then move these into the list above.
+   * `ground` was NOT in the old quarantine and nobody had ever measured it. It
+   * emitted `(0, 2, 1)(0, 3, 2)` over a clockwise-from-above ring, i.e. the
+   * reverse of the house convention, so it faced DOWN with every vertex normal
+   * claiming (0, 1, 0) — and unlike the two-sided cases it really was culled.
+   * Every scattered paper, leaf patch, oil stain and painted ground mark the
+   * props kit has ever emitted was invisible. It is asserted alongside the
+   * others now so the gap cannot reopen.
    */
-  test('STILL BROKEN: PropBuilder.panel and .disc are lit from behind', () => {
-    const panel = windingDisagreements(mk((b) => b.panel(0, 1, 0, 2, 1, 0, 1, opts)));
-    expect(`panel: ${panel.bad}/${panel.tris}`).toBe(`panel: ${panel.tris}/${panel.tris}`);
-    const disc = windingDisagreements(mk((b) => b.disc(0, 1, 0, 0.5, 0, 1, 12, opts)));
-    expect(`disc: ${disc.bad}/${disc.tris}`).toBe(`disc: ${disc.tris}/${disc.tris}`);
-  });
+  const flat: Array<[string, () => THREE.BufferGeometry]> = [
+    ['panel', () => mk((b) => b.panel(0, 1, 0, 2, 1, 0, 1, opts))],
+    ['panel (one-sided)', () => mk((b) => b.panel(0, 1, 0, 2, 1, 0.6, 0.8, opts, false))],
+    ['disc', () => mk((b) => b.disc(0, 1, 0, 0.5, 0, 1, 12, opts))],
+    ['ground', () => mk((b) => b.ground(0, 0, 0, 2, 2, 0.3, opts))],
+    ['ground (unrotated)', () => mk((b) => b.ground(0, 0, 0, 3, 1, 0, opts))],
+  ];
+  for (const [name, build] of flat) {
+    test(`${name} is lit from the side it faces`, () => {
+      const r = windingDisagreements(build());
+      expect(r.tris).toBeGreaterThan(0);
+      expect(`PropBuilder.${name}: ${r.bad}/${r.tris} inside out`)
+        .toBe(`PropBuilder.${name}: 0/${r.tris} inside out`);
+    });
+  }
 });

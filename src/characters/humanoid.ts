@@ -38,7 +38,7 @@ import { Ragdoll } from './ik';
 import { prof } from './profile';
 import {
   BI, BONE_COUNT, DIGIT_NAMES, NOMINAL_HEIGHT, bodyMetrics, buildRig,
-  type BodyMetrics, type Rig,
+  type BodyMetrics, type Rig, type RigPoints,
 } from './rig';
 import {
   SLOT, buildAppearanceTextures, slotU,
@@ -827,7 +827,7 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
   }
 
   /* ---------------- accessories ---------------- */
-  buildAccessory(b, a, m, rng);
+  buildAccessory(b, a, m, rig.points, rng);
 
   return b.build();
 }
@@ -1104,7 +1104,9 @@ function buildHeadwear(
 
 /* ---------------- accessories ---------------- */
 
-function buildAccessory(b: SkinBuilder, a: Appearance, m: BodyMetrics, rng: Rng): void {
+function buildAccessory(
+  b: SkinBuilder, a: Appearance, m: BodyMetrics, points: RigPoints, rng: Rng,
+): void {
   const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
   const bulk = OUTER_BULK[a.outer] ?? 0;
   const chestF = m.chestD + bulk + 0.012;
@@ -1124,79 +1126,82 @@ function buildAccessory(b: SkinBuilder, a: Appearance, m: BodyMetrics, rng: Rng)
   };
 
   switch (a.accessory) {
-    case 'builderHarness': {
-      /* BRACES AND A BELT — not a sash.
+    case 'sitePass': {
+      /* A SITE PASS ON A CORD, AND A WRISTBAND. That is the whole purple.
        *
-       * This used to be two straps running from each shoulder DOWN ACROSS the
-       * body to the opposite hip. That is the geometry of a sash, and it is what
-       * the playtest called it: an X on the chest reads as ceremonial dress, and
-       * the V it makes above the waistband is the single loudest shape on the
-       * character. Work harness straps run STRAIGHT DOWN, shoulder to
-       * same-side hip, because their job is to carry weight into the belt and a
-       * diagonal cannot do that.
+       * What was here before was a full utility harness: braces over both
+       * shoulders front and back, a belt, a buckle plate and two hip loops, all
+       * in `accent` and all on a character whose accent is 0x7b3fd4. Measured
+       * as area it was roughly a fifth of his front silhouette, and because
+       * everything else he wears sits at 1-3% albedo it was also, by a wide
+       * margin, the brightest and most saturated object on him. The reference
+       * frame has no such thing: both men there are plain-clothed, and the only
+       * saturated purple in the image is a car panel and the light coming out
+       * of a building.
        *
-       * Straight braces plus a proper belt reads as a working builder from any
-       * angle, keeps every square centimetre of the purple, and stops competing
-       * with the torso's own silhouette. */
-      const beltY = waistY - 0.004;
-      /* WHERE THE SHOULDER ACTUALLY IS. Every anchor here used to be measured
-       * off `yokeY`, which is the ARMPIT — 140 mm below the top of the shoulder
-       * on this rig. The straps therefore started halfway down his back and the
-       * "shoulder loop" crossed his shoulder blade. Braces that do not pass over
-       * the shoulder cannot be read as braces at any distance. */
-      const shY = m.shoulderY + 0.006;
-      const shX = m.yokeW * 0.52;
-      /* AND HOW DEEP. A strap is only a strap if it is ON the cloth. The
-       * shoulder anchors were being placed at `chestF * 0.44` ≈ 70 mm, but the
-       * torso is ~135 mm deep at the shoulder once the jacket's bulk is on it,
-       * so the top half of every strap was buried inside the jacket and only
-       * surfaced further down where the body gets shallower. From behind that
-       * read as two short tabs floating in the middle of his back. */
-      /* The torso ring at the shoulder is a super-ellipse, not a cylinder, so
-       * its depth at the strap's x is only ~93% of the ring's own `rzF`. Sitting
-       * the anchors at the full depth stood them 10-12 mm off the cloth, and at
-       * arm's length two glowing bars floating clear of his back read as
-       * antennae rather than as braces. These land within a strap's thickness of
-       * the surface, and the tops finish just INSIDE the trapezius so the caps
-       * are hidden under the shoulder instead of poking over it. */
-      const shZ = (m.yokeD * 0.94 + bulk + 0.004) * 0.93;
+       * The story note asks for ONE exaggerated purple builder accessory. A
+       * pass on a cord is exactly that and reads harder for being small: it
+       * says he is a man who has to badge into places, which is the character,
+       * where a harness only said "hi-vis extra".
+       *
+       * The cord is a real loop — over the trapezius on both sides, down the
+       * front to the badge — so it survives the shoulders moving under it. */
+      const neckX = m.neckR * 1.02;
+      const badgeY = lerp(m.chestY, waistY, 0.22);
+      const chestZ = chestF - 0.004;
+      /* A CORD IS ONLY A CORD IF IT IS ON THE CLOTH. The torso is ~135 mm deep
+       * at the yoke once a jacket's bulk is on it, so anchoring the top of the
+       * strap anywhere near the midline buries the whole upper half inside the
+       * jacket and leaves two tabs floating above the badge — which is exactly
+       * what the first cut of this looked like. Every point below is measured
+       * off `yokeD`/`chestD` PLUS the garment bulk. */
+      /* THE DEPTHS ARE THE WHOLE JOB. `yokeD` is a HALF-DEPTH: the cloth at the
+       * shoulder sits at `yokeD + bulk` ≈ 137 mm from the midline, and the
+       * first cut of this anchored the cord at 62% of `yokeD` — 94 mm — which
+       * put its entire upper half inside the jacket and left two purple tabs
+       * apparently growing out of the badge. Every anchor below is the ring's
+       * own radius plus the garment bulk, trimmed by the few per cent the
+       * super-ellipse loses at the strap's x. */
+      const yokeR = m.yokeD + bulk;
+      const chestR = m.chestD + bulk;
+      const napeZ = -yokeR * 0.94;
+      const collarZ = yokeR * 0.96;
       for (const s of [1, -1] as const) {
-        const x = m.chestW * 0.46;
-        // front brace: over the collarbone, straight down to the belt
+        // over the trapezius, nape to collarbone
         b.slab(
-          V(s * shX, shY + 0.010, shZ * 0.94),
-          V(s * x, beltY + 0.030, m.waistD + bulk + 0.008),
-          0.020, 0.007, SLOT.ACCENT, BI.upperChest, 0.10, 0.5, FRONT, 4,
+          V(s * neckX, m.neckY - 0.016, napeZ),
+          V(s * (neckX + 0.014), m.shoulderY - 0.012, collarZ),
+          0.008, 0.004, SLOT.ACCENT, BI.upperChest, 0.06, 0.22, UPV, 3,
         );
-        // back brace: same line behind, converging slightly as real braces do
+        // down the chest — in two runs, because the torso is deepest at the
+        // sternum and a single straight chord sinks into it halfway down
         b.slab(
-          V(s * shX, shY + 0.010, -(shZ * 0.96)),
-          V(s * x * 0.58, beltY + 0.030, -(m.pelvisD + bulk + 0.004)),
-          0.019, 0.007, SLOT.ACCENT, BI.upperChest, 0.10, 0.5, FRONT, 4,
+          V(s * (neckX + 0.014), m.shoulderY - 0.012, collarZ),
+          V(s * 0.040, m.chestY + 0.010, chestR + 0.008),
+          0.008, 0.004, SLOT.ACCENT, BI.chest, 0.22, 0.38, FRONT, 3,
         );
-        // the loop over the trapezius that joins the two — a strap, not armour
         b.slab(
-          V(s * shX, shY + 0.014, shZ * 0.82),
-          V(s * shX, shY + 0.012, -(shZ * 0.86)),
-          0.020, 0.007, SLOT.ACCENT, BI.upperChest, 0.15, 0.2, UPV, 4,
+          V(s * 0.040, m.chestY + 0.010, chestR + 0.008),
+          V(s * 0.024, badgeY + 0.036, chestZ),
+          0.008, 0.004, SLOT.ACCENT, BI.chest, 0.38, 0.5, FRONT, 3,
         );
       }
-      // The belt itself: narrower than it was (its half-height is the `belt()`
-      // helper's 22 mm, so it was 44 mm of solid violet round the waist) and now
-      // sitting where a tool belt sits rather than riding the ribs.
-      belt(SLOT.ACCENT, beltY, 0.006, 0.62, 0.70, -1);
-      // buckle — a plate, wider than it is tall, so it reads as hardware
+      // The pass itself — a plate, portrait, worn slightly proud of the jacket.
       b.slab(
-        V(0, beltY, m.waistD + bulk + 0.004),
-        V(0, beltY, m.waistD + bulk + 0.020),
-        0.034, 0.019, SLOT.ACCENT, BI.hips, 0.2, 0.25, UPV, 5,
+        V(0, badgeY, chestZ + 0.002),
+        V(0, badgeY, chestZ + 0.009),
+        0.030, 0.040, SLOT.ACCENT, BI.chest, 0.42, 0.5, UPV, 6,
       );
-      // hip tool loops
-      for (const s of [1, -1] as const) {
-        b.slab(
-          V(s * (m.pelvisW + bulk + 0.002), beltY - 0.02, 0.01),
-          V(s * (m.pelvisW + bulk + 0.002), beltY - 0.09, 0.012),
-          0.024, 0.017, SLOT.ACCENT, BI.hips, 0.55, 0.66, FRONT, 4,
+      // Wristband on the off hand. Bound to the hand bone so it stays put.
+      {
+        const wrist = points.joint.handL;
+        const down = points.dir.handL;
+        b.tube(
+          [
+            { c: wrist.clone().addScaledVector(down, -0.014), dir: down, rx: m.wristR * 1.10, rzF: m.wristR * 0.94, n: 3.0, b0: BI.handL, w0: 1, v: 0.78 },
+            { c: wrist.clone().addScaledVector(down, 0.020), dir: down, rx: m.wristR * 1.10, rzF: m.wristR * 0.94, n: 3.0, b0: BI.handL, w0: 1, v: 0.86 },
+          ],
+          10, SLOT.ACCENT, {},
         );
       }
       break;
@@ -1278,7 +1283,9 @@ function buildAccessory(b: SkinBuilder, a: Appearance, m: BodyMetrics, rng: Rng)
 
   // A plain belt for trousers when nothing else covers the waist.
   if (
-    a.accessory !== 'toolBelt' && a.accessory !== 'builderHarness' && a.accessory !== 'hipBag' &&
+    // `sitePass` is no longer on the list: it carries nothing at the waist, so
+    // the trousers get their own plain belt back, in `detail` and not `accent`.
+    a.accessory !== 'toolBelt' && a.accessory !== 'hipBag' &&
     (OUTER_HEM[a.outer] ?? 0) < 0.2 && a.legs !== 'skirt' && a.legs !== 'longSkirt'
   ) {
     belt(SLOT.DETAIL, m.hipY + 0.020, 0.004, 0.3, 0.34, -1);
@@ -1425,7 +1432,13 @@ export class CharacterActor {
       HeroHead.debugHook(this.heroHead, swap);
     }
 
-    this.anim = new AnimationController(this.rig, opts.seed ?? 0);
+    /* PER-PERSON GAIT. The crowd gets the full spread — that is the whole
+     * point of it — but the hero is the one body the camera lives behind for
+     * hours, and a quirk you cannot un-see is a different thing on him than it
+     * is on a stranger crossing the road. He walks at 40% of the spread, which
+     * still separates him from the pedestrian beside him, and `gaitStyleFor`
+     * gates the limp on the same number so he never draws one. */
+    this.anim = new AnimationController(this.rig, opts.seed ?? 0, this.hero ? 0.4 : 1);
     // The hero's hands are on screen permanently; everyone else's are earned by
     // distance. See `Pose.limit`.
     this.anim.handDetail = this.hero;

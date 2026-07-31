@@ -1296,16 +1296,55 @@ function paintVertices(
       b += (beardCol[2] - b) * t * 0.94;
     }
 
-    // Cavity is a shading term, not albedo — but a shallow amount of it in the
-    // albedo keeps creases readable in flat ambient light.
-    const cavAlbedo = 1 - (1 - cav) * 0.35;
+    /* Cavity is a shading term, not albedo — but a shallow amount of it in the
+     * albedo keeps creases readable in flat ambient light.
+     *
+     * 0.35 was too much, because the shader applies the SAME `cav` again as a
+     * multiplier on both direct and indirect diffuse. A vertex at the 0.22
+     * floor was therefore losing 27% of its paint and then 78% of its light:
+     * 0.16 of what the flat cheek beside it returns, which is a black line, not
+     * a crease. The albedo share comes down to 0.20 and the shading share is
+     * softened in `skinMaterial.ts`; between them a deep crease now lands
+     * around 0.3 of its neighbour, which is what a nasolabial fold measures on
+     * the reference photograph. */
+    const cavAlbedo = 1 - (1 - cav) * 0.20;
     r *= cavAlbedo; g *= cavAlbedo; b *= cavAlbedo;
 
-    col[i * 3] = toLinear(Math.min(1, Math.max(0, r)));
-    col[i * 3 + 1] = toLinear(Math.min(1, Math.max(0, g)));
-    col[i * 3 + 2] = toLinear(Math.min(1, Math.max(0, b)));
+    /* ALBEDO FLOOR.
+     *
+     * Every term above this line is subtractive — scalp, stubble, orbital
+     * shadow, cavity, lips — and they compose multiplicatively, so a vertex
+     * that is scalp AND in a cavity AND orbital ends up at a product no single
+     * term intended. Sampled off the render, the darkest 5% of the head was
+     * painted below 0.010 linear, which is darker than the game's asphalt and
+     * cannot return light under any key; those vertices are what "near-black"
+     * actually is on a per-pixel basis.
+     *
+     * There is no real material on a human head below about 0.035 linear —
+     * that is jet-black hair, and this head has none. The floor is applied per
+     * channel in linear space AFTER all the painting, and it is a floor, not a
+     * lift: everything above it is untouched, so the modelling the terms above
+     * do is preserved exactly. It also enforces the project's first rule of
+     * art direction, that there is no black in this world. */
+    const lr = toLinear(Math.min(1, Math.max(0, r)));
+    const lg = toLinear(Math.min(1, Math.max(0, g)));
+    const lb = toLinear(Math.min(1, Math.max(0, b)));
+    col[i * 3] = Math.max(ALBEDO_FLOOR[0], lr);
+    col[i * 3 + 1] = Math.max(ALBEDO_FLOOR[1], lg);
+    col[i * 3 + 2] = Math.max(ALBEDO_FLOOR[2], lb);
   }
 }
+
+/**
+ * Per-channel linear-reflectance floor for authored head albedo.
+ *
+ * Warm, not neutral: a flat grey floor turns the beard and the scalp into
+ * shadow-coloured felt. These are the linear values of a very dark warm brown
+ * (about 0x2a231b in sRGB) — deliberately set just BELOW the darkest colour
+ * this file paints on purpose (the scalp, at 0.024 linear), so the floor never
+ * overrides an authored decision and only catches the products.
+ */
+export const ALBEDO_FLOOR: readonly [number, number, number] = [0.0225, 0.0160, 0.0105];
 
 function curvSign(k: number): number {
   return k > 0 ? 1 : -1;

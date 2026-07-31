@@ -248,9 +248,12 @@ export function paintFace(
     g.arc(ex + s * rx * 0.03 - irisR * 0.3, ey - irisR * 0.32, irisR * 0.24, 0, 7);
     g.fill();
 
-    // upper lid line + lash
-    g.strokeStyle = rgb(deep, 0.85);
-    g.lineWidth = Math.max(1, S * (0.004 + f.makeup * 0.005));
+    // Upper lid line + lash. Also thickened: at 0.004 of the square this was a
+    // sub-pixel stroke by the time the head reached the screen, so the eye lost
+    // its top edge and the sclera bled into the lid — a pale oval with two
+    // slightly darker smudges, which is the "blank oval" reading.
+    g.strokeStyle = rgb(deep, 0.95);
+    g.lineWidth = Math.max(1.5, S * (0.0065 + f.makeup * 0.005));
     g.beginPath();
     g.ellipse(ex, ey, rx * 1.02, ry * 1.02, 0, Math.PI * 1.02, Math.PI * 1.98);
     g.stroke();
@@ -269,18 +272,38 @@ export function paintFace(
     }
   }
 
-  /* ---- brows ---- */
-  const browCol = mixHex(hair, 0x1a1008, 0.35);
+  /* ---- brows ----
+   *
+   * THE CROWD'S FACES READ AS BLANK OVALS AT CONVERSATION DISTANCE, and the
+   * brows are most of why. Everything else on this face — sockets, lids, lips,
+   * nostrils — is drawn dark against skin; the brows were drawn in a colour
+   * mixed only 35% toward black from the character's HAIR, at 0.55-0.95 alpha,
+   * in a band 1-2 px tall on a 128 px face square. A blond or grey-haired ped
+   * therefore had brows a shade or two off their own forehead, which at the
+   * ~40 screen pixels a head covers at three metres is nothing at all.
+   *
+   * Brows are the highest-contrast feature on a human face after the eyes, and
+   * they are the one that survives longest as a face shrinks — which is exactly
+   * the range this atlas exists to serve. So: mixed 62% to a near-black brown
+   * rather than 35%, drawn opaque, and given real height. `browThick` still
+   * varies them; what is gone is the option of a brow you cannot see. */
+  const browCol = mixHex(hair, 0x14100a, 0.62);
   for (const s of [-1, 1]) {
     const ex = cx + s * S * eyeDx;
     const by = y0 + S * yBrow;
-    const bw = S * eyeRx * (1.25 + f.browThick * 0.25);
-    const bh = S * (0.008 + f.browThick * 0.011);
-    g.fillStyle = rgb(browCol, 0.55 + f.brow * 0.4);
+    const bw = S * eyeRx * (1.34 + f.browThick * 0.28);
+    const bh = S * (0.013 + f.browThick * 0.014);
+    g.fillStyle = rgb(browCol, 0.86 + f.brow * 0.14);
     g.beginPath();
     g.moveTo(ex - s * bw, by + bh * 0.9);
     g.quadraticCurveTo(ex, by - bh * (0.9 + f.tired * 0.5), ex + s * bw, by + bh * 0.2);
     g.quadraticCurveTo(ex, by + bh * (1.4 - f.tired * 0.3), ex - s * bw, by + bh * 0.9);
+    g.fill();
+    // A second, softer pass under the head of the brow: real brows are densest
+    // at the inner end, and one flat quad reads as a sticker.
+    g.fillStyle = rgb(browCol, 0.5);
+    g.beginPath();
+    g.ellipse(ex - s * bw * 0.45, by + bh * 0.35, bw * 0.42, bh * 0.75, 0, 0, 7);
     g.fill();
   }
 

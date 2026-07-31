@@ -81,6 +81,28 @@ export interface Landmark {
   interior?: Box3;
 }
 
+/**
+ * ONE BUILDING FOOTPRINT — the ground rectangle a mass stands on.
+ *
+ * The city already hashes every placed building for its `isBlocked` query;
+ * this is that same table, read-only, in the terms a map needs. Without it a
+ * city map can only draw streets over a district wash, which is why the map
+ * read as flat: a real GTA map is mostly BLOCKS, and the streets are the gaps
+ * between them.
+ */
+export interface Footprint {
+  /** Centre. */
+  x: number;
+  z: number;
+  /** Half-extents along the footprint's OWN axes (not world-axis-aligned). */
+  hx: number;
+  hz: number;
+  /** Rotation about Y, radians. 0 for the grid-aligned plots. */
+  rot: number;
+  /** Metres above ground — lets a map shade tall masses differently. */
+  height: number;
+}
+
 export interface CityService {
   readonly roadNodes: ReadonlyArray<RoadNode>;
   readonly landmarks: ReadonlyMap<string, Landmark>;
@@ -91,6 +113,16 @@ export interface CityService {
   nearestNode(p: Vector3): number;
   /** A* over the road graph. Returns node ids, empty when unreachable. */
   findPath(fromNode: number, toNode: number): number[];
+  /**
+   * Building footprints overlapping the world AABB, written into `out`, which
+   * is grown and REUSED — entries past the return value are stale, so read
+   * exactly `n` of them. Returns how many are live.
+   *
+   * Backed by the same coarse hash `spatial.isBlocked` walks, so a screen-sized
+   * window is cheap and the whole city is linear in buildings. Meant for a map
+   * repaint or a bake, NOT for a per-frame call.
+   */
+  blocksIn(x0: number, z0: number, x1: number, z1: number, out: Footprint[]): number;
   readonly spatial: SpatialQuery;
 }
 
@@ -209,6 +241,23 @@ export interface CameraService {
 /* Police / Political Instability                                      */
 /* ------------------------------------------------------------------ */
 
+/**
+ * The Ministry's own belief about where you are, published by the pursuit
+ * system once a tick. Every field is a fact `src/ai/police.ts` already has and
+ * nobody else can compute: line of sight is resolved against real colliders,
+ * and the cordon widens from the last sighting by how far you could have got.
+ */
+export interface SearchReport {
+  /** Units actively pursuing. */
+  pursuers: number;
+  /** Where they believe you are. Null when nobody is looking. */
+  lastKnown: Vector3 | null;
+  /** Metres — how wide the cordon around `lastKnown` is right now. 0 when idle. */
+  radius: number;
+  /** True while a unit genuinely has eyes on you. */
+  contact: boolean;
+}
+
 export interface WantedService {
   /** 0..5 "Crisis Stars". */
   readonly stars: number;
@@ -219,11 +268,36 @@ export interface WantedService {
   /** Seconds until heat begins to decay while hidden. */
   readonly cooldownRemaining: number;
   readonly pursuerCount: number;
+  /**
+   * Where the Ministry believes you are — the pursuit system's last sighting,
+   * dead-reckoned for a moment after it loses you. Null when nobody is looking.
+   * Live vector owned by this service: read it, never retain or mutate it.
+   */
+  readonly lastKnown: Vector3 | null;
+  /** Metres. Radius of the search around `lastKnown`; 0 when nobody is looking. */
+  readonly searchRadius: number;
+  /** True while a Ministry unit actually has eyes on you, not merely near you. */
+  readonly inContact: boolean;
+  /**
+   * PURSUIT SYSTEM ONLY. `src/ai/police.ts` owns pursuit and sight; the star
+   * machine owns heat and decay. This is how the first tells the second what it
+   * knows, and it replaces the reflective write into a private `_pursuers`
+   * field that stood in for it while the contract was setter-less.
+   */
+  reportSearch(r: SearchReport): void;
 }
 
 /* ------------------------------------------------------------------ */
 /* Missions / activities / progression                                 */
 /* ------------------------------------------------------------------ */
+
+/** An act you can walk up to and start right now. */
+export interface MissionOffer {
+  id: string;
+  title: string;
+  /** Where the mission-giver marker stands, on the ground. */
+  position: Vector3;
+}
 
 export interface MissionService {
   readonly currentId: string | null;
@@ -231,6 +305,13 @@ export interface MissionService {
   start(id: string): void;
   abandon(): void;
   readonly completed: ReadonlySet<string>;
+  /**
+   * The acts on offer, with the world position of their giver — so a map can
+   * show "go here to start Act II" and not only the current objective. Empty
+   * while an act is running and once the campaign is finished. Positions are
+   * live vectors owned by the mission system; read, do not retain.
+   */
+  readonly offered: ReadonlyArray<MissionOffer>;
   /**
    * Put the campaign back where a save left it. `completed` replaces the whole
    * set (it is authoritative, not additive) and `currentId` re-enters that act
@@ -450,10 +531,19 @@ export interface SaveService {
 
 export interface HudService {
   setVisible(v: boolean): void;
+  /** Whether the HUD is on screen. The map mirrors it, so it has to be askable. */
+  readonly visible: boolean;
   toast(text: string, kind?: 'info' | 'good' | 'bad', ms?: number): void;
   subtitle(speaker: string, text: string, ms?: number): void;
   missionCard(title: string, subtitle: string): void;
   setWaypoint(p: Vector3 | null): void;
+  /**
+   * The live waypoint, or null. The campaign, side activities and the player's
+   * own map pin all write through `setWaypoint`; this is the single place to
+   * read what they agreed on. Live vector owned by the HUD: read, do not
+   * retain or mutate — call `setWaypoint` to change it.
+   */
+  readonly waypoint: Vector3 | null;
 }
 
 export interface AudioService {

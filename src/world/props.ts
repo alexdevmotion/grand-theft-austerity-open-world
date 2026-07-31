@@ -39,7 +39,7 @@ import { Rng } from '../core/rng';
 import { WorldScale } from '../artDirection';
 import { PAL } from '../render/materials';
 import { Services, type CityService, type DistrictKind } from '../core/services';
-import { QUALITY, detectQuality, type Quality } from '../render/renderer';
+import { QUALITY, detectQuality, onQualityChange, type Quality } from '../render/renderer';
 
 import {
   HALF,
@@ -169,6 +169,14 @@ export class PropsSystem implements System {
     // costs 480k and is visually identical, because a prop shadow beyond about
     // 40 m is a smudge the eye never resolves.
     this.shadowCut = q === 'low' ? 0 : q === 'medium' ? 34 : q === 'high' ? 46 : 60;
+    // Snapshotted at init before this: dropping to `low` from the menu left
+    // every prop cut-off and the whole shadow radius at ultra values, so the
+    // tier the player picked bought them nothing here.
+    onQualityChange('props', ['entityDrawDistance'], (nq, s) => {
+      this.nearCut = Math.max(120, s.entityDrawDistance * 0.75);
+      this.farCut = Math.min(1100, Math.max(420, s.entityDrawDistance * 2.4));
+      this.shadowCut = nq === 'low' ? 0 : nq === 'medium' ? 34 : nq === 'high' ? 46 : 60;
+    });
 
     this.mats = createPropMaterials();
     this.lamps = new LampLights(5, this.root);

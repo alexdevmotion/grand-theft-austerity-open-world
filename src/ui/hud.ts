@@ -43,7 +43,7 @@ export class HudSystem implements System, HudService {
   private radioEl!: HTMLDivElement;
   private statsEl!: HTMLDivElement;
   private ctx!: GameContext;
-  private waypoint: THREE.Vector3 | null = null;
+  private _waypoint: THREE.Vector3 | null = null;
 
   private objTitle = '';
   private objHint = '';
@@ -104,11 +104,16 @@ export class HudSystem implements System, HudService {
     if (ctx.time.paused) this.setVisible(false);
   }
 
-  private visible = true;
+  private _visible = true;
 
   setVisible(v: boolean): void {
-    this.visible = v;
+    this._visible = v;
     this.root.style.display = v ? '' : 'none';
+  }
+
+  /** Readable half of `setVisible` — the map hides itself in lockstep with us. */
+  get visible(): boolean {
+    return this._visible;
   }
 
   /* ---------------------------------------------------------------- */
@@ -144,8 +149,19 @@ export class HudSystem implements System, HudService {
   }
 
   setWaypoint(p: THREE.Vector3 | null): void {
-    this.waypoint = p ? p.clone() : null;
+    this._waypoint = p ? p.clone() : null;
     if (!p && this.wpEl) this.wpEl.style.display = 'none';
+  }
+
+  /**
+   * The live waypoint. The HUD is where the campaign, the side activities and
+   * the player's own map pin all converge, so it is the only honest place to
+   * ask what the waypoint IS — and without this getter the map had to wrap
+   * `setWaypoint` at runtime to find out. Returns the stored vector, not a
+   * copy: this is read once a frame by the map and must not allocate.
+   */
+  get waypoint(): THREE.Vector3 | null {
+    return this._waypoint;
   }
 
   private radioTimer = 0;
@@ -164,7 +180,7 @@ export class HudSystem implements System, HudService {
   update(dt: number): void {
     // The HUD has no business on screen over a menu, and every menu in the game
     // stops the world to show itself. One flag, no cross-system reference.
-    const hidden = this.ctx.time.paused || !this.visible;
+    const hidden = this.ctx.time.paused || !this._visible;
     this.root.style.display = hidden ? 'none' : '';
     if (hidden) return;
 
@@ -239,7 +255,7 @@ export class HudSystem implements System, HudService {
    * that matters while you are driving.
    */
   private drawWaypoint(playerPos: THREE.Vector3 | null): void {
-    const wp = this.waypoint;
+    const wp = this._waypoint;
     if (!wp || !playerPos) {
       this.wpEl.style.display = 'none';
       return;

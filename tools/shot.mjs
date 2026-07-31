@@ -33,9 +33,20 @@ const ONLY = arg('shots', '').split(',').filter(Boolean);
 
 mkdirSync(OUT, { recursive: true });
 
+/**
+ * Every browser call goes through `tools/gta-browser`, never `agent-browser`
+ * directly.
+ *
+ * This used to shell straight to `agent-browser`, which meant the screenshot
+ * harness was a browser holder that never queued for the lock — it opened its
+ * own Chrome alongside however many agents were already running, and was a live
+ * contention source that skewed every GPU measurement taken while it ran.
+ */
+const WRAPPER = new URL('./gta-browser', import.meta.url).pathname;
+
 const ab = (...args) => {
   try {
-    return execFileSync('agent-browser', ['--session', SESSION, ...args], {
+    return execFileSync(WRAPPER, [SESSION, ...args], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 120_000,

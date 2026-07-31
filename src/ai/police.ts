@@ -94,6 +94,13 @@ const CHATTER: Record<number, string[]> = {
 };
 
 /* ------------------------------------------------------------------ */
+/* How wide the Ministry's search is — see `reportSearch`.             */
+/* ------------------------------------------------------------------ */
+
+/** Metres per second the reachable set grows once contact is broken. */
+const SEARCH_SPREAD = 13;
+/** Past this the search has failed; a bigger circle tells the player nothing. */
+const SEARCH_MAX = 520;
 
 const _v = new THREE.Vector3();
 const _dir = new THREE.Vector3();
@@ -134,8 +141,10 @@ export class PoliceSystem implements System {
     lostFor: 999,
   };
   private quarryInit = false;
+  /** Stars the quarry was last updated at — catches the 0 -> wanted edge. */
+  private quarryStars = 0;
 
-  /** Authoritative pursuer count, mirrored into WantedService where possible. */
+  /** Authoritative pursuer count, published via `WantedService.reportSearch`. */
   private _pursuers = 0;
 
   get pursuerCount(): number {
@@ -176,6 +185,19 @@ export class PoliceSystem implements System {
         visible: this.quarry.visible,
         lostFor: +this.quarry.lostFor.toFixed(1),
         lastKnown: [this.quarry.lastKnown.x, this.quarry.lastKnown.z].map((n) => +n.toFixed(0)),
+        // What we actually published to WantedService this tick — the map and
+        // the minimap both draw from there, so this is the number to compare
+        // a screenshot against.
+        published: (() => {
+          const w = this.wanted;
+          const lk = w?.lastKnown ?? null;
+          return {
+            lastKnown: lk ? [+lk.x.toFixed(0), +lk.z.toFixed(0)] : null,
+            searchRadius: +(w?.searchRadius ?? 0).toFixed(0),
+            contact: w?.inContact ?? false,
+            pursuers: w?.pursuerCount ?? 0,
+          };
+        })(),
       }),
       standDown: () => this.standDown(),
       /** Convenience for chase testing — drives the star machine directly. */
@@ -215,7 +237,7 @@ export class PoliceSystem implements System {
 
     for (const u of this.units) u.update(dt, this.quarry, this.city, this.field, this.stars);
 
-    this.reportPursuers();
+    this.reportSearch();
     this.pushPanic(dt);
     this.chatter(dt);
   }
@@ -239,8 +261,31 @@ export class PoliceSystem implements System {
     if (!this.quarryInit) {
       q.position.copy(p);
       q.lastKnown.copy(p);
+      q.lostFor = 0;
       this.quarryInit = true;
     }
+
+    /*
+     * A CHASE STARTS FROM A SIGHTING, NOT FROM WHENEVER WE LAST TICKED.
+     *
+     * `lostFor` is only zeroed by the zero-star branch below, so if the world
+     * was paused (the title screen holds it for as long as the menu is up) or
+     * the pursuit system had simply never run with a player present, the first
+     * star inherits a `lostFor` of 999 seconds. That used to be harmless —
+     * only the helicopter's lag and the radio chatter read it. It is not
+     * harmless now that `reportSearch` turns it into the cordon the map draws:
+     * the very first star would open with a search circle covering the whole
+     * of Bucharest.
+     *
+     * The star exists because the Ministry saw you do something. Seed the
+     * belief from that: they know where you are, right now.
+     */
+    if (this.stars > 0 && this.quarryStars === 0) {
+      q.lastKnown.copy(p);
+      q.lostFor = 0;
+      q.visible = true;
+    }
+    this.quarryStars = this.stars;
     _prev.copy(q.position);
     q.position.copy(p);
     _v.subVectors(q.position, _prev).divideScalar(Math.max(1e-4, dt));
@@ -640,26 +685,42 @@ export class PoliceSystem implements System {
   private panicTick = 0;
 
   /**
-   * Mirror our authoritative pursuer count into the wanted service.
+   * PUBLISH WHAT THE MINISTRY ACTUALLY KNOWS.
    *
-   * `WantedService.pursuerCount` is read-only in the contract and the wanted
-   * system has no way to learn about units it does not own, so this bridges the
-   * two without editing anyone else's file. See the report: the clean fix is a
-   * `setPursuerCount(n)` (or a police service key) on the contract.
+   * Pursuer count, the last sighting and how wide the cordon has grown all live
+   * here — sight lines are resolved against real colliders in `updateQuarry`,
+   * and nothing outside this file can recompute them. `WantedService.reportSearch`
+   * is the seam; this used to be a reflective write into the wanted system's
+   * private `_pursuers` because the contract was read-only, and the map had to
+   * INFER the search circle from pursuer-count transitions, which made it
+   * plausible fiction rather than the Ministry's belief.
+   *
+   * THE RADIUS IS A REACHABLE SET, not a decoration. With eyes on you it is the
+   * sighting range of the units that can see you — they know where you are, the
+   * circle is tight and centred on you. Once contact breaks it grows from the
+   * last sighting at `SEARCH_SPREAD` m/s, which is roughly how fast a car can
+   * put distance between itself and a cordon, so the ring on the map is the
+   * honest answer to "how much of the city could I be in by now". It is capped:
+   * past `SEARCH_MAX` the search has failed and a circle covering the whole map
+   * tells the player nothing.
    */
-  private reportPursuers(): void {
-    const w = this.wanted as unknown as {
-      setPursuerCount?: (n: number) => void;
-      _pursuers?: number;
-      pursuerCount?: number;
-    } | null;
+  private reportSearch(): void {
+    const w = this.wanted;
     if (!w) return;
-    try {
-      if (typeof w.setPursuerCount === 'function') w.setPursuerCount(this._pursuers);
-      else if (typeof w._pursuers === 'number') w._pursuers = this._pursuers;
-    } catch {
-      /* contract owner changed shape — our own count stays authoritative */
-    }
+    const q = this.quarry;
+    const looking = this.stars > 0;
+    const sight = RESPONSE[Math.max(0, Math.min(5, this.stars))].sight;
+    const radius = !looking
+      ? 0
+      : q.visible
+        ? sight
+        : Math.min(SEARCH_MAX, sight + q.lostFor * SEARCH_SPREAD);
+    w.reportSearch({
+      pursuers: this._pursuers,
+      lastKnown: looking ? q.lastKnown : null,
+      radius,
+      contact: looking && q.visible,
+    });
   }
 
   private standDown(): void {
@@ -673,7 +734,7 @@ export class PoliceSystem implements System {
     this.blockedNodes.clear();
     if (this.heli) { this.heli.dispose(this.ctx.scene); this.heli = null; }
     this._pursuers = 0;
-    this.reportPursuers();
+    this.reportSearch();
   }
 
   private chatter(dt: number): void {

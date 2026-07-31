@@ -5,7 +5,7 @@
 
 import * as THREE from 'three';
 import type { GameContext, System } from '../core/engine';
-import { Services } from '../core/services';
+import { Services, type ServiceKey } from '../core/services';
 
 export interface DebugApi {
   /** Frames-per-second, smoothed. */
@@ -21,12 +21,29 @@ export interface DebugApi {
   /** Drive synthetic input for automated playtests. */
   setInput(i: Partial<{ moveX: number; moveY: number; throttle: number; steer: number; sprint: boolean; handbrake: boolean }>): void;
   clearInput(): void;
-  /** Scene statistics used by critics to prove the world is not empty. */
+  /**
+   * Scene statistics used by critics to prove the world is not empty.
+   *
+   * A FIELD BACKED BY AN UNREGISTERED SERVICE IS OMITTED, NOT DEFAULTED.
+   *
+   * `loadedChunks` used to read `tryGet(Services.Streaming)?.loadedChunks ?? 0`
+   * and nothing has ever registered `Services.Streaming` — its only consumer is
+   * this file. So the number was always exactly 0, and a critic reading it to
+   * prove the world was streaming was reading a dead field whose default
+   * happened to look like a plausible measurement. A missing measurement must
+   * be ABSENT so that `stats().loadedChunks === undefined` is loud, rather than
+   * present-and-wrong, which is silent.
+   *
+   * `unavailable` lists every service that was asked for and not found, so the
+   * omission is self-describing instead of looking like a typo.
+   */
   stats(): {
     fps: number; drawCalls: number; triangles: number; programs: number;
-    vehicles: number; peds: number; traffic: number; stars: number;
-    playerPos: [number, number, number]; inVehicle: boolean; quality: string;
-    sceneObjects: number; loadedChunks: number;
+    vehicles?: number; peds?: number; traffic?: number; stars?: number;
+    playerPos?: [number, number, number]; inVehicle?: boolean; quality?: string;
+    sceneObjects: number; loadedChunks?: number;
+    /** Service ids that are not registered; their fields above are absent. */
+    unavailable: string[];
   };
   /** Jump to a named landmark. */
   goTo(landmarkId: string): void;
@@ -159,22 +176,45 @@ export class DebugSystem implements System {
       },
       stats: () => {
         const info = ctx.renderer.info;
-        const p = ctx.tryGet(Services.Player);
-        return {
-          fps: ctx.tryGet(Services.Render)?.fps ?? 0,
+        const unavailable: string[] = [];
+
+        /**
+         * Read a field off a service, or record that the service is missing
+         * and return `undefined`. The `?? 0` this replaces is the whole bug:
+         * a plausible-looking zero is indistinguishable from a measurement,
+         * and `undefined` is not.
+         */
+        const from = <T, R>(key: ServiceKey<T>, read: (s: T) => R): R | undefined => {
+          const svc = ctx.tryGet(key);
+          if (svc === undefined) {
+            if (!unavailable.includes(key.id)) unavailable.push(key.id);
+            return undefined;
+          }
+          return read(svc);
+        };
+
+        const stats: ReturnType<DebugApi['stats']> = {
+          // Renderer counters come off the renderer itself and are always real.
+          fps: from(Services.Render, (r) => r.fps) ?? 0,
           drawCalls: info.render.calls,
           triangles: info.render.triangles,
           programs: info.programs?.length ?? 0,
-          vehicles: ctx.tryGet(Services.Vehicles)?.all.length ?? 0,
-          peds: ctx.tryGet(Services.Peds)?.all.length ?? 0,
-          traffic: ctx.tryGet(Services.Traffic)?.activeCount ?? 0,
-          stars: ctx.tryGet(Services.Wanted)?.stars ?? 0,
-          playerPos: p ? [p.position.x, p.position.y, p.position.z] : [0, 0, 0],
-          inVehicle: !!p?.inVehicle,
-          quality: ctx.tryGet(Services.Render)?.quality ?? '?',
           sceneObjects: countObjects(ctx.scene),
-          loadedChunks: ctx.tryGet(Services.Streaming)?.loadedChunks ?? 0,
+          vehicles: from(Services.Vehicles, (v) => v.all.length),
+          peds: from(Services.Peds, (p) => p.all.length),
+          traffic: from(Services.Traffic, (t) => t.activeCount),
+          stars: from(Services.Wanted, (w) => w.stars),
+          playerPos: from(Services.Player, (p) =>
+            [p.position.x, p.position.y, p.position.z] as [number, number, number]),
+          inVehicle: from(Services.Player, (p) => !!p.inVehicle),
+          quality: from(Services.Render, (r) => r.quality),
+          loadedChunks: from(Services.Streaming, (s) => s.loadedChunks),
+          unavailable,
         };
+        for (const k of Object.keys(stats) as Array<keyof typeof stats>) {
+          if (stats[k] === undefined) delete stats[k];
+        }
+        return stats;
       },
       goTo: (id) => {
         const city = ctx.tryGet(Services.City);
@@ -247,14 +287,18 @@ export class DebugSystem implements System {
 
     if (!this.visible) return;
     const st = (window as unknown as { __GTA_DEBUG__: DebugApi }).__GTA_DEBUG__.stats();
+    // `n/a` where a service is not registered — the overlay says the same
+    // thing `stats()` does rather than printing a zero that reads as a count.
+    const n = (v: number | undefined, digits = 0): string => (v === undefined ? 'n/a' : v.toFixed(digits));
     this.el.textContent =
-      `fps        ${st.fps.toFixed(1)}\n` +
+      `fps        ${n(st.fps, 1)}\n` +
       `draws/tris ${st.drawCalls} / ${(st.triangles / 1000).toFixed(0)}k\n` +
-      `vehicles   ${st.vehicles}  traffic ${st.traffic}\n` +
-      `peds       ${st.peds}\n` +
-      `stars      ${st.stars}\n` +
-      `pos        ${st.playerPos.map((v) => v.toFixed(1)).join(', ')}\n` +
-      `quality    ${st.quality}${st.inVehicle ? '  [driving]' : ''}`;
+      `vehicles   ${n(st.vehicles)}  traffic ${n(st.traffic)}\n` +
+      `peds       ${n(st.peds)}\n` +
+      `stars      ${n(st.stars)}\n` +
+      `pos        ${st.playerPos ? st.playerPos.map((v) => v.toFixed(1)).join(', ') : 'n/a'}\n` +
+      `quality    ${st.quality ?? 'n/a'}${st.inVehicle ? '  [driving]' : ''}` +
+      (st.unavailable.length ? `\nno service ${st.unavailable.join(', ')}` : '');
   }
 
   /**

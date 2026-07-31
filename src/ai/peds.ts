@@ -25,7 +25,7 @@
 import * as THREE from 'three';
 import type { GameContext, System } from '../core/engine';
 import { Rng } from '../core/rng';
-import { QUALITY, detectQuality, type Quality } from '../render/renderer';
+import { QUALITY, detectQuality, onQualityChange, type Quality } from '../render/renderer';
 import {
   Services,
   type CharacterHandle,
@@ -129,6 +129,15 @@ export class PedSystem implements System, PedService {
     // Concentrate the budget: at ultra this is ~90 m, which puts the whole
     // 120-person allowance on the four blocks you can actually read.
     this.spawnRadius = Math.min(this.drawDistance * 0.55, 34 + this.maxPeds * 0.47);
+    // Snapshotted at init before this, so switching ultra -> low from the menu
+    // kept all 120 pedestrians alive and simulated. The despawn sweep in
+    // `update` reads `maxPeds` every frame, so lowering it here is enough to
+    // shed the surplus; raising it lets the spawner refill.
+    onQualityChange('peds', ['maxPeds', 'entityDrawDistance'], (_q, s) => {
+      this.maxPeds = s.maxPeds;
+      this.drawDistance = s.entityDrawDistance;
+      this.spawnRadius = Math.min(this.drawDistance * 0.55, 34 + this.maxPeds * 0.47);
+    });
 
     const t0 = performance.now();
     if (this.city) this.graph.build(this.city, this.rng.fork('pavement'));

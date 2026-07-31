@@ -25,6 +25,7 @@ import {
   type CastService,
   type HudService,
   type InteractionService,
+  type MissionOffer,
   type MissionService,
   type VehicleHandle,
 } from '../core/services';
@@ -85,6 +86,22 @@ export class MissionSystem implements System, MissionService {
   get completed(): ReadonlySet<string> {
     return this._completed;
   }
+
+  /**
+   * The acts you can walk up to and start right now — exactly what `offerNext`
+   * put a giver marker on, which today is one act (the next one, or a failed
+   * one being re-offered) and is empty while an act is running or once the
+   * campaign is over.
+   *
+   * The map needs this to draw "go here to start Act II". Before it existed the
+   * only campaign mark on the map was the CURRENT objective, so with no mission
+   * running the map had nothing at all to say about the story — the giver was
+   * a world-space E prompt and nothing else, findable only by walking into it.
+   */
+  get offered(): ReadonlyArray<MissionOffer> {
+    return this._offered;
+  }
+  private _offered: MissionOffer[] = [];
 
   /* ---------------------------------------------------------------- */
   /* init                                                              */
@@ -419,12 +436,14 @@ export class MissionSystem implements System, MissionService {
    */
   private offerNext(retryId?: string): void {
     this.interaction.remove(GIVER_ID);
+    this._offered.length = 0;
     const def = retryId ? CAMPAIGN_BY_ID.get(retryId) : this.nextAct;
     if (!def) return; // campaign finished — leave the world alone
     const p = new THREE.Vector3(def.startAt.x, this.groundAt(def.startAt.x, def.startAt.z), def.startAt.z);
+    const label = retryId ? `Reia: ${def.title}` : `${def.startLabel} — Actul ${romanNumeral(def.act)}`;
     this.interaction.add({
       id: GIVER_ID,
-      label: retryId ? `Reia: ${def.title}` : `${def.startLabel} — Actul ${romanNumeral(def.act)}`,
+      label,
       position: p,
       radius: 4.2,
       kind: 'story',
@@ -432,11 +451,15 @@ export class MissionSystem implements System, MissionService {
       requireLos: false,
       onTrigger: () => this.start(def.id),
     });
+    // Published for the map. Same position object the interactable got: the
+    // giver never moves once placed, and a second copy could only drift.
+    this._offered.push({ id: def.id, title: label, position: p });
   }
 
   private clearMarkers(): void {
     this.interaction.remove(OBJ_ID);
     this.interaction.remove(GIVER_ID);
+    this._offered.length = 0;
     this.hud()?.setWaypoint(null);
     this.lines.length = 0;
   }

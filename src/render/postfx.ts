@@ -41,7 +41,7 @@ import type { GameContext, System } from '../core/engine';
 import { Services, type RenderService } from '../core/services';
 import { Atmosphere, Grade } from '../artDirection';
 import { ExposureEffect, GradeEffect } from './gradeEffect';
-import { QUALITY, type Quality } from './renderer';
+import { QUALITY, applyQuality, type Quality } from './renderer';
 
 /* ------------------------------------------------------------------ */
 /* Calibration                                                         */
@@ -541,16 +541,27 @@ export class PostFXSystem implements System, RenderService {
       /*
        * Half res with depth-aware upsampling, unconditionally.
        *
-       * MEASUREMENT NOTE, because the numbers are easy to misread: on a
-       * contended machine (a dozen other WebGL contexts on the same GPU) this
-       * pass timed at 78ms of a 155ms frame. On a quiet machine the same pass
-       * times at 0.4ms of a 12ms frame, and full-res Medium costs 0.6ms. So
-       * the 78ms was contention, not this pass — see `gpuMs()` below and the
-       * caveat on it.
+       * MEASUREMENT NOTE. The old note here recorded this same pass at 78ms
+       * on a contended machine and 0.4ms on a quiet one and concluded "the
+       * 78ms was contention, not this pass". The first half is right and the
+       * conclusion is too generous: neither absolute number is usable, because
+       * BOTH were taken by timing one config for a while and another config
+       * later, and this GPU's contention drifts by more than the effect being
+       * measured. Re-measured with a frame-INTERLEAVED paired A/B — configs
+       * alternate every single frame, so both arms see identical contention
+       * and the per-cycle paired difference cancels the drift:
        *
-       * It stays at half res anyway: it is visually indistinguishable at this
-       * radius and tint, and the frame budget has to survive vehicles, peds
-       * and props landing on top of a scene that is currently empty.
+       *   SSAO, paired median vs the same frame with the pass disabled
+       *     hero framing   -2.95, -4.59, -2.81 ms   (frame total 8.4-15.6 ms)
+       *     street framing -4.03, -3.01, -4.37 ms   (frame total 8.9-17.5 ms)
+       *
+       * Expressed as a FRACTION of the frame — the only contention-invariant
+       * form — this pass is a stable 25-40% of GPU frame time across a 2.2x
+       * swing in machine load, which makes it the single most expensive thing
+       * in the renderer. It is not 0.4ms and it never was.
+       *
+       * It stays at half res: it is visually indistinguishable at this radius
+       * and tint, and it is already the largest line item in the budget.
        */
       ao.configuration.halfRes = true;
       ao.configuration.depthAwareUpsampling = true;
@@ -568,13 +579,28 @@ export class PostFXSystem implements System, RenderService {
     const preBloom: Effect[] = [];
 
     if (q.screenSpaceReflections) {
-      // The march grows its stride geometrically, so reach is set by the step
-      // growth rather than the step count; trimming steps costs a little
-      // precision on thin occluders and saves a lot of dependent depth fetches.
-      // Each step is a dependent depth fetch, and the march grows its stride
-      // geometrically so reach comes from the growth rather than the count.
-      // 12 steps reaches the same distance as 18 and costs a third less.
-      this.ssr = new WetReflectionEffect(camera, this._quality === 'ultra' ? 12 : 8);
+      /*
+       * 12 steps on BOTH high and ultra. `high` used to get 8 on the theory
+       * that each step is a dependent depth fetch and therefore expensive.
+       *
+       * MEASURED, and the theory was wrong. Timed with a frame-INTERLEAVED
+       * paired GPU A/B (alternating configs every frame so contention drift
+       * cancels), toggling `uWetness` to 0 so the shader's top-of-function
+       * early-out skips the entire march while the pass itself stays in the
+       * chain. At the street framing — camera at 1.75m, wet road filling the
+       * lower half, ~1020 draw calls, live wetness 0.85 — the whole march
+       * costs a paired median of -0.06, +0.24 and -0.15 ms across three runs.
+       * That is zero to within the noise, against an SSAO pass measuring
+       * -3.0 to -4.4 ms in the very same runs.
+       *
+       * Reach and precision both improve with step count here, because stride
+       * is `uMaxDistance / SSR_STEPS` and grows 22% per step: total reach is
+       * `uMaxDistance * (1 + 0.11 * (N - 1))`, so N=12 marches ~2.21x
+       * uMaxDistance where N=8 reached ~1.77x, with finer sampling near the
+       * contact point as well. Longer, better-resolved streaks are exactly
+       * what the reference frame's wet street is built on.
+       */
+      this.ssr = new WetReflectionEffect(camera, 12);
       this.ssr.setIntensity(this._quality === 'ultra' ? 0.85 : 0.7);
       preBloom.push(this.ssr);
     } else {
@@ -586,15 +612,18 @@ export class PostFXSystem implements System, RenderService {
     /* --- main look pass --- */
     const effects: Effect[] = [];
 
+    // `q.bloom` used to be declared by every tier and read by none — the pass
+    // was built unconditionally. It is now honoured, which is what makes the
+    // low tier actually cheaper than the medium one.
     this.bloom = new BloomEffect({
-      intensity: BLOOM_INTENSITY,
+      intensity: q.bloom ? BLOOM_INTENSITY : 0,
       luminanceThreshold: BLOOM_THRESHOLD,
       luminanceSmoothing: Grade.bloomSmoothing,
       radius: 0.86,
       mipmapBlur: true,
-      kernelSize: KernelSize.LARGE,
+      kernelSize: q.bloom ? KernelSize.LARGE : KernelSize.SMALL,
     });
-    effects.push(this.bloom);
+    if (q.bloom) effects.push(this.bloom);
 
     /*
      * DEPTH OF FIELD IS OFF, and the reason is the look, not the cost.
@@ -647,12 +676,26 @@ export class PostFXSystem implements System, RenderService {
     this.composer.setSize(w, h);
   }
 
+  /**
+   * Change the quality tier — for real, everywhere.
+   *
+   * This used to rebuild the post chain and the pixel ratio and stop there,
+   * while the city's draw distance, the prop cut-offs, the ped and traffic
+   * budgets and the whole shadow configuration stayed at whatever
+   * `detectQuality()` returned during init in six unrelated files. Dropping
+   * from ultra to low changed the post chain and left 120 pedestrians, 72
+   * cars, a 1.6 km draw distance and 4096-pixel cascades running. `applyQuality`
+   * is the other half: every system that reads a `QualitySettings` field
+   * registers with `onQualityChange` and is re-applied here.
+   */
   setQuality(q: Quality): void {
     if (q === this._quality) return;
     this._quality = q;
     const s = QUALITY[q];
     this.ctx.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, s.pixelRatioCap));
     this.build();
+    const applied = applyQuality(q);
+    console.info(`[quality] ${q}: post chain rebuilt, ${applied} systems re-applied`);
   }
 
   /** Screen flash — broadcast hijack, damage, sirens. */

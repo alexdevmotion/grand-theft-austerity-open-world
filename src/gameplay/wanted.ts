@@ -40,6 +40,7 @@ import {
   Services,
   type CharacterHandle,
   type PlayerService,
+  type SearchReport,
   type WantedService,
 } from '../core/services';
 import { CONEXIUNI_DISCOUNT } from './progression';
@@ -181,6 +182,13 @@ export class WantedSystem implements System, WantedService {
   private ctx!: GameContext;
   private _pursuers = 0;
 
+  /* ---- the Ministry's belief, published by the pursuit system ---- */
+  /** Reused: `lastKnown` hands this out and it is read once a frame. */
+  private readonly _lastKnown = new THREE.Vector3();
+  private _searchRadius = 0;
+  private _searchValid = false;
+  private _contact = false;
+
   /* ---- arrest ---- */
   /** 0..1. At 1 the Ministry has you. */
   private bustMeter = 0;
@@ -210,6 +218,41 @@ export class WantedSystem implements System, WantedService {
   get pursuerCount(): number {
     return this._pursuers;
   }
+  get lastKnown(): THREE.Vector3 | null {
+    return this._searchValid ? this._lastKnown : null;
+  }
+  get searchRadius(): number {
+    return this._searchValid ? this._searchRadius : 0;
+  }
+  get inContact(): boolean {
+    return this._searchValid && this._contact;
+  }
+
+  /**
+   * PUBLISHED BY `src/ai/police.ts`, ONCE A FIXED TICK.
+   *
+   * The star machine owns heat, thresholds and decay. It has no units, no
+   * sight lines and no idea where the Ministry thinks you are — all of that
+   * lives in the pursuit system. This is the seam between the two, and it
+   * replaces a reflective write into this class's private `_pursuers` that
+   * stood in for it while the contract had no setter.
+   *
+   * Stars gate it: with zero stars nobody is looking, so whatever the pursuit
+   * system was mid-way through winding down is not something a map should draw.
+   */
+  reportSearch(r: SearchReport): void {
+    this._pursuers = Math.max(0, r.pursuers | 0);
+    const on = this._stars > 0 && r.lastKnown !== null && r.radius > 0;
+    this._searchValid = on;
+    this._contact = on && r.contact;
+    if (!on) {
+      this._searchRadius = 0;
+      return;
+    }
+    this._lastKnown.copy(r.lastKnown!);
+    this._searchRadius = r.radius;
+  }
+
   /** True from the moment they have you until they let you go. */
   get detained(): boolean {
     return this.detention !== null;
@@ -269,7 +312,16 @@ export class WantedSystem implements System, WantedService {
     if (s !== this._stars) {
       const previous = this._stars;
       this._stars = s;
-      if (s === 0) this.bustMeter = 0;
+      if (s === 0) {
+        this.bustMeter = 0;
+        // Nobody is looking any more. Drop the Ministry's belief in the same
+        // frame the stars go out rather than waiting for the pursuit system's
+        // next tick, so the map never leaves a search circle on a clean city.
+        this._searchValid = false;
+        this._searchRadius = 0;
+        this._contact = false;
+        this._pursuers = 0;
+      }
       this.ctx.events.emit('instability:changed', { stars: s, previous });
     }
   }

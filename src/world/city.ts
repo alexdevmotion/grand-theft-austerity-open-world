@@ -28,12 +28,13 @@ import {
   Services,
   type CityService,
   type DistrictKind,
+  type Footprint,
   type Landmark,
   type RoadNode,
   type SpatialQuery,
 } from '../core/services';
 import { Rng } from '../core/rng';
-import { QUALITY, detectQuality, type Quality } from '../render/renderer';
+import { QUALITY, detectQuality, onQualityChange, type Quality } from '../render/renderer';
 import { srgb } from '../render/materials';
 
 import { DetailBuilder, FacadeBuilder, SurfaceBuilder } from './city/builders';
@@ -164,6 +165,11 @@ export class CitySystem implements System, CityService {
     ctx.scene.add(this.root);
 
     this.drawDistance = QUALITY[this.resolveQuality(ctx)].cityDrawDistance;
+    // The quality menu used to move and the city's draw distance did not: this
+    // was a one-shot snapshot taken at init. Re-applied on every tier change.
+    onQualityChange('city', ['cityDrawDistance'], (_q, s) => {
+      this.drawDistance = s.cityDrawDistance;
+    });
     this.mats = createCityMaterials();
     this.mats.setSunDirection(sunVector());
     this.mats.setWetness(Atmosphere.wetness);
@@ -855,9 +861,32 @@ export class CitySystem implements System, CityService {
       const ox = x - b.x;
       const oz = z - b.z;
       if (b.rot) {
+        /*
+         * WORLD -> PLOT, and the sign of the angle is the whole bug.
+         *
+         * `addColliders` orients the Rapier box with
+         * `setFromAxisAngle(UP, -b.rot)`, so the box's local-to-world map is
+         * R_y(-rot) and the world-to-local map — which is what a point test
+         * needs — is its INVERSE, R_y(+rot):
+         *
+         *     lx =  ox * cos(rot) + oz * sin(rot)
+         *     lz = -ox * sin(rot) + oz * cos(rot)
+         *
+         * This used to apply R_y(-rot) instead, i.e. the collider's own
+         * forward transform. For an axis-aligned plot the two agree and
+         * nothing showed; for every plot at an angle — which, since the real
+         * Bucharest layout landed, is most of the ~2700 buildings — the
+         * analytic footprint was the collider MIRRORED about the plot's axes.
+         * `isBlocked` is what peds, traffic and every spawn point use to avoid
+         * placing things inside geometry, so things were spawned inside walls
+         * on one side of a skewed block and refused on open pavement on the
+         * other. Measured before the fix at 3.5% of the map solid-but-open and
+         * 3.4% open-but-blocked; see `world/worldTruth.test.ts`, which compares
+         * this function against the colliders themselves.
+         */
         const c = Math.cos(b.rot);
         const s = Math.sin(b.rot);
-        if (Math.abs(ox * c - oz * s) < b.hx && Math.abs(ox * s + oz * c) < b.hz) return true;
+        if (Math.abs(ox * c + oz * s) < b.hx && Math.abs(oz * c - ox * s) < b.hz) return true;
       } else if (Math.abs(ox) < b.hx && Math.abs(oz) < b.hz) return true;
     }
     return false;
@@ -955,6 +984,62 @@ export class CitySystem implements System, CityService {
     if (base === 'cartier' && onBoulevard) return 'bulevard';
     return base;
   }
+
+  /**
+   * BUILDING FOOTPRINTS IN A WINDOW — the read-only half of `blockHash`.
+   *
+   * The hash was built for `isBlocked`, a point test; this walks the same cells
+   * and hands back the plots themselves, which is what lets a map draw the city
+   * as BLOCKS rather than as a flat district wash between streets. It is the
+   * one thing the map could not fake: every other layer it draws (streets,
+   * districts, landmarks) was already on the contract.
+   *
+   * `out` is grown and reused, and entries are overwritten in place, so a
+   * caller that holds one array across repaints never allocates. Buildings
+   * spanning several hash cells are de-duplicated with a generation stamp
+   * rather than a Set, for the same reason.
+   */
+  blocksIn(x0: number, z0: number, x1: number, z1: number, out: Footprint[]): number {
+    const cell = CitySystem.HASH_CELL;
+    const i0 = Math.floor(Math.min(x0, x1) / cell);
+    const i1 = Math.floor(Math.max(x0, x1) / cell);
+    const j0 = Math.floor(Math.min(z0, z1) / cell);
+    const j1 = Math.floor(Math.max(z0, z1) / cell);
+
+    if (this.blockStamp.length !== this.buildings.length) {
+      this.blockStamp = new Int32Array(this.buildings.length);
+      this.blockStampGen = 0;
+    }
+    const stamp = this.blockStamp;
+    const gen = ++this.blockStampGen;
+
+    let n = 0;
+    for (let i = i0; i <= i1; i++) {
+      for (let j = j0; j <= j1; j++) {
+        const list = this.blockHash.get(i * 100003 + j);
+        if (!list) continue;
+        for (let k = 0; k < list.length; k++) {
+          const idx = list[k];
+          if (stamp[idx] === gen) continue;
+          stamp[idx] = gen;
+          const b = this.buildings[idx];
+          let f = out[n];
+          if (!f) out.push((f = { x: 0, z: 0, hx: 0, hz: 0, rot: 0, height: 0 }));
+          f.x = b.x;
+          f.z = b.z;
+          f.hx = b.hx;
+          f.hz = b.hz;
+          f.rot = b.rot ?? 0;
+          f.height = b.height;
+          n++;
+        }
+      }
+    }
+    return n;
+  }
+
+  private blockStamp = new Int32Array(0);
+  private blockStampGen = 0;
 
   randomRoadPoint(out: THREE.Vector3): void {
     if (!this.segments.length) {

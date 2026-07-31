@@ -25,7 +25,7 @@
 import * as THREE from 'three';
 import type { GameContext, System } from '../core/engine';
 import { Atmosphere, HeroSun, Palette, WorldScale } from '../artDirection';
-import { QUALITY, detectQuality, type Quality } from './renderer';
+import { QUALITY, detectQuality, onQualityChange, type Quality } from './renderer';
 import { Services, type WeatherPreset } from '../core/services';
 import { CascadedShadows } from './csm';
 import { EnvProbe } from './envProbe';
@@ -164,6 +164,26 @@ export class LightingSystem implements System {
     this.quality = this.resolveQuality(ctx);
     const q = QUALITY[this.quality];
     this.shadowRange = q.shadowDistance;
+    /**
+     * Shadows were ALREADY re-applied on a tier change, by the per-frame
+     * `syncQuality` poll below — lighting is the one system in the six that was
+     * not frozen at init. This registration exists so that the shadow fields
+     * are DECLARED as re-applied (see `render/quality.test.ts`, which will not
+     * accept a field that nothing claims), and it deliberately does NOT rebuild
+     * the cascades here.
+     *
+     * Why not: `rebuildCascades` disposes the CascadedShadows and builds a new
+     * one, which re-registers every lit material and recompiles their shaders.
+     * The poll runs that from `update`, between the simulation and the render;
+     * running it synchronously inside `setQuality` instead moves it into the
+     * middle of whatever called the menu. Nudging `lastQuality` makes the very
+     * next frame do the work at exactly the point in the frame it has always
+     * done it, so switching quality changes what the shadows are and nothing
+     * about when they are rebuilt.
+     */
+    onQualityChange('lighting', ['shadowDistance', 'shadowCascades', 'shadowMapSize'], () => {
+      this.lastQuality = null;
+    });
 
     Materials.setAnisotropy(ctx.renderer.capabilities.getMaxAnisotropy());
 
@@ -375,15 +395,27 @@ export class LightingSystem implements System {
   }
 
   private lastQuality: Quality | null = null;
+  /**
+   * Re-apply the shadow configuration for a tier.
+   *
+   * Reachable two ways on purpose. `onQualityChange` fires it the instant
+   * `setQuality` runs, which is what the menu needs; the per-frame poll below
+   * stays as a backstop for anything that sets `RenderService.quality` without
+   * going through `setQuality`. Both funnel here, and `q === this.quality`
+   * makes the second call a no-op rather than a second cascade rebuild.
+   */
+  private applyQualityTier(q: Quality, ctx: GameContext): void {
+    if (q === this.quality) return;
+    this.quality = q;
+    this.shadowRange = QUALITY[q].shadowDistance;
+    this.rebuildCascades(ctx);
+  }
+
   private syncQuality(ctx: GameContext): void {
     const q = ctx.tryGet(Services.Render)?.quality;
     if (!q || q === this.lastQuality) return;
     this.lastQuality = q;
-    if (q === this.quality) return;
-    this.quality = q;
-    const s = QUALITY[q];
-    this.shadowRange = s.shadowDistance;
-    this.rebuildCascades(ctx);
+    this.applyQualityTier(q, ctx);
   }
 
   private rebuildCascades(ctx: GameContext): void {

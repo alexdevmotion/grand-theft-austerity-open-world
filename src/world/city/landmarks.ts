@@ -166,10 +166,13 @@ export function buildBuildersHouse(sink: LandmarkSink, rng: Rng): LandmarkResult
    * lobby is still solid on all four sides at every height a vehicle can
    * reach, because the walls run the full height of the tower.
    *
+   * `cappedShell` stops that door post at the lintel instead of carrying it
+   * 82 m to the roof — see its comment.
+   *
    * `carveLobbyDoorway` and `LobbyInterior` in src/gameplay/buildersHouse.ts
    * are both dead weight now and can be deleted.
    */
-  boxes.push(...shellBoxes(BUILDERS_LOBBY));
+  boxes.push(...cappedShell(BUILDERS_LOBBY));
 
   // Aluminium coping + parapet.
   d.ring(cx - towerW / 2 - 0.5, cz - towerD / 2 - 0.5, cx + towerW / 2 + 0.5, cz + towerD / 2 + 0.5,
@@ -430,7 +433,50 @@ function enterableShell(
   }
   openDoorway(d, spec, finish);
 
-  return { boxes: shellBoxes(spec), slabs: [floorSlab(spec)] };
+  return { boxes: cappedShell(spec), slabs: [floorSlab(spec)] };
+}
+
+/**
+ * The shell, with the entrance mullion capped at the doorway lintel.
+ *
+ * `shellBoxes` anchors every box at the ground and gives it the full mass
+ * height, which is exactly right for a wall and absurd for the 0.5 m post that
+ * splits a doorway into two leaves. At Builders House that post ran the whole
+ * 82 m of the tower: a 0.5 x 1.0 m sliver of collider standing in mid-air all
+ * the way to the roof, over an elevation that is one uninterrupted glass wall.
+ * It was walkable, so it blocked nobody — it just charged every line of sight
+ * and every camera probe crossing the entrance an extra hit, and made the
+ * front door read as two 1.45 m slots rather than one opening.
+ *
+ * It cannot simply be dropped. The post is precisely what makes a 3.4 m
+ * doorway two 1.45 m leaves, so a person walks through and the 1.52 m Dacia
+ * cannot — the invariant `src/world/interiors/interiors.test.ts` guards for
+ * every interior. Capping it at `door.height` keeps that and gives up nothing:
+ * above the lintel there is no floor to stand on and nothing in the game can
+ * fly into a 3.4 m slot in a facade.
+ *
+ * `shellBoxes` itself is not ours to change (it belongs to the interiors
+ * agent, and its own tests pin its output), so the cap is applied here, on the
+ * boxes the city is about to register.
+ */
+function cappedShell(spec: ShellSpec): LandmarkResult['boxes'] {
+  const boxes = shellBoxes(spec);
+  const { side, offset, mullion } = spec.door;
+  if (mullion <= 0.01) return boxes;
+
+  const alongX = side === 'north' || side === 'south';
+  const half = mullion / 2;
+  const centre = alongX ? spec.cx + offset : spec.cz + offset;
+  for (const b of boxes) {
+    // The only box in the shell as narrow as the mullion, sitting on the door
+    // centreline, IS the mullion: the leaves either side of it are wider and
+    // the other three elevations are a wall-thickness thick, off-centre.
+    const alongHalf = alongX ? b.hx : b.hz;
+    const alongPos = alongX ? b.x : b.z;
+    if (Math.abs(alongHalf - half) > 1e-6 || Math.abs(alongPos - centre) > 1e-6) continue;
+    b.h = Math.min(b.h, spec.door.height);
+  }
+  return boxes;
 }
 
 /** An entrance canopy and a lit sign over a doorway, facing the street. */

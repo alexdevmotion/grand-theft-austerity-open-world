@@ -29,9 +29,9 @@ import {
   type VehicleHandle,
   type VehicleService,
 } from '../core/services';
-import { QUALITY, detectQuality, type Quality } from '../render/renderer';
+import { QUALITY, detectQuality, onQualityChange, type Quality } from '../render/renderer';
 import { prof } from '../characters/profile';
-import { CG, groups, type PhysicsWorld } from '../physics/physics';
+import { CG, probeGroups, type PhysicsWorld } from '../physics/physics';
 import { TRAM_LANE, TrafficGraph } from './traffic/roadGraph';
 import { JunctionControl } from './traffic/junctions';
 import { SensorField } from './traffic/sensors';
@@ -125,6 +125,13 @@ export class TrafficSystem implements System, TrafficService {
       ((new URLSearchParams(location.search).get('q') as Quality | null) ?? detectQuality());
     this.maxTraffic = QUALITY[quality].maxTraffic;
     this.budget = this.maxTraffic;
+    // Snapshotted at init before this, so the quality menu never shed a single
+    // car. The governor moves `budget` between a floor and `maxTraffic`, so the
+    // ceiling has to come down with the tier or it has nothing to aim at.
+    onQualityChange('traffic', ['maxTraffic'], (_q, s) => {
+      this.maxTraffic = s.maxTraffic;
+      this.budget = Math.min(this.budget, this.maxTraffic);
+    });
 
     const city = ctx.tryGet(Services.City);
     if (city) {
@@ -469,7 +476,13 @@ export class TrafficSystem implements System, TrafficService {
     if (dist < 2) return false;
     _ray.divideScalar(dist);
     // Buildings only — a lamp post is not cover.
-    return !!this.phys.raycast(this.focus, _ray, dist - 1.5, groups(CG.VEHICLE, CG.STATIC));
+    //
+    // `probeGroups`, not `groups(CG.VEHICLE, CG.STATIC)`. The old form worked
+    // only by accident: it needed `ALL_SOLID` to keep listing CG.VEHICLE in
+    // every static collider's filter, and the day someone tightens that this
+    // query starts matching nothing and every spawn point reads as visible.
+    // That is the exact failure documented at the top of physics.ts.
+    return !!this.phys.raycast(this.focus, _ray, dist - 1.5, probeGroups(CG.STATIC));
   }
 
   private pickKind(district: DistrictKind, rank: number): VehicleClass | null {

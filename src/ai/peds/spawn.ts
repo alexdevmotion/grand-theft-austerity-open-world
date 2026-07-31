@@ -14,6 +14,19 @@ import type { PedAppearance } from './rig';
 
 const c = (hex: number) => new THREE.Color(hex).convertSRGBToLinear();
 
+/**
+ * Take a palette entry BY VALUE.
+ *
+ * `rng.pick` hands back the array element itself, and `copyWardrobe` in
+ * `src/ai/peds.ts` dresses an imposter by writing INTO the Colors it finds on
+ * the PedAppearance (`out.setHex(hex)`). Handing out the module-level palette
+ * entry therefore let any one pedestrian permanently repaint a palette slot for
+ * every pedestrian spawned after it — a shared Color serving as `top` was
+ * measured drifting from #b9b6b0 to #272a32 mid-session. Clone on the way out
+ * and these palettes stay the constants they are written as.
+ */
+const pick = (rng: Rng, palette: readonly THREE.Color[]): THREE.Color => rng.pick(palette).clone();
+
 /* ------------------------------------------------------------------ */
 /* wardrobe                                                            */
 /* ------------------------------------------------------------------ */
@@ -150,23 +163,24 @@ export function makeAppearance(archetype: PedArchetype, rng: Rng): PedAppearance
   const female = rng.bool(0.5);
   const height = (female ? rng.range(1.54, 1.76) : rng.range(1.65, 1.93)) ;
   const build = rng.range(0.87, female ? 1.06 : 1.18);
-  const skin = rng.pick(SKIN);
-  const hair = rng.pick(HAIR);
+  const skin = pick(rng, SKIN);
+  const hair = pick(rng, HAIR);
 
   const app: PedAppearance = {
     height,
     build,
     skin,
     hair,
-    top: rng.pick(CIVILIAN_TOPS),
+    top: pick(rng, CIVILIAN_TOPS),
     sleeve: c(0x000000),
-    legs: rng.pick(CIVILIAN_LEGS),
-    shoes: rng.pick(SHOES),
+    shortSleeve: false,
+    legs: pick(rng, CIVILIAN_LEGS),
+    shoes: pick(rng, SHOES),
     vest: null,
     headwear: female && rng.bool(0.62) ? 4 : rng.bool(0.18) ? 1 : 0,
-    hatColor: rng.pick(CIVILIAN_TOPS),
+    hatColor: pick(rng, CIVILIAN_TOPS),
     bag: rng.bool(0.34) ? rng.weighted([1, 2, 3], [3, 2, 1.6]) : 0,
-    bagColor: rng.pick(BAG_COLORS),
+    bagColor: pick(rng, BAG_COLORS),
     phone: rng.bool(0.34),
     cigarette: rng.bool(0.16),
     placard: null,
@@ -174,20 +188,20 @@ export function makeAppearance(archetype: PedArchetype, rng: Rng): PedAppearance
 
   switch (archetype) {
     case 'officeWorker':
-      app.top = rng.pick(OFFICE_TOPS);
-      app.legs = rng.bool(0.7) ? app.top : rng.pick(CIVILIAN_LEGS);
+      app.top = pick(rng, OFFICE_TOPS);
+      app.legs = rng.bool(0.7) ? app.top.clone() : pick(rng, CIVILIAN_LEGS);
       app.shoes = c(0x16131a);
       app.bag = rng.weighted([0, 1, 2], [1, 3.4, 1.6]);
       app.phone = rng.bool(0.58);
       app.headwear = female ? (rng.bool(0.7) ? 4 : 0) : 0;
       // A pale shirt cuff reading out of a dark sleeve.
-      app.sleeve = rng.bool(0.42) ? rng.pick(OFFICE_SHIRTS) : app.top;
+      app.sleeve = rng.bool(0.42) ? pick(rng, OFFICE_SHIRTS) : app.top.clone();
       break;
 
     case 'builder':
       app.top = rng.bool(0.5) ? c(0x3a4450) : c(0x4a3a2e);
       app.legs = rng.bool(0.6) ? c(0x2f3a44) : c(0x3d3226);
-      app.vest = rng.bool(0.72) ? (rng.bool() ? HIVIS : HIVIS2) : null;
+      app.vest = rng.bool(0.72) ? (rng.bool() ? HIVIS : HIVIS2).clone() : null;
       app.headwear = 2;
       app.hatColor = rng.weighted([c(0xf0c020), c(0xe8622a), c(0xdadada), c(0x2a6cd0)], [4, 2, 1.4, 1]);
       app.shoes = c(0x2a2018);
@@ -230,7 +244,7 @@ export function makeAppearance(archetype: PedArchetype, rng: Rng): PedAppearance
       break;
 
     case 'streetVendor':
-      app.top = rng.pick(CIVILIAN_TOPS);
+      app.top = pick(rng, CIVILIAN_TOPS);
       app.vest = rng.bool(0.6) ? c(0x7a4a2a) : c(0x2a5a4a);
       app.headwear = rng.bool(0.5) ? 1 : app.headwear;
       app.bag = 0;
@@ -238,10 +252,10 @@ export function makeAppearance(archetype: PedArchetype, rng: Rng): PedAppearance
       break;
 
     case 'tourist':
-      app.top = rng.pick(TOURIST_TOPS);
-      app.legs = rng.bool(0.5) ? c(0x6a6a72) : rng.pick(CIVILIAN_LEGS);
+      app.top = pick(rng, TOURIST_TOPS);
+      app.legs = rng.bool(0.5) ? c(0x6a6a72) : pick(rng, CIVILIAN_LEGS);
       app.headwear = rng.bool(0.45) ? 1 : app.headwear;
-      app.hatColor = rng.pick(TOURIST_TOPS);
+      app.hatColor = pick(rng, TOURIST_TOPS);
       app.bag = rng.weighted([0, 2, 3], [1, 4, 2]);
       app.phone = rng.bool(0.66);
       app.shoes = rng.bool(0.5) ? c(0xd8d4cc) : app.shoes;
@@ -252,8 +266,11 @@ export function makeAppearance(archetype: PedArchetype, rng: Rng): PedAppearance
   }
 
   if (app.sleeve.getHex() === 0) {
-    // Short sleeves show forearm skin; long sleeves match the top.
-    app.sleeve = rng.bool(0.42) ? skin : app.top;
+    /* A short sleeve bares the FOREARM. It does not bare the shoulder, which
+     * is what assigning the skin colour to `sleeve` here used to do — see the
+     * arm block in rig.ts. The upper arm is always cloth. */
+    app.shortSleeve = rng.bool(0.42);
+    app.sleeve = app.top.clone();
   }
   return app;
 }

@@ -19,6 +19,7 @@ import {
 } from './rig';
 import { ATLAS_SIZE, HERO_APPEARANCE, SLOT, rollAppearance, slotSurface } from './wardrobe';
 import { Rng } from '../core/rng';
+import type { PedArchetype } from '../core/services';
 
 const rigs = new Map<string, Rig>();
 function rigFor(body: BodyType, female: boolean): Rig {
@@ -450,6 +451,146 @@ test('the hero has a visible neck between the collar and the jaw', () => {
   // And it must still be a popped collar, not a flat neckline.
   expect(collarTop).toBeGreaterThan(m.neckY + 0.020);
 });
+
+/* ------------------------------------------------------------------ */
+/* 2c. EVERYONE IS DRESSED                                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Front view with a DEPTH BUFFER, recording which wardrobe slot wins each
+ * pixel.
+ *
+ * `silhouette` above answers "is anything there". This answers "what does the
+ * eye actually see there", and only the second question can decide whether a
+ * garment covers a body part. A skirt is one wide tube hanging OUTSIDE two
+ * bare legs: every area-, vertex- or coverage-based measure counts those legs
+ * and concludes the thigh is bare, when in fact the skirt occludes them
+ * completely. Z-buffer the thing and read off the nearest surface, exactly the
+ * way the camera does.
+ *
+ * Returns -1 where nothing was drawn.
+ */
+function visibleSlots(geo: THREE.BufferGeometry, n = 300): {
+  slot: Int8Array; n: number; xOf(c: number): number; yOf(r: number): number;
+} {
+  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+  const uv = geo.getAttribute('uv') as THREE.BufferAttribute;
+  const idx = geo.getIndex()!;
+  const x0 = -0.6, x1 = 0.6, y0 = 0, y1 = 2;
+  const slot = new Int8Array(n * n).fill(-1);
+  const depth = new Float32Array(n * n).fill(-Infinity);
+  const px = (x: number) => ((x - x0) / (x1 - x0)) * n;
+  const py = (y: number) => ((y - y0) / (y1 - y0)) * n;
+
+  for (let t = 0; t < idx.count; t += 3) {
+    const i0 = idx.getX(t), i1 = idx.getX(t + 1), i2 = idx.getX(t + 2);
+    const ax = px(pos.getX(i0)), ay = py(pos.getY(i0)), az = pos.getZ(i0);
+    const bx = px(pos.getX(i1)), by = py(pos.getY(i1)), bz = pos.getZ(i1);
+    const cx = px(pos.getX(i2)), cy = py(pos.getY(i2)), cz = pos.getZ(i2);
+    const det = (bx - ax) * (cy - ay) - (cx - ax) * (by - ay);
+    if (Math.abs(det) < 1e-12) continue;
+    // The slot is constant per triangle; u is the column centre it was cut from.
+    const s = Math.round((uv.getX(i0) * ATLAS_SIZE - 8) / 16);
+    const r0 = Math.max(0, Math.floor(Math.min(ay, by, cy)));
+    const r1 = Math.min(n - 1, Math.ceil(Math.max(ay, by, cy)));
+    const c0 = Math.max(0, Math.floor(Math.min(ax, bx, cx)));
+    const c1 = Math.min(n - 1, Math.ceil(Math.max(ax, bx, cx)));
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) {
+        const qx = c + 0.5, qy = r + 0.5;
+        const w0 = ((bx - qx) * (cy - qy) - (cx - qx) * (by - qy)) / det;
+        const w1 = ((cx - qx) * (ay - qy) - (ax - qx) * (cy - qy)) / det;
+        const w2 = 1 - w0 - w1;
+        if (w0 < -1e-6 || w1 < -1e-6 || w2 < -1e-6) continue;
+        const z = w0 * az + w1 * bz + w2 * cz;
+        const k = r * n + c;
+        if (z > depth[k]) { depth[k] = z; slot[k] = s; }
+      }
+    }
+  }
+  return { slot, n, xOf: (c) => x0 + ((c + 0.5) / n) * (x1 - x0), yOf: (r) => y0 + ((r + 0.5) / n) * (y1 - y0) };
+}
+
+/** Fraction of the visible pixels in a window that are bare SKIN. */
+function bareFraction(
+  v: ReturnType<typeof visibleSlots>, yLo: number, yHi: number, xMax: number,
+): number {
+  let skin = 0, seen = 0;
+  for (let r = 0; r < v.n; r++) {
+    const y = v.yOf(r);
+    if (y < yLo || y > yHi) continue;
+    for (let c = 0; c < v.n; c++) {
+      if (Math.abs(v.xOf(c)) > xMax) continue;
+      const s = v.slot[r * v.n + c];
+      if (s < 0) continue;
+      seen++;
+      if (s === SLOT.SKIN) skin++;
+    }
+  }
+  return seen === 0 ? 0 : skin / seen;
+}
+
+/**
+ * NOBODY WALKS THE STREET UNDRESSED.
+ *
+ * A playtest screenshot caught a pedestrian in a routine street framing
+ * rendering bare from the shoulders to the ankles. The cause was not a wardrobe
+ * slot rolling "none" and not an atlas UV landing on skin: `legs: 'skirt'` and
+ * `legs: 'longSkirt'` HAD NO GEOMETRY. They only deleted the trouser tube and
+ * replaced the leg with a bare `SLOT.SKIN` column, and the sole thing that ever
+ * covered the gap was `OUTER_HEM`, which is keyed on `a.outer` and knows nothing
+ * about the legs. A skirt-wearer in a jacket, a denim jacket or no outer garment
+ * was therefore nude from the hip down. Measured before the fix: 2.3% of every
+ * appearance rolled across all eight archetypes, and 100% of those were skirts.
+ *
+ * This is the assertion that stops the whole bug CLASS coming back silently,
+ * so it is deliberately not a regression test for skirts: it sweeps every
+ * archetype, both sexes, all six body types and many seeds, and asks the only
+ * question that matters — is the torso covered, and is the thigh covered.
+ *
+ * The windows are narrow on purpose. `xMax` keeps the arms out of the torso
+ * reading (they are legitimately bare for a short sleeve and they overlap the
+ * torso in a front view), and the thigh band sits well above the knee so that
+ * shorts, which legitimately bare the shin, are not counted as a failure.
+ */
+test('no generated appearance leaves the torso or the thighs bare', () => {
+  const worst = { torso: 0, thigh: 0, who: '', whoThigh: '' };
+  const PED_ARCHETYPES: PedArchetype[] = [
+    'civilian', 'builder', 'officeWorker', 'protester',
+    'police', 'ministryAgent', 'streetVendor', 'tourist',
+  ];
+
+  for (const archetype of PED_ARCHETYPES) {
+    for (let seed = 0; seed < 24; seed++) {
+      const rng = new Rng(`decency-${archetype}-${seed}`);
+      for (let k = 0; k < 4; k++) {
+        const a = rollAppearance(rng, archetype);
+        const rig = rigFor(a.body, a.female);
+        const m = rig.metrics;
+        const geo = buildHumanoidGeometry(a, rig);
+        const v = visibleSlots(geo);
+
+        // Torso: hip to armpit, central column only.
+        const torso = bareFraction(v, m.hipY + 0.03, m.yokeY - 0.02, 0.10);
+        // Thigh: 30%-55% of the way from the hip to the knee. Above any hem a
+        // skirt or a pair of shorts is entitled to have.
+        const hipToKnee = m.hipY - m.kneeY;
+        const thigh = bareFraction(v, m.hipY - hipToKnee * 0.55, m.hipY - hipToKnee * 0.30, 0.22);
+
+        const who = `${archetype} ${a.body}/${a.female ? 'f' : 'm'} top=${a.top} outer=${a.outer} legs=${a.legs}`;
+        if (torso > worst.torso) { worst.torso = torso; worst.who = who; }
+        if (thigh > worst.thigh) { worst.thigh = thigh; worst.whoThigh = who; }
+        geo.dispose();
+      }
+    }
+  }
+
+  // A torso is a garment end to end; nothing bare should reach the front of it.
+  expect(`${(worst.torso * 100).toFixed(0)}% ${worst.who}`).toBe(`0% ${worst.who}`);
+  // A thigh may show a sliver at the very edge of a flared skirt against the
+  // silhouette, but it must never be the surface the eye lands on.
+  expect(worst.thigh).toBeLessThan(0.10);
+}, 60_000);
 
 /**
  * HE MUST NOT BE A CUT-OUT.

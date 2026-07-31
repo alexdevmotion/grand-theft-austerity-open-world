@@ -220,6 +220,29 @@ export class PedSystem implements System, PedService {
       },
       scatter: (r = 40) => this.scatter(this.camPos, r),
       shadows: (on: boolean) => this.renderer.setShadows(on),
+      /**
+       * Every live ped's imposter wardrobe, in sRGB, so a bare torso or bare
+       * legs can be counted rather than squinted at. `srgb` is what the eye
+       * sees; the stored colours are linear.
+       */
+      wardrobe: () => {
+        const hex = (c: THREE.Color) => '#' + c.clone().convertLinearToSRGB().getHexString();
+        return this.list.map((p) => ({
+          id: p.id,
+          archetype: p.archetype,
+          actor: this.actors.has(p.id),
+          garments: p.appearance
+            ? (({ top, outer, legs, shoes, shortSleeve }) => ({ top, outer, legs, shoes, shortSleeve }))(p.appearance as Appearance)
+            : null,
+          skin: hex(p.app.skin),
+          top: hex(p.app.top),
+          sleeve: hex(p.app.sleeve),
+          legs: hex(p.app.legs),
+          shoes: hex(p.app.shoes),
+          sleeveIsSkin: p.app.sleeve === p.app.skin,
+          vest: p.app.vest ? hex(p.app.vest) : null,
+        }));
+      },
       poses: () => {
         const m: Record<string, number> = {};
         for (const p of this.list) m[p.pose] = (m[p.pose] ?? 0) + 1;
@@ -234,6 +257,21 @@ export class PedSystem implements System, PedService {
        * Frame the nearest ped from the front-left, at eye height. Used to
        * inspect a pose without hardcoding camera coordinates.
        */
+      /** Frame a specific ped by id — pairs with `wardrobe()` above. */
+      inspectId: (id: string, distance = 3.1) => {
+        const i = this.list.findIndex((p) => p.id === id);
+        if (i < 0) return null;
+        const p = this.list[i];
+        const a = p.yaw + 2.35;
+        const dbg = (window as unknown as {
+          __GTA_DEBUG__: { setCamera(a: number, b: number, c: number, d: number, e: number, f: number, g?: number): void };
+        }).__GTA_DEBUG__;
+        dbg.setCamera(
+          p.position.x + Math.sin(a) * distance, p.position.y + 1.20, p.position.z + Math.cos(a) * distance,
+          p.position.x, p.position.y + 0.95, p.position.z, 42,
+        );
+        return { id: p.id, archetype: p.archetype, skinned: this.actors.has(p.id) };
+      },
       inspect: (index = 0, distance = 3.1) => {
         const p = this.ranked[index]?.p ?? this.list[index];
         if (!p) return null;
@@ -859,7 +897,11 @@ function copyWardrobe(a: Appearance, p: Ped): void {
   lin(a.outer !== 'none' ? a.colors.outer : a.colors.top, p.app.top);
   lin(a.colors.legs, p.app.legs);
   lin(a.colors.shoes, p.app.shoes);
-  p.app.sleeve = a.shortSleeve ? p.app.skin : p.app.top;
+  /* The upper arm is cloth whatever the sleeve length — assigning the SKIN
+   * colour here is what stripped 29% of the crowd to the shoulder. Only the
+   * forearm is ever bare, and the renderer decides that from the flag. */
+  lin(a.outer !== 'none' ? a.colors.outer : a.colors.top, p.app.sleeve);
+  p.app.shortSleeve = a.shortSleeve;
   p.app.build = a.body === 'heavy' ? 1.16 : a.body === 'stocky' ? 1.08 : a.body === 'slim' ? 0.9 : 1.0;
   p.app.headwear = a.headwear !== 'none' ? 1 : a.hair === 'long' || a.hair === 'bun' ? 4 : 0;
   lin(a.headwear !== 'none' ? a.colors.accent : a.colors.hair, p.app.hatColor);

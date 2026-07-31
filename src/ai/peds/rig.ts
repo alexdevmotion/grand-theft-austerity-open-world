@@ -29,8 +29,13 @@ export interface PedAppearance {
   hair: THREE.Color;
   /** Torso garment. */
   top: THREE.Color;
-  /** Sleeve — same as top for long sleeves, skin for short. */
+  /**
+   * Upper-arm garment. ALWAYS cloth — a short sleeve still covers the
+   * shoulder. Which forearm shows is `shortSleeve`, not this.
+   */
   sleeve: THREE.Color;
+  /** Short sleeve: the FOREARM is bare skin, the upper arm is not. */
+  shortSleeve: boolean;
   legs: THREE.Color;
   shoes: THREE.Color;
   /** Hi-vis vest / sash / apron colour; null for none. */
@@ -717,20 +722,28 @@ export class CrowdRenderer {
       this.limb(_a, _b, legR, app.legs);
     }
 
-    /* ---- arms ---- */
+    /* ---- arms ----
+     *
+     * The forearm used to be picked with `app.sleeve === app.top ? ... : skin`
+     * — REFERENCE equality on two THREE.Colors — and `copyWardrobe` dressed a
+     * short-sleeved ped by assigning `app.sleeve = app.skin`. Both halves of the
+     * arm then drew in skin, so 29% of the crowd walked around with bare
+     * shoulders. A t-shirt covers the shoulder; only the forearm is ever bare,
+     * and which it is, is a flag and not an object identity. */
+    const forearm = app.shortSleeve ? app.skin : app.sleeve;
     if (lod < 2) {
       this.toWorld(J_SHO_L, _a);
       this.toWorld(J_ELB_L, _b);
       this.limb(_a, _b, armR, app.sleeve);
       this.toWorld(J_ELB_L, _a);
       this.toWorld(J_WRI_L, _b);
-      this.limb(_a, _b, armR * 0.86, app.sleeve === app.top ? app.sleeve : app.skin);
+      this.limb(_a, _b, armR * 0.86, forearm);
       this.toWorld(J_SHO_R, _a);
       this.toWorld(J_ELB_R, _b);
       this.limb(_a, _b, armR, app.sleeve);
       this.toWorld(J_ELB_R, _a);
       this.toWorld(J_WRI_R, _b);
-      this.limb(_a, _b, armR * 0.86, app.sleeve === app.top ? app.sleeve : app.skin);
+      this.limb(_a, _b, armR * 0.86, forearm);
     } else {
       this.toWorld(J_SHO_L, _a);
       this.toWorld(J_WRI_L, _b);

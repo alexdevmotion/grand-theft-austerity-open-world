@@ -781,6 +781,51 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
     }
   }
 
+  /* ---------------- skirt ----------------
+   *
+   * A SKIRT IS A GARMENT AND HAS TO BE BUILT.
+   *
+   * It never was. `legs: 'skirt' | 'longSkirt'` only ever DELETED the trouser
+   * tube and replaced the leg with a bare `SLOT.SKIN` column (see the `skirt`
+   * branch above) — nothing anywhere added a skirt. The single thing that
+   * covered the gap was `OUTER_HEM`, which is keyed on `a.outer` and knows
+   * nothing about what the legs are wearing, so a skirt-wearer in a jacket
+   * (hem 0.16), a denim jacket (0.08) or no outer garment at all (0) walked
+   * the street bare from the hip to the ankle.
+   *
+   * That was 2.3% of every appearance rolled across all eight archetypes, and
+   * 100% of those were skirt-wearers — a routine, common, fully-clothed-looking
+   * wardrobe roll producing a nude pedestrian. `body.test.ts` now asserts the
+   * mid-thigh is covered for every archetype, body type, sex and seed.
+   *
+   * The skirt hangs from the waist off the HIPS bone alone. It deliberately
+   * does not blend into the thighs: a skirt is not skinned to the legs, and
+   * weighting the hem to them is what makes one shear open mid-stride. The
+   * flare is what keeps the legs inside it instead.
+   */
+  if (skirt) {
+    const hipToKnee = m.hipY - m.kneeY;
+    const long = a.legs === 'longSkirt';
+    const topY = lerp(m.hipY, m.spineY, 0.34);
+    const hemY = m.hipY - hipToKnee * (long ? 1.32 : 0.54);
+    const wTop = lerp(m.waistW, m.pelvisW, 0.75);
+    const dTop = lerp(m.waistD, m.pelvisD, 0.75);
+    // Widest at the hip, then falling to a hem wide enough to clear a stride.
+    const flare = long ? 1.30 : 1.22;
+    const wt = spineWeights(topY, m);
+    const hipsOnly = { b0: BI.hips, w0: 1, b1: BI.hips, w1: 0 };
+
+    b.tube(
+      [
+        { c: V(0, topY, 0), dir: UPV, rx: wTop, rzF: dTop, rzB: dTop * 1.02, n: 2.2, b0: wt[0], w0: wt[1], b1: wt[2], w1: wt[3], v: 0.03 },
+        { c: V(0, m.hipY - 0.012, 0), dir: UPV, rx: m.pelvisW * 1.02, rzF: m.pelvisD * 1.0, rzB: m.pelvisD * 1.04, n: 2.3, ...hipsOnly, v: 0.18 },
+        { c: V(0, lerp(m.hipY, hemY, 0.55), 0), dir: UPV, rx: m.pelvisW * lerp(1.02, flare, 0.55), rzF: m.pelvisD * lerp(1.0, flare, 0.55), rzB: m.pelvisD * lerp(1.04, flare, 0.55), n: 2.25, ...hipsOnly, v: 0.50 },
+        { c: V(0, hemY, 0), dir: UPV, rx: m.pelvisW * flare, rzF: m.pelvisD * flare, rzB: m.pelvisD * flare * 1.03, n: 2.2, ...hipsOnly, v: 0.80 },
+      ],
+      12, SLOT.LEGS, { capStart: true, capEnd: true },
+    );
+  }
+
   /* ---------------- accessories ---------------- */
   buildAccessory(b, a, m, rng);
 

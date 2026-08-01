@@ -7,19 +7,18 @@
  * is mirrored in a local field, so a value changed in the pause menu is already
  * correct the next time this page opens, and vice versa.
  *
- * STORAGE. `src/ui/pauseMenu.ts` owns the `gta.settings.v1` slot and applies it
- * at its own init (order 420, before this system at 430). This file writes the
- * *same* shape to the *same* key so the two menus cannot disagree, and it
- * deliberately does not re-apply on boot: the pause menu has already done it,
- * and quality is intentionally left to the boot-time tier pick.
+ * STORAGE. `src/ui/pauseMenu.ts` and this page share the `gta.settings.v1`
+ * slot. `createGame` restores its quality field before renderer/world init;
+ * the pause menu restores the remaining input and audio values later. This
+ * keeps the two menus in sync without rebuilding an already-created world on
+ * every reload.
  */
 
 import type { GameContext } from '../../core/engine';
 import { Services, type RenderService } from '../../core/services';
+import { QUALITIES, isQuality, type Quality } from '../../render/renderer';
 
-export type Quality = 'low' | 'medium' | 'high' | 'ultra';
-
-export const QUALITIES: readonly Quality[] = ['low', 'medium', 'high', 'ultra'];
+export { QUALITIES, type Quality };
 
 export const QUALITY_LABELS: Record<Quality, string> = {
   low: 'SCĂZUT',
@@ -29,7 +28,7 @@ export const QUALITY_LABELS: Record<Quality, string> = {
 };
 
 /** Same key and shape as `src/ui/pauseMenu.ts`. Do not fork it. */
-const STORAGE_KEY = 'gta.settings.v1';
+export const STORAGE_KEY = 'gta.settings.v1';
 
 export const SENS_MIN = 0.0004;
 export const SENS_MAX = 0.0075;
@@ -39,6 +38,25 @@ interface StoredSettings {
   masterVolume?: number;
   lookSensitivity?: number;
   invertY?: boolean;
+}
+
+export function storedQuality(raw: string | null): Quality | null {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as StoredSettings;
+    return isQuality(value?.quality) ? value.quality : null;
+  } catch {
+    return null;
+  }
+}
+
+export function loadStoredQuality(storage?: Pick<Storage, 'getItem'>): Quality | null {
+  try {
+    const source = storage ?? (typeof localStorage === 'undefined' ? undefined : localStorage);
+    return source ? storedQuality(source.getItem(STORAGE_KEY)) : null;
+  } catch {
+    return null;
+  }
 }
 
 export function clamp(v: number, lo: number, hi: number): number {
@@ -73,8 +91,8 @@ export class Settings {
 
   setQuality(q: Quality): void {
     const r = this.render;
-    if (!r || r.quality === q) return;
-    r.setQuality(q);
+    if (!r) return;
+    if (r.quality !== q) r.setQuality(q);
     this.persist();
   }
 

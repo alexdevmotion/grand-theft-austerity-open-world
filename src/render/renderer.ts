@@ -4,6 +4,12 @@ import * as THREE from 'three';
 
 export type Quality = 'low' | 'medium' | 'high' | 'ultra';
 
+export const QUALITIES: readonly Quality[] = ['low', 'medium', 'high', 'ultra'];
+
+export function isQuality(value: unknown): value is Quality {
+  return typeof value === 'string' && (QUALITIES as readonly string[]).includes(value);
+}
+
 /**
  * WHAT A QUALITY TIER IS ALLOWED TO SAY.
  *
@@ -148,12 +154,41 @@ export function resetQualityConsumers(): void {
   qualityConsumers.clear();
 }
 
-export function detectQuality(): Quality {
-  const dpr = window.devicePixelRatio || 1;
-  const mem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 8;
-  const cores = navigator.hardwareConcurrency ?? 8;
-  if (mem <= 4 || cores <= 4) return 'medium';
-  if (cores >= 10 && mem >= 8) return dpr > 1.5 ? 'high' : 'ultra';
+export interface DeviceQualityHints {
+  dpr: number;
+  memoryGb?: number;
+  cores?: number;
+  mobile: boolean;
+}
+
+function browserQualityHints(): DeviceQualityHints {
+  const nav = typeof navigator === 'undefined'
+    ? undefined
+    : navigator as Navigator & {
+      deviceMemory?: number;
+      userAgentData?: { mobile?: boolean };
+    };
+  const coarse = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
+  return {
+    dpr: typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1,
+    memoryGb: nav?.deviceMemory,
+    cores: nav?.hardwareConcurrency,
+    mobile: nav?.userAgentData?.mobile ?? coarse,
+  };
+}
+
+/**
+ * Pick a conservative startup tier from signals available before WebGL boots.
+ * The menu remains the authority: this is only the first-run default.
+ */
+export function detectQuality(hints: DeviceQualityHints = browserQualityHints()): Quality {
+  const mem = hints.memoryGb;
+  const cores = hints.cores ?? 8;
+  if ((mem !== undefined && mem <= 2) || cores <= 2) return 'low';
+  if (mem !== undefined && mem <= 4 && cores <= 4) return 'low';
+  if ((mem !== undefined && mem <= 4) || cores <= 4 || hints.mobile) return 'medium';
+  const dpr = hints.dpr || 1;
+  if (cores >= 10 && (mem ?? 8) >= 8) return dpr > 1.5 ? 'high' : 'ultra';
   return 'high';
 }
 

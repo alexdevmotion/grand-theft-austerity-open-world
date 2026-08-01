@@ -280,8 +280,8 @@ export class PauseMenu implements System {
 
   private setQuality(q: Quality): void {
     const r = this.render$;
-    if (!r || r.quality === q) return;
-    r.setQuality(q);
+    if (!r) return;
+    if (r.quality !== q) r.setQuality(q);
     this.persist();
   }
 
@@ -306,9 +306,7 @@ export class PauseMenu implements System {
       this.ctx.input.lookSensitivity = clamp(s.lookSensitivity, 0.0004, 0.0075);
     }
     if (s.invertY !== undefined) this.ctx.input.invertY = !!s.invertY;
-    // Quality is intentionally NOT restored here: the boot path already picked
-    // a tier from the URL or the device, and rebuilding the post chain during
-    // init would throw away work that has just been done.
+    // Quality was restored before renderer/world initialisation by createGame.
   }
 
   private persist(): void {

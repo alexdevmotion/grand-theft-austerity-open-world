@@ -1,5 +1,9 @@
 # Grand Theft Austerity: Open World
 
+<p align="center">
+  <strong><a href="https://gtausterity.vercel.app">▶ Play Grand Theft Austerity: Open World</a></strong>
+</p>
+
 > Take back the House. Now the whole city is in the way.
 
 The open-world evolution of the original [Grand Theft Austerity AI Game Jam build](https://github.com/alexdevmotion/grand-theft-austerity). It keeps the same story, satire and central idea, then rebuilds the game around a proper explorable Bucharest.

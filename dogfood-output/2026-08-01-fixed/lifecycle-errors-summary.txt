@@ -1,1 +1,0 @@
-Agent-browser `errors` output was empty after all three stale clear/refill cycles (zero page errors).

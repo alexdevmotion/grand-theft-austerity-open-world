@@ -22,7 +22,16 @@ import {
   parseSession,
   roman,
 } from './session';
-import { QUALITIES, clamp, clamp01, sensLabel, stepQuality, SENS_MAX, SENS_MIN } from './settings';
+import {
+  QUALITIES,
+  clamp,
+  clamp01,
+  sensLabel,
+  stepQuality,
+  storedQuality,
+  SENS_MAX,
+  SENS_MIN,
+} from './settings';
 import { frontEndGate, sensPct, worldHandoffPolicy } from './frontEnd';
 
 /* ---- boot gate ---------------------------------------------------- */
@@ -76,6 +85,7 @@ test('panels advance once each and then hold on the last', () => {
 test('the menu is the five rows the brief asks for', () => {
   expect(MENU_ITEMS.map((m) => m.id)).toEqual(['start', 'continue', 'controls', 'audio', 'credits']);
   expect(MENU_ITEMS[0].sub).toBe('THE LAST SERVER');
+  expect(MENU_ITEMS.find((m) => m.id === 'audio')?.label).toBe('SETTINGS');
 });
 
 test('selection skips a CONTINUE with nothing to continue', () => {
@@ -156,6 +166,13 @@ test('quality steps without falling off either end', () => {
   expect(stepQuality('low', 1)).toBe('medium');
   expect(stepQuality('ultra', 1)).toBe('ultra');
   expect(QUALITIES.length).toBe(4);
+});
+
+test('a main-menu quality choice is safe to restore before the next boot', () => {
+  expect(storedQuality('{"quality":"low"}')).toBe('low');
+  expect(storedQuality('{"quality":"ultra"}')).toBe('ultra');
+  expect(storedQuality('{"quality":"potato"}')).toBeNull();
+  expect(storedQuality('{oops')).toBeNull();
 });
 
 test('sensitivity is clamped and displayed the way the pause menu shows it', () => {

@@ -465,7 +465,7 @@ export class FrontEnd {
       },
       audio: {
         title: 'SUNET ȘI IMAGINE',
-        crumb: 'MENIU / AUDIO',
+        crumb: 'MENIU / SETTINGS',
         foot: '↑ ↓ RÂND · ← → MODIFICĂ · ESC ÎNAPOI',
       },
       credits: {

@@ -1,7 +1,0 @@
-GTA_BROWSER_SLOTS=1 tools/gta-browser checker close --all
-✓ Closed session: gta
-GTA_BROWSER_SLOTS=1 tools/gta-browser checker close --all
-No active sessions
-GTA_BROWSER_SLOTS=1 tools/gta-browser checker session list
-No active sessions
-No /.agent-browser/browsers/chrome process remained after close.

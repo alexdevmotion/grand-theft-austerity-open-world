@@ -1,1 +1,0 @@
-PASS: targeted crowd diff has no whitespace errors

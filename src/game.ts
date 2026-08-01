@@ -24,7 +24,7 @@
 import * as THREE from 'three';
 import { Engine } from './core/engine';
 import { PhysicsWorld } from './physics/physics';
-import { createRenderer, detectQuality, type Quality } from './render/renderer';
+import { createRenderer, detectQuality, isQuality } from './render/renderer';
 import { PostFXSystem } from './render/postfx';
 import { SkySystem } from './render/sky';
 import { LightingSystem } from './render/lighting';
@@ -52,6 +52,8 @@ import { DebugSystem } from './core/debug';
 import { MenuSystem } from './ui/menu/menuSystem';
 import { MinimapSystem } from './ui/map/minimapSystem';
 import { InteriorSystem } from './world/interiors/interiorSystem';
+import { Services } from './core/services';
+import { loadStoredQuality } from './ui/menu/settings';
 
 export interface GameHandle {
   engine: Engine;
@@ -78,10 +80,19 @@ export async function createGame(
   onProgress?: (done: number, total: number, name: string) => void,
 ): Promise<GameHandle> {
   const params = new URLSearchParams(location.search);
-  const quality = (params.get('q') as Quality | null) ?? detectQuality();
+  const queryQuality = params.get('q');
+  const quality = isQuality(queryQuality)
+    ? queryQuality
+    : loadStoredQuality() ?? detectQuality();
 
   const renderer = createRenderer(canvas, quality);
   const engine = new Engine(canvas, renderer);
+  const postfx = new PostFXSystem(quality);
+
+  // Publish the chosen startup tier before world systems initialise. Several
+  // of them size pools and draw distances during init, while PostFX itself is
+  // deliberately initialised last.
+  engine.provide(Services.Render, postfx);
 
   engine.scene.background = new THREE.Color(0x0b0716);
 
@@ -118,7 +129,7 @@ export async function createGame(
     .add(new HudSystem())                 // 420
     .add(new MinimapSystem(), PAUSED)     // 425
     .add(new PauseMenu())                 // 440
-    .add(new PostFXSystem(quality), PAUSED); // 900
+    .add(postfx, PAUSED);                 // 900
 
   await engine.initSystems(onProgress);
 

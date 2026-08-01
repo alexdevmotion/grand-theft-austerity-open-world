@@ -25,7 +25,13 @@
 import * as THREE from 'three';
 import type { GameContext, System } from '../core/engine';
 import { Rng } from '../core/rng';
-import { QUALITY, detectQuality, onQualityChange, type Quality } from '../render/renderer';
+import {
+  QUALITY,
+  detectQuality,
+  onQualityChange,
+  type Quality,
+  type QualitySettings,
+} from '../render/renderer';
 import {
   Services,
   type CharacterHandle,
@@ -199,6 +205,7 @@ export class PedSystem implements System, PedService {
   private tension = 0;
   private shadowRadius = 38;
   private actorBudget = 34;
+  private rendererCapacity = 0;
   private ranked: Array<{ p: Ped; d: number }> = [];
   private edgeBuf: number[] = [];
   private anchorBuf: number[] = [];
@@ -231,16 +238,6 @@ export class PedSystem implements System, PedService {
     // Concentrate the budget: at ultra this is ~90 m, which puts the whole
     // 120-person allowance on the four blocks you can actually read.
     this.spawnRadius = Math.min(this.drawDistance * 0.55, 34 + this.maxPeds * 0.47);
-    // Snapshotted at init before this, so switching ultra -> low from the menu
-    // kept all 120 pedestrians alive and simulated. The despawn sweep in
-    // `update` reads `maxPeds` every frame, so lowering it here is enough to
-    // shed the surplus; raising it lets the spawner refill.
-    onQualityChange('peds', ['maxPeds', 'entityDrawDistance'], (_q, s) => {
-      this.maxPeds = s.maxPeds;
-      this.drawDistance = s.entityDrawDistance;
-      this.spawnRadius = Math.min(this.drawDistance * 0.55, 34 + this.maxPeds * 0.47);
-    });
-
     const t0 = performance.now();
     if (this.city) this.graph.build(this.city, this.rng.fork('pavement'));
     const buildMs = performance.now() - t0;
@@ -252,16 +249,12 @@ export class PedSystem implements System, PedService {
     // graph and a skeleton update; an imposter costs fifteen instances in a
     // shared buffer. Measured at 1920x1080/ultra, going all-skinned at 120
     // peds cost 15 fps, and past about 45 m the two are indistinguishable.
-    this.actorBudget = q === 'ultra' ? 34 : q === 'high' ? 26 : q === 'medium' ? 16 : 8;
     this.renderer = new CrowdRenderer(ctx.scene, this.maxPeds, q !== 'low');
-    this.renderer.lod1 = Math.max(34, this.drawDistance * 0.2);
-    this.renderer.lod2 = Math.max(80, this.drawDistance * 0.45);
-    this.shadowRadius = q === 'ultra' ? 38 : q === 'high' ? 30 : q === 'medium' ? 20 : 0;
-    this.renderer.shadowRadius = this.shadowRadius;
-
-    // Anchor Object3Ds live under one group so other systems can parent to
-    // `CharacterHandle.object` without walking the scene.
-    for (let i = 0; i < this.maxPeds + 12; i++) this.pool.push(new Ped());
+    this.rendererCapacity = this.maxPeds;
+    this.applyQuality(q, qs);
+    onQualityChange('peds', ['maxPeds', 'entityDrawDistance'], (nq, s) => {
+      this.applyQuality(nq, s);
+    });
 
     this.collectLandmarkBias();
 
@@ -435,6 +428,34 @@ export class PedSystem implements System, PedService {
         return { id: p.id, pose: p.pose, mode: p.mode, archetype: p.archetype, skinned: this.actors.has(p.id) };
       },
     };
+  }
+
+  private applyQuality(q: Quality, settings: QualitySettings): void {
+    this.maxPeds = settings.maxPeds;
+    this.drawDistance = settings.entityDrawDistance;
+    this.spawnRadius = Math.min(this.drawDistance * 0.55, 34 + this.maxPeds * 0.47);
+    this.actorBudget = q === 'ultra' ? 34 : q === 'high' ? 26 : q === 'medium' ? 16 : 8;
+    this.shadowRadius = q === 'ultra' ? 38 : q === 'high' ? 30 : q === 'medium' ? 20 : 0;
+
+    while (this.list.length > this.maxPeds) this.despawn(this.list[this.list.length - 1].id);
+
+    if (this.rendererCapacity !== this.maxPeds) {
+      const previous = this.renderer;
+      const next = new CrowdRenderer(this.ctx.scene, this.maxPeds, q !== 'low');
+      for (const actor of this.actors.values()) next.root.add(actor.object);
+      this.renderer = next;
+      this.rendererCapacity = this.maxPeds;
+      previous.dispose();
+    }
+
+    this.renderer.setShadows(q !== 'low');
+    this.renderer.lod1 = Math.max(34, this.drawDistance * 0.2);
+    this.renderer.lod2 = Math.max(80, this.drawDistance * 0.45);
+    this.renderer.shadowRadius = this.shadowRadius;
+
+    const desiredPool = this.maxPeds + 12 - this.list.length;
+    while (this.pool.length < desiredPool) this.pool.push(new Ped());
+    if (this.pool.length > desiredPool) this.pool.length = desiredPool;
   }
 
   private resolveQuality(ctx: GameContext): Quality {

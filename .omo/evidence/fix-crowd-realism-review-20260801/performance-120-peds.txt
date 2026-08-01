@@ -1,1 +1,0 @@
-{"scenario":"120 spaced pedestrians, blocker-aware global solve","iterations":1000,"averageMs":0.03375820899999999}

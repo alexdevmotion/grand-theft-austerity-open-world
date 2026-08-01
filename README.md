@@ -101,11 +101,11 @@ TypeScript, Vite and three.js render the game in WebGL2; Rapier powers physics; 
 
 The project began as **Grand Theft Austerity**, built with Codex + GPT-5.6 sol for [AI Game Jam #1](https://luma.com/tagpbosj?tk=EgBQt5). The [original repository](https://github.com/alexdevmotion/grand-theft-austerity) and [browser build](https://grand-theft-austerity.vercel.app/) preserve that first hackathon version.
 
-- [Alex Constantin](https://github.com/alexdevmotion) — creator and developer
-- [Adrian Ciubotaru](https://github.com/AdrianCiubotaru) — co-developer of the original hackathon version
-- [pax-k](https://github.com/pax-k) — AI Game Jam organizer
-- [Recorder](https://recorder.ro/), [Builders House](https://buildershouse.howtoweb.co/) and [How to Web](https://www.howtoweb.co/) — the civic and builder-community inspiration behind the parody
-- [OpenStreetMap contributors](https://www.openstreetmap.org/copyright) — Bucharest map data, licensed under ODbL 1.0
+- [Alex Constantin](https://github.com/alexdevmotion) - creator and developer
+- [Adrian Ciubotaru](https://github.com/AdrianCiubotaru) - co-developer of the original hackathon version
+- [pax-k](https://github.com/pax-k) - AI Game Jam organizer
+- [Recorder](https://recorder.ro/), [Builders House](https://buildershouse.howtoweb.co/) and [How to Web](https://www.howtoweb.co/) - the civic and builder-community inspiration behind the parody
+- [OpenStreetMap contributors](https://www.openstreetmap.org/copyright) - Bucharest map data, licensed under ODbL 1.0
 
 This is an independent, non-commercial parody. All political characters are fictional composites and do not represent or imply endorsement by the people or organizations referenced.
 

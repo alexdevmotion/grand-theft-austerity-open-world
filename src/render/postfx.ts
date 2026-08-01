@@ -343,7 +343,7 @@ export class PostFXSystem implements System, RenderService {
 
   init(ctx: GameContext): void {
     this.ctx = ctx;
-    ctx.provide(Services.Render, this);
+    if (ctx.tryGet(Services.Render) !== this) ctx.provide(Services.Render, this);
     this.build();
 
     window.addEventListener('gta:resize', () => {

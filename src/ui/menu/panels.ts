@@ -146,7 +146,7 @@ export const MENU_ITEMS: readonly MenuItemDef[] = [
   { id: 'start', label: 'START', sub: 'THE LAST SERVER' },
   { id: 'continue', label: 'CONTINUE', sub: 'RELUĂM DE UNDE AM RĂMAS' },
   { id: 'controls', label: 'CONTROLS', sub: 'TASTE ȘI MOUSE' },
-  { id: 'audio', label: 'AUDIO', sub: 'SUNET ȘI IMAGINE' },
+  { id: 'audio', label: 'SETTINGS', sub: 'SUNET ȘI IMAGINE' },
   { id: 'credits', label: 'CREDITS', sub: 'CINE A CONSTRUIT ASTA' },
 ];
 

@@ -33,6 +33,7 @@ import { wheelGeometry } from './wheels';
 import { VehicleLamps, VehicleLightPool, contactShadowAssets } from './lights';
 import { DamageModel, deform } from './damage';
 import { ParticlePool, SkidmarkPool } from './skidmarks';
+import { QUALITY, onQualityChange, type Quality, type QualitySettings } from '../render/renderer';
 
 /* ------------------------------------------------------------------ */
 /* Tuning                                                              */
@@ -987,6 +988,7 @@ export class VehicleSystem implements System, VehicleService {
   private lightPool!: VehicleLightPool;
   private skid: SkidmarkPool | null = null;
   private parts: ParticlePool | null = null;
+  private quality: Quality = 'high';
   private rng = new Rng('vehicles');
   private drawDistance = 260;
   private nightFactor = 1;
@@ -1032,10 +1034,10 @@ export class VehicleSystem implements System, VehicleService {
     this.phys = ctx.get(Services.Physics);
     this.atlas = vehicleAtlas();
     const quality = ctx.tryGet(Services.Render)?.quality ?? 'high';
-    this.lightPool = new VehicleLightPool(ctx.scene, quality);
-    this.skid = new SkidmarkPool(ctx.scene, quality === 'low' ? 320 : 900);
-    this.parts = new ParticlePool(ctx.scene, quality === 'low' ? 300 : 900);
-    this.drawDistance = quality === 'low' ? 110 : quality === 'medium' ? 170 : quality === 'high' ? 240 : 330;
+    this.applyQuality(quality, QUALITY[quality]);
+    onQualityChange('vehicles', ['entityDrawDistance'], (q, settings) => {
+      this.applyQuality(q, settings);
+    });
     ctx.provide(Services.Vehicles, this);
 
     const params = new URLSearchParams(location.search);
@@ -1179,6 +1181,19 @@ export class VehicleSystem implements System, VehicleService {
         this.stageCursor = 0;
       },
     };
+  }
+
+  private applyQuality(quality: Quality, settings: QualitySettings): void {
+    this.drawDistance = settings.entityDrawDistance;
+    if (this.lightPool && quality === this.quality) return;
+
+    this.lightPool?.dispose();
+    this.skid?.dispose();
+    this.parts?.dispose();
+    this.quality = quality;
+    this.lightPool = new VehicleLightPool(this.ctx.scene, quality);
+    this.skid = new SkidmarkPool(this.ctx.scene, quality === 'low' ? 320 : 900);
+    this.parts = new ParticlePool(this.ctx.scene, quality === 'low' ? 300 : 900);
   }
 
   /* ---------------- spawning ---------------- */

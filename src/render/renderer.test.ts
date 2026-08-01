@@ -1,5 +1,5 @@
 import { test, expect, describe } from 'bun:test';
-import { wantsPreservedDrawingBuffer, QUALITY } from './renderer';
+import { detectQuality, isQuality, wantsPreservedDrawingBuffer, QUALITY } from './renderer';
 
 /**
  * `preserveDrawingBuffer` used to be unconditional, costing every player a
@@ -47,6 +47,20 @@ describe('wantsPreservedDrawingBuffer', () => {
  * knobs that claim depends on, so a look change cannot quietly move them.
  */
 describe('quality tiers', () => {
+  test('only real quality names are accepted at startup', () => {
+    expect(isQuality('low')).toBe(true);
+    expect(isQuality('ultra')).toBe(true);
+    expect(isQuality('potato')).toBe(false);
+    expect(isQuality(null)).toBe(false);
+  });
+
+  test('automatic detection reserves low for genuinely constrained devices', () => {
+    expect(detectQuality({ dpr: 2, memoryGb: 2, cores: 8, mobile: true })).toBe('low');
+    expect(detectQuality({ dpr: 2, memoryGb: 4, cores: 4, mobile: true })).toBe('low');
+    expect(detectQuality({ dpr: 3, cores: 6, mobile: true })).toBe('medium');
+    expect(detectQuality({ dpr: 1, memoryGb: 16, cores: 12, mobile: false })).toBe('ultra');
+  });
+
   test('high stays at the pixel-ratio cap the 60fps claim was measured at', () => {
     expect(QUALITY.high.pixelRatioCap).toBe(1.5);
   });

@@ -1,0 +1,23 @@
+bun test v1.3.11 (af24e281)
+
+src/ai/peds/crowd.test.ts:
+49 |   const a = activePed(0.1, 0);
+50 |   const b = activePed(0.2, 0);
+51 |   const halfPlane = testSpatial((x) => x < 0);
+52 |   const grid = new CrowdGrid();
+53 | 
+54 |   grid.resolve([a, b], halfPlane, null, false);
+            ^
+TypeError: grid.resolve is not a function. (In 'grid.resolve([a, b], halfPlane, null, !1)', 'grid.resolve' is undefined)
+      at <anonymous> (/Users/alex.constantin/pers/grand-theft-austerity-open-world/src/ai/peds/crowd.test.ts:54:8)
+(fail) ordinary depenetration uses the open half-plane and retains safe roots in a closed corner [0.73ms]
+(pass) crowd grid deterministically separates pedestrians spawned at the exact same point [0.16ms]
+(pass) depenetrating an anchored cluster moves its anchors with its bodies [0.18ms]
+(pass) an anchored pedestrian cannot remain coincident with the on-foot player [0.70ms]
+(pass) pedestrians moving toward the same point preserve a hard body separation [0.27ms]
+(pass) a passing pedestrian depenetrates without permanently dragging a loiter anchor [0.04ms]
+
+ 5 pass
+ 1 fail
+ 26 expect() calls
+Ran 6 tests across 1 file. [25.00ms]

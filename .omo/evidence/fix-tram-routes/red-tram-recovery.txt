@@ -1,0 +1,23 @@
+bun test v1.3.11 (af24e281)
+
+src/ai/traffic/roadGraph.test.ts:
+(pass) explicit tram routing > a wide rank-2 road without rendered rails is never tram-routable [0.47ms]
+90 |     expect((1 - range!.max) * east.length).toBeCloseTo(9.7, 6);
+91 |     expect(laneSpawnRange({ ...east, length: 19 } as LaneEdge, 7.7)).toBeNull();
+92 | 
+93 |     // Recovery after a collision must search the permanent way, not snap a
+94 |     // tram onto the closer, geometrically straight ordinary road.
+95 |     const recovered = graph.nearestTramLane(150, 0, Math.PI / 2, []);
+                                 ^
+TypeError: graph.nearestTramLane is not a function. (In 'graph.nearestTramLane(150, 0, Math.PI / 2, [])', 'graph.nearestTramLane' is undefined)
+      at <anonymous> (/Users/alex.constantin/pers/grand-theft-austerity-open-world/src/ai/traffic/roadGraph.test.ts:95:29)
+(fail) explicit tram routing > rendered rail paths map both directions and choose the rail continuation [0.41ms]
+[city] 2885 buildings, 64 chunks, 58k facade + 82k surface + 2483k detail tris in 514 ms
+[city/osm] Bucharest at 60%: 121.1 km of real street, 2789 nodes, 3465 edges, 732 real footprints, 2010 infilled, 40 parks, 33 squares
+[tram-test] 173 rendered lines -> 314 directed rail edges, 196 with continuations; 1192 rank-2 road edges rejected
+(pass) explicit tram routing > the built city maps a usable bidirectional network to its visible rails [561.04ms]
+
+ 2 pass
+ 1 fail
+ 728 expect() calls
+Ran 3 tests across 1 file. [586.00ms]

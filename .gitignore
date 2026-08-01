@@ -15,3 +15,4 @@ tools/facefit/face_landmarker.task
 #   bun run audio:sync
 public/audio/vo/
 public/audio/music/
+.vercel

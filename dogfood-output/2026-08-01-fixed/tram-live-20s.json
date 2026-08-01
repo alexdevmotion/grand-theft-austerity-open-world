@@ -1,0 +1,1 @@
+"{\"traffic\":{\"active\":72,\"budget\":72,\"max\":72,\"density\":2,\"trams\":0,\"claims\":17,\"edges\":8080,\"moving\":22,\"panicking\":1,\"horns\":16,\"stalled\":{\"go\":42,\"giveWay\":3,\"light\":3,\"queue\":2}},\"trams\":[],\"kinds\":[\"dacia\",\"hatch\",\"sedan\",\"van\",\"bus\"]}"

@@ -1,0 +1,11 @@
+.git/
+.omo/
+.vercel/
+dogfood-output/
+dist/
+node_modules/
+tools/out/
+tools/facefit/face_landmarker.task
+public/audio/vo/
+public/audio/music/
+*.log

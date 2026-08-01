@@ -1,12 +1,12 @@
 /**
  * THE STREET TALKS BACK — diegetic voices at real world positions.
  *
- * The `streetOverheard` context in clipContexts.ts is explicitly not a voice in
- * the player's head. These are things that are *somewhere*: a transistor radio
- * on a newspaper kiosk, a shop doorway with the door propped open, a parked
- * Dacia with its window down. You walk past them and the joke arrives from the
- * left, gets louder, and goes behind you. That is the difference between a city
- * with people in it and a city with a soundtrack.
+ * The source-specific street contexts in clipContexts.ts are explicitly not a
+ * voice in the player's head. These are things that are *somewhere*: a
+ * transistor radio on a newspaper kiosk, a shop doorway with the door propped
+ * open, a parked Dacia with its window down. You walk past them and the joke
+ * arrives from the left, gets louder, and goes behind you. That is the
+ * difference between a city with people in it and a city with a soundtrack.
  *
  * Each emitter is:
  *
@@ -27,8 +27,10 @@ import * as THREE from 'three';
 import type { CityService } from '../core/services';
 import { Rng } from '../core/rng';
 import { clamp, speakerCurve } from './dsp';
+import type { StreetVoiceSource } from './clipContexts';
 
-export type StreetEmitterKind = 'kiosk' | 'doorway' | 'parkedCar';
+/** Physical identity is editorial identity; display copy is never parsed. */
+export type StreetEmitterKind = StreetVoiceSource;
 
 export const EMITTER_SPEAKER: Record<StreetEmitterKind, string> = {
   kiosk: 'RADIO DE CHIOȘC',

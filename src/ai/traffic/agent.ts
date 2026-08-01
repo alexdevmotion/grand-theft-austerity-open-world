@@ -102,10 +102,11 @@ export class TrafficAgent {
   private pickNext(from: number, fromLane: number): { edge: number; lane: number } | null {
     const e = this.e(from);
     if (this.kind === 'tram') {
-      // Trams cannot turn: they are on rails, and the permanent way only runs
-      // down the boulevards. Off the end of the wire, they retire.
-      const s = e.straight;
-      if (s < 0 || !this.e(s).tram) return null;
+      // The road's straightest continuation can be plain asphalt while the
+      // permanent way bends. Follow only the continuation verified against the
+      // rendered rails; off the end of the wire, retire.
+      const s = e.tramStraight;
+      if (s < 0) return null;
       return { edge: s, lane: TRAM_LANE };
     }
     if (!e.next.length) return null;
@@ -342,7 +343,9 @@ export class TrafficAgent {
       this.reanchorTime += dt;
       if (this.reanchorTime > 0.5) {
         this.reanchorTime = 0;
-        const found = this.graph.nearestLane(px, pz, this.driver.heading, this.scratch);
+        const found = this.kind === 'tram'
+          ? this.graph.nearestTramLane(px, pz, this.driver.heading, this.scratch)
+          : this.graph.nearestLane(px, pz, this.driver.heading, this.scratch);
         if (found) {
           if (this.heldNode >= 0) { junctions.release(this.heldNode, this.id); this.heldNode = -1; }
           this.edge = found.edge;

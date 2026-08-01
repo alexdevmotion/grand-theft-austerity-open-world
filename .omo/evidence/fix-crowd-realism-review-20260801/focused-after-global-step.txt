@@ -1,0 +1,18 @@
+bun test v1.3.11 (af24e281)
+
+src/ai/peds/crowd.test.ts:
+(pass) ordinary depenetration uses the open half-plane and retains safe roots in a closed corner [0.77ms]
+(pass) anchored depenetration validates roots and permanent anchors independently [0.05ms]
+(pass) on-foot player depenetration finds an open half-plane and never commits a closed-corner fallback [0.19ms]
+(pass) crowd grid deterministically separates pedestrians spawned at the exact same point [0.06ms]
+(pass) depenetrating an anchored cluster moves its anchors with its bodies [0.22ms]
+(pass) an anchored pedestrian cannot remain coincident with the on-foot player [0.54ms]
+(pass) the on-foot player projection stays inactive while the player is in a vehicle [0.24ms]
+(pass) pedestrians moving toward the same point preserve a hard body separation [0.05ms]
+(pass) a crowd frame is equivalent per pedestrian id when the source list is reversed [0.27ms]
+(pass) a passing pedestrian depenetrates without permanently dragging a loiter anchor [0.06ms]
+
+ 10 pass
+ 0 fail
+ 55 expect() calls
+Ran 10 tests across 1 file. [26.00ms]

@@ -1,0 +1,27 @@
+bun test v1.3.11 (af24e281)
+
+src/ai/peds/crowd.test.ts:
+225 |   grid.rebuild([ped]);
+226 |   const player = new THREE.Vector3(5, 0, 9);
+227 | 
+228 |   ped.update(1 / 60, crowdEnv(grid, player, true));
+229 | 
+230 |   expect(ped.position.x).toBeCloseTo(player.x, 8);
+                               ^
+error: expect(received).toBeCloseTo(expected, precision)
+
+Expected: 5
+Received: 4.614257578396155
+
+Expected precision: 8
+Expected difference: < 0.000000005
+Received difference: 0.38574242160384475
+
+      at <anonymous> (/Users/alex.constantin/pers/grand-theft-austerity-open-world/src/ai/peds/crowd.test.ts:230:26)
+(fail) the on-foot player projection stays inactive while the player is in a vehicle [1.49ms]
+
+ 0 pass
+ 8 filtered out
+ 1 fail
+ 1 expect() calls
+Ran 1 test across 1 file. [26.00ms]

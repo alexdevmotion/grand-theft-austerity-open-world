@@ -1,0 +1,47 @@
+bun test v1.3.11 (af24e281)
+
+src/ai/traffic/roadGraph.test.ts:
+(pass) explicit tram routing > a wide rank-2 road without rendered rails is never tram-routable [0.31ms]
+(pass) explicit tram routing > rendered rail paths map both directions and choose the rail continuation [0.05ms]
+[city] 2885 buildings, 64 chunks, 58k facade + 82k surface + 2483k detail tris in 515 ms
+[city/osm] Bucharest at 60%: 121.1 km of real street, 2789 nodes, 3465 edges, 732 real footprints, 2010 infilled, 40 parks, 33 squares
+129 |         if (built.spatial.isBlocked(p.x, p.z)) {
+130 |           blocked.push(`${edge.from}->${edge.to}@${t}`);
+131 |         }
+132 |       }
+133 |     }
+134 |     expect(blocked).toEqual([]);
+                          ^
+error: expect(received).toEqual(expected)
+
+- []
++ [
++   "758->852@0.5",
++   "758->852@0.8",
++   "852->758@0.5",
++   "1032->1033@0.8",
++   "1033->1032@0.2",
++   "1033->1084@0.2",
++   "1084->1033@0.8",
++   "1085->1084@0.5",
++   "1141->1142@0.8",
++   "1398->1399@0.5",
++   "1399->1398@0.5",
++   "1404->1401@0.5",
++   "1486->1312@0.5",
++   "1635->1634@0.5",
++   "1670->1671@0.2",
++   "1670->1671@0.5",
++   "1671->1670@0.8",
++ ]
+
+- Expected  - 1
++ Received  + 19
+
+      at <anonymous> (/Users/alex.constantin/pers/grand-theft-austerity-open-world/src/ai/traffic/roadGraph.test.ts:134:21)
+(fail) explicit tram routing > the built city maps a usable bidirectional network to its visible rails [559.00ms]
+
+ 2 pass
+ 1 fail
+ 848 expect() calls
+Ran 3 tests across 1 file. [582.00ms]

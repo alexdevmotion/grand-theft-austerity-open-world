@@ -1,0 +1,1 @@
+Agent-browser `errors` output was empty after the F-distinct interaction check (zero page errors).

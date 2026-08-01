@@ -48,12 +48,199 @@ export interface VehicleSample {
   id: string;
 }
 
+/** Upright crowd bodies are wider than their torsos once arms are included. */
+const PED_MIN_SEPARATION = 0.74;
+const PED_PAIR_CANDIDATE_RADIUS_SQ = 2.25;
+const DEPENETRATION_PASSES = 6;
+
 /** Uniform grid over the ped population, rebuilt each fixed step. */
 export class CrowdGrid {
   private cells = new Map<number, Ped[]>();
   private cell = 3.2;
+  private ordered: Ped[] = [];
+  private pairA: Ped[] = [];
+  private pairB: Ped[] = [];
 
   rebuild(peds: Ped[]): void {
+    this.ordered.length = 0;
+    for (const p of peds) {
+      if (p.active) this.ordered.push(p);
+    }
+    // Pool order changes as pedestrians stream in and out. Stable id order
+    // keeps both integration and the position solver replay-safe regardless
+    // of that array order.
+    this.ordered.sort(comparePedId);
+    this.fillCells(this.ordered);
+  }
+
+  /** Integrate the prepared population, solve it globally, then publish transforms. */
+  step(dt: number, env: CrowdEnv): void {
+    for (const p of this.ordered) p.update(dt, env);
+    this.resolvePrepared(env.spatial, env.playerPos, env.playerInVehicle);
+    for (const p of this.ordered) p.syncAfterCrowdStep();
+  }
+
+  /** Stable, blocker-aware population solve run after every ped integrates. */
+  resolve(
+    peds: Ped[],
+    spatial: SpatialQuery,
+    playerPos: THREE.Vector3 | null,
+    playerInVehicle: boolean,
+  ): void {
+    this.rebuild(peds);
+    this.resolvePrepared(spatial, playerPos, playerInVehicle);
+  }
+
+  /** Resolve and expose a newly attached population before its caller returns. */
+  publish(
+    peds: Ped[],
+    spatial: SpatialQuery,
+    playerPos: THREE.Vector3 | null,
+    playerInVehicle: boolean,
+  ): void {
+    this.resolve(peds, spatial, playerPos, playerInVehicle);
+    for (const p of this.ordered) p.syncAfterCrowdStep();
+  }
+
+  private resolvePrepared(
+    spatial: SpatialQuery,
+    playerPos: THREE.Vector3 | null,
+    playerInVehicle: boolean,
+  ): void {
+    for (let pass = 0; pass < DEPENETRATION_PASSES; pass++) {
+      this.fillCells(this.ordered);
+      this.pairA.length = 0;
+      this.pairB.length = 0;
+      for (const p of this.ordered) {
+        if (p.mode === 'down') continue;
+        this.forEachNear(p.position.x, p.position.z, (o) => {
+          if (o.mode === 'down' || comparePedId(p, o) >= 0) return;
+          const dx = p.position.x - o.position.x;
+          const dz = p.position.z - o.position.z;
+          if (dx * dx + dz * dz > PED_PAIR_CANDIDATE_RADIUS_SQ) return;
+          this.pairA.push(p);
+          this.pairB.push(o);
+        });
+      }
+
+      let corrected = false;
+      for (let i = 0; i < this.pairA.length; i++) {
+        if (this.resolvePairRoots(this.pairA[i], this.pairB[i], spatial)) corrected = true;
+      }
+      if (playerPos && !playerInVehicle) {
+        for (const p of this.ordered) {
+          if (this.resolvePlayerRoot(p, playerPos, spatial)) corrected = true;
+        }
+      }
+      if (!corrected) break;
+    }
+    this.fillCells(this.ordered);
+  }
+
+  private resolvePairRoots(a: Ped, b: Ped, spatial: SpatialQuery): boolean {
+    let dx = a.position.x - b.position.x;
+    let dz = a.position.z - b.position.z;
+    const d = Math.hypot(dx, dz);
+    if (d >= PED_MIN_SEPARATION) return false;
+    if (d < 1e-6) {
+      const angle = pairAngle(a.id, b.id);
+      dx = Math.cos(angle);
+      dz = Math.sin(angle);
+    } else {
+      dx /= d;
+      dz /= d;
+    }
+
+    const targetDx = dx * PED_MIN_SEPARATION - (a.position.x - b.position.x);
+    const targetDz = dz * PED_MIN_SEPARATION - (a.position.z - b.position.z);
+    const aAnchored = a.mode === 'anchored';
+    const bAnchored = b.mode === 'anchored';
+    const aShare = aAnchored && !bAnchored ? 0 : !aAnchored && bAnchored ? 1 : 0.5;
+    const bShare = 1 - aShare;
+
+    for (const [aScale, bScale] of [[aShare, bShare], [1, 0], [0, 1]] as const) {
+      const adx = targetDx * aScale;
+      const adz = targetDz * aScale;
+      const bdx = -targetDx * bScale;
+      const bdz = -targetDz * bScale;
+      if (
+        !this.correctionIsSafe(a, adx, adz, spatial, true)
+        || !this.correctionIsSafe(b, bdx, bdz, spatial, true)
+      ) continue;
+      a.position.x += adx;
+      a.position.z += adz;
+      b.position.x += bdx;
+      b.position.z += bdz;
+      if (aAnchored) {
+        a.anchorX += adx;
+        a.anchorZ += adz;
+      }
+      if (bAnchored) {
+        b.anchorX += bdx;
+        b.anchorZ += bdz;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  private resolvePlayerRoot(p: Ped, player: THREE.Vector3, spatial: SpatialQuery): boolean {
+    if (p.mode === 'down') return false;
+    let nx = p.position.x - player.x;
+    let nz = p.position.z - player.z;
+    const d = Math.hypot(nx, nz);
+    if (d >= React.playerSeparation) return false;
+    if (d < 1e-6) {
+      const angle = pairAngle(p.id, 'player');
+      nx = Math.cos(angle);
+      nz = Math.sin(angle);
+    } else {
+      nx /= d;
+      nz /= d;
+    }
+
+    const base = Math.atan2(nz, nx);
+    for (const offset of AVOIDANCE_FAN) {
+      const angle = base + offset;
+      const x = player.x + Math.cos(angle) * React.playerSeparation;
+      const z = player.z + Math.sin(angle) * React.playerSeparation;
+      const dx = x - p.position.x;
+      const dz = z - p.position.z;
+      if (!this.correctionIsSafe(p, dx, dz, spatial, false)) continue;
+      p.position.x = x;
+      p.position.z = z;
+      nx = Math.cos(angle);
+      nz = Math.sin(angle);
+      const inward = p.vel.x * nx + p.vel.z * nz;
+      if (inward < 0) {
+        p.vel.x -= nx * inward;
+        p.vel.z -= nz * inward;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  private correctionIsSafe(
+    p: Ped,
+    dx: number,
+    dz: number,
+    spatial: SpatialQuery,
+    moveAnchor: boolean,
+  ): boolean {
+    if (Math.abs(dx) + Math.abs(dz) < 1e-10) return true;
+    const x = p.position.x + dx;
+    const z = p.position.z + dz;
+    if (!Number.isFinite(x) || !Number.isFinite(z) || spatial.isBlocked(x, z)) return false;
+    if (!moveAnchor || p.mode !== 'anchored') return true;
+    const anchorX = p.anchorX + dx;
+    const anchorZ = p.anchorZ + dz;
+    return Number.isFinite(anchorX)
+      && Number.isFinite(anchorZ)
+      && !spatial.isBlocked(anchorX, anchorZ);
+  }
+
+  private fillCells(peds: readonly Ped[]): void {
     this.cells.clear();
     for (const p of peds) {
       if (!p.active) continue;
@@ -434,6 +621,11 @@ export class Ped implements CharacterHandle, RigSubject {
     this.animate(dt, env);
   }
 
+  /** Publish the final globally-solved root once per fixed crowd step. */
+  syncAfterCrowdStep(): void {
+    if (!this.ragdolled) this.syncObject();
+  }
+
   /* ---- sensing ---- */
 
   private threatX = 0;
@@ -779,7 +971,6 @@ export class Ped implements CharacterHandle, RigSubject {
     this.pose = 'down';
     this.state = this.health > 0 ? 'ragdoll' : 'die';
     this.headYaw *= 0.94;
-    this.syncObject();
   }
 
   /** Fall back onto the nearest walk edge and start routing again. */
@@ -867,7 +1058,7 @@ export class Ped implements CharacterHandle, RigSubject {
     });
 
     /* the player is an obstacle too */
-    if (env.playerPos) {
+    if (env.playerPos && !env.playerInVehicle) {
       const ox = px - env.playerPos.x;
       const oz = pz - env.playerPos.z;
       const d2 = ox * ox + oz * oz;
@@ -943,8 +1134,6 @@ export class Ped implements CharacterHandle, RigSubject {
       this.yaw = dampAngle(this.yaw, Math.atan2(this.vel.x, this.vel.z), this.mode === 'flee' ? 9 : 6, dt);
     }
     this.turnRate = dt > 1e-5 ? wrapPi(this.yaw - prevYaw) / dt : 0;
-
-    this.syncObject();
   }
 
   private syncObject(): void {
@@ -1023,6 +1212,26 @@ export function wrapPi(a: number): number {
 export function dampAngle(current: number, target: number, lambda: number, dt: number): number {
   return current + wrapPi(target - current) * (1 - Math.exp(-lambda * dt));
 }
+
+function comparePedId(a: Ped, b: Ped): number {
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/** Stable escape direction for the otherwise directionless coincident case. */
+function pairAngle(a: string, b: string): number {
+  let h = 2166136261;
+  for (const id of [a, b]) {
+    for (let i = 0; i < id.length; i++) {
+      h ^= id.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    h ^= 124; // `|` separator without allocating a joined key.
+    h = Math.imul(h, 16777619);
+  }
+  return ((h >>> 0) / 0x100000000) * Math.PI * 2;
+}
+
+const AVOIDANCE_FAN = [0, 0.55, -0.55, 1.1, -1.1, 1.65, -1.65, Math.PI] as const;
 
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;

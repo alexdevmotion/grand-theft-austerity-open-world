@@ -215,7 +215,10 @@ export function createRenderer(canvas: HTMLCanvasElement, quality: Quality): THR
   renderer.toneMappingExposure = 1.0;
 
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  // Three r185 removed the separate soft-PCF mode: PCFShadowMap now owns the
+  // filtered path and selecting PCFSoftShadowMap only emits a warning before
+  // falling back to this same value.
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.shadowMap.autoUpdate = true;
 
   // The engine resets stats once per frame so they cover the whole post chain.

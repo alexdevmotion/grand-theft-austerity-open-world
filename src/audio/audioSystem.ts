@@ -90,6 +90,41 @@ interface Tracked {
   screechCooldown: number;
 }
 
+/**
+ * Typed lifecycle seam for one pooled engine voice.  WebAudio is unavailable
+ * in Bun, so this small port lets the resource transaction be tested without
+ * forging an `AudioSystem`'s private maps or inventing unreachable states.
+ */
+export interface ReleasableEngineVoice<TSlot, TDestination> {
+  slot: TSlot | null;
+  silence(): void;
+  voiceGain: {
+    disconnect(): void;
+    connect(destination: TDestination): unknown;
+  };
+}
+
+export interface EngineVoiceReleaseOps<TSlot, TDestination> {
+  destination: TDestination | null;
+  untrack(slot: TSlot): void;
+  release(slot: TSlot): void;
+}
+
+/** Silence, detach, untrack and return a spatial engine slot, in that order. */
+export function releaseEngineVoiceResources<TSlot, TDestination>(
+  voice: ReleasableEngineVoice<TSlot, TDestination>,
+  ops: EngineVoiceReleaseOps<TSlot, TDestination>,
+): void {
+  voice.silence();
+  const slot = voice.slot;
+  if (!slot) return;
+  voice.voiceGain.disconnect();
+  if (ops.destination) voice.voiceGain.connect(ops.destination);
+  ops.untrack(slot);
+  ops.release(slot);
+  voice.slot = null;
+}
+
 export interface AudioDebugApi {
   ready(): boolean;
   levels(): Record<string, { rms: number; peak: number; rmsDb: number; peakDb: number; holdPeakDb: number }>;
@@ -355,13 +390,39 @@ export class AudioSystem implements System, AudioService {
     this.bound.set(vehicleId, obj);
   }
 
+  /** Read-only lifecycle truth used by tests and runtime diagnostics. */
+  engineBindingState(vehicleId: string): {
+    bound: boolean;
+    tracked: boolean;
+    voiced: boolean;
+    hasSlot: boolean;
+  } {
+    const voice = this.voiceByVehicle.get(vehicleId);
+    return {
+      bound: this.bound.has(vehicleId),
+      tracked: this.tracked.has(vehicleId),
+      voiced: !!voice,
+      hasSlot: !!voice?.slot,
+    };
+  }
+
   unbindEngine(vehicleId: string): void {
     this.bound.delete(vehicleId);
     const v = this.voiceByVehicle.get(vehicleId);
-    if (v) {
-      v.silence();
-      this.voiceByVehicle.delete(vehicleId);
-    }
+    if (v) this.releaseEngineVoice(vehicleId, v);
+    else this.tracked.delete(vehicleId);
+  }
+
+  /** Return a pooled engine voice to the shared graph and spatial pool. */
+  private releaseEngineVoice(vehicleId: string, voice: VehicleVoice): void {
+    releaseEngineVoiceResources<SpatialSlot, AudioNode>(voice, {
+      destination: this.g?.bus('vehicles').input ?? null,
+      untrack: (slot) => this.spatial?.untrack(slot),
+      release: (slot) => {
+        if (this._ctx) slot.release(this._ctx);
+      },
+    });
+    this.voiceByVehicle.delete(vehicleId);
     this.tracked.delete(vehicleId);
   }
 
@@ -662,7 +723,7 @@ export class AudioSystem implements System, AudioService {
       dt, city, listenerPos, !player?.inVehicle,
       !!this.director?.speaking,
       (e) => {
-        const ok = this.director?.requestStreet(e.input, EMITTER_SPEAKER[e.kind]) ?? false;
+        const ok = this.director?.requestStreet(e.input, e.kind, EMITTER_SPEAKER[e.kind]) ?? false;
         if (ok && e.kind === 'doorway') this.playSfx('shop_bell', e.position, 0.4);
         return ok;
       },
@@ -1046,16 +1107,7 @@ export class AudioSystem implements System, AudioService {
     // Release voices that fell off the list.
     for (const [id, voice] of [...this.voiceByVehicle]) {
       if (!keepIds.has(id)) {
-        voice.silence();
-        if (voice.slot) {
-          voice.voiceGain.disconnect();
-          voice.voiceGain.connect(this.g!.bus('vehicles').input);
-          this.spatial!.untrack(voice.slot);
-          voice.slot.release(this._ctx!);
-          voice.slot = null;
-        }
-        this.voiceByVehicle.delete(id);
-        this.tracked.delete(id);
+        this.releaseEngineVoice(id, voice);
       }
     }
 
@@ -1737,7 +1789,7 @@ export class AudioSystem implements System, AudioService {
       sayStreet: (index = 0) => {
         const e = this.street?.emitters[index];
         if (!e) return false;
-        return this.director?.requestStreet(e.input, EMITTER_SPEAKER[e.kind]) ?? false;
+        return this.director?.requestStreet(e.input, e.kind, EMITTER_SPEAKER[e.kind]) ?? false;
       },
       placeStreetAt: (x, y, z) => {
         const p = new THREE.Vector3(x, y, z);

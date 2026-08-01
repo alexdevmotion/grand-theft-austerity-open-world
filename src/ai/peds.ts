@@ -32,7 +32,9 @@ import {
   type CityService,
   type DistrictKind,
   type PedArchetype,
+  type PedMeleeHit,
   type PedService,
+  type SpatialQuery,
 } from '../core/services';
 import {
   BI,
@@ -56,6 +58,103 @@ import {
 } from './peds/spawn';
 
 const DOG_COLOURS = [0x4a3a2e, 0x2a2420, 0x8a7156, 0xc4b49a, 0x6a5a4a, 0x1e1a18];
+
+/** Arm's-length reach, measured from the player's ground position. */
+const PED_MELEE_REACH = 2.15;
+/** A deliberately narrow 38-degree half-cone: people beside/behind are safe. */
+const PED_MELEE_MIN_DOT = Math.cos(THREE.MathUtils.degToRad(38));
+/** Do not punch someone through a floor/ceiling just because X/Z overlap. */
+const PED_MELEE_MAX_VERTICAL = 1.25;
+const PED_MELEE_DEBUG_OFFSETS = [0, 0.22, -0.22, 0.4, -0.4] as const;
+
+/**
+ * Find a deterministic walkable point that the production melee selector can
+ * reach. Used only by the browser QA hook; keeping the geometry here ensures
+ * the debug setup cannot quietly disagree with the mechanic it verifies.
+ */
+export function placePedMeleeDebugTarget(
+  spatial: Pick<SpatialQuery, 'groundHeight' | 'isBlocked'>,
+  origin: THREE.Vector3,
+  forward: THREE.Vector3,
+  out: THREE.Vector3,
+  requestedDistance = 1.55,
+): boolean {
+  const length = Math.hypot(forward.x, forward.z);
+  if (!Number.isFinite(length) || length < 1e-5) return false;
+  const fx = forward.x / length;
+  const fz = forward.z / length;
+  const distance = Number.isFinite(requestedDistance)
+    ? THREE.MathUtils.clamp(requestedDistance, 1.05, PED_MELEE_REACH - 0.2)
+    : 1.55;
+
+  for (const angle of PED_MELEE_DEBUG_OFFSETS) {
+    const c = Math.cos(angle);
+    const s = Math.sin(angle);
+    const dx = (fx * c + fz * s) * distance;
+    const dz = (fz * c - fx * s) * distance;
+    const x = origin.x + dx;
+    const z = origin.z + dz;
+    if (spatial.isBlocked(x, z)) continue;
+    const y = spatial.groundHeight(x, z);
+    if (!Number.isFinite(y) || Math.abs(y - origin.y) > PED_MELEE_MAX_VERTICAL) continue;
+    out.set(x, y, z);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Deterministic selection + damage seam used by `PedSystem.meleeStrike`.
+ *
+ * Distance breaks targeting, list order breaks exact ties, and damage is only
+ * applied after the single winner is known. A crowded punch therefore cannot
+ * fan out to several pedestrians.
+ */
+export function applyPedMeleeStrike(
+  candidates: ReadonlyArray<CharacterHandle>,
+  origin: THREE.Vector3,
+  forward: THREE.Vector3,
+  damage: number,
+): PedMeleeHit | null {
+  const horizontalForward = Math.hypot(forward.x, forward.z);
+  if (
+    !Number.isFinite(horizontalForward) || horizontalForward < 1e-5
+    || !Number.isFinite(damage) || damage <= 0
+  ) return null;
+
+  const fx = forward.x / horizontalForward;
+  const fz = forward.z / horizontalForward;
+  const reachSq = PED_MELEE_REACH * PED_MELEE_REACH;
+  let best: CharacterHandle | null = null;
+  let bestDistanceSq = Number.POSITIVE_INFINITY;
+
+  for (const candidate of candidates) {
+    if (!candidate.isAlive) continue;
+    const dx = candidate.position.x - origin.x;
+    const dy = candidate.position.y - origin.y;
+    const dz = candidate.position.z - origin.z;
+    const distanceSq = dx * dx + dz * dz;
+    if (!Number.isFinite(distanceSq) || !Number.isFinite(dy)) continue;
+    if (distanceSq < 1e-6 || distanceSq > reachSq || distanceSq >= bestDistanceSq) continue;
+    if (Math.abs(dy) > PED_MELEE_MAX_VERTICAL) continue;
+    const forwardDot = (dx * fx + dz * fz) / Math.sqrt(distanceSq);
+    if (forwardDot < PED_MELEE_MIN_DOT) continue;
+    best = candidate;
+    bestDistanceSq = distanceSq;
+  }
+
+  if (!best) return null;
+  const point = best.position.clone();
+  const healthBefore = best.health;
+  best.applyDamage(damage, 'player', origin);
+  return {
+    targetId: best.id,
+    position: point,
+    faction: best.faction,
+    damage: Math.max(0, healthBefore - best.health),
+    fatal: !best.isAlive,
+  };
+}
 
 export class PedSystem implements System, PedService {
   readonly name = 'peds';
@@ -92,6 +191,9 @@ export class PedSystem implements System, PedService {
 
   private readonly camPos = new THREE.Vector3();
   private readonly camFwd = new THREE.Vector3();
+  private readonly debugMeleePos = new THREE.Vector3();
+  private readonly debugMeleeFwd = new THREE.Vector3();
+  private debugMeleeTargetId: string | null = null;
   private spawnTimer = 0;
   private filled = false;
   private tension = 0;
@@ -208,6 +310,54 @@ export class PedSystem implements System, PedService {
       clear: () => {
         for (const p of this.list.slice()) this.despawn(p.id);
       },
+      /** Deterministic, stationary civilian for click/Q end-to-end QA. */
+      spawnMeleeTarget: (distance = 1.55) => {
+        const player = ctx.tryGet(Services.Player);
+        if (!player?.isOnFoot) return null;
+        this.debugMeleeFwd.set(0, 0, 1)
+          .applyQuaternion(player.character.object.quaternion)
+          .setY(0);
+        if (!placePedMeleeDebugTarget(
+          this.env.spatial,
+          player.position,
+          this.debugMeleeFwd,
+          this.debugMeleePos,
+          distance,
+        )) return null;
+
+        if (this.debugMeleeTargetId) this.despawn(this.debugMeleeTargetId);
+        // Isolate only arm's reach, not the street: an ambient passer-by closer
+        // than the fixture would otherwise make the real selector correctly hit
+        // that passer-by and make an end-to-end assertion nondeterministic.
+        const reachSq = PED_MELEE_REACH * PED_MELEE_REACH;
+        for (const p of this.list.slice()) {
+          const dx = p.position.x - player.position.x;
+          const dz = p.position.z - player.position.z;
+          if (dx * dx + dz * dz <= reachSq
+            && Math.abs(p.position.y - player.position.y) <= PED_MELEE_MAX_VERTICAL) {
+            this.despawn(p.id);
+          }
+        }
+        const heading = Math.atan2(-this.debugMeleeFwd.x, -this.debugMeleeFwd.z);
+        const handle = this.spawn('civilian', this.debugMeleePos, heading);
+        const ped = this.peds.get(handle.id);
+        if (!ped) return null;
+        // `spawn()` normally snaps a pedestrian onto the nearest route edge.
+        // This fixture instead belongs at the verified contact point itself.
+        ped.position.copy(this.debugMeleePos);
+        // Do not let route following walk the test fixture out of reach before
+        // the checker can issue the real keyboard/mouse input.
+        ped.anchorAt(ped.position.x, ped.position.z, heading, {
+          kind: 'wait', pose: 'idle', duration: 1e6, facesGroup: false,
+        });
+        this.grid.publish(this.list, this.env.spatial, this.env.playerPos, this.env.playerInVehicle);
+        this.debugMeleeTargetId = ped.id;
+        return this.debugPedState(ped.id);
+      },
+      state: (id: string) => this.debugPedState(id),
+      combatTarget: () => this.debugMeleeTargetId
+        ? this.debugPedState(this.debugMeleeTargetId)
+        : null,
       setDensity: (n: number) => {
         this.density = n;
         if (n <= 0) for (const p of this.list.slice()) this.despawn(p.id);
@@ -298,6 +448,22 @@ export class PedSystem implements System, PedService {
     return this.city?.districtAt(x, z) ?? 'bulevard';
   }
 
+  private debugPedState(id: string) {
+    const p = this.peds.get(id);
+    if (!p) return null;
+    return {
+      id: p.id,
+      health: p.health,
+      maxHealth: p.maxHealth,
+      isAlive: p.isAlive,
+      state: p.state,
+      mode: p.mode,
+      pose: p.pose,
+      faction: p.faction,
+      position: p.position.toArray(),
+    };
+  }
+
   /**
    * Landmarks pull their own crowd: builders and protesters at the Builders
    * House hoarding, tourists on the Parliament axis.
@@ -335,10 +501,10 @@ export class PedSystem implements System, PedService {
     const p = this.take();
     const rng = this.rng;
     p.reset(archetype, makeAppearance(archetype, rng), position.x, position.z, headingRad, baseSpeed(archetype, rng), rng);
-    p.position.y = this.env.spatial.groundHeight(position.x, position.z);
+    this.routeFromHere(p);
+    p.position.y = this.env.spatial.groundHeight(p.position.x, p.position.z);
     if (p.position.y === -Infinity) p.position.y = position.y;
     this.attach(p);
-    this.routeFromHere(p);
     return p;
   }
 
@@ -358,6 +524,7 @@ export class PedSystem implements System, PedService {
     }
     this.pool.push(p);
     this.stats.despawned++;
+    if (this.debugMeleeTargetId === id) this.debugMeleeTargetId = null;
   }
 
   get(id: string): CharacterHandle | undefined {
@@ -373,6 +540,27 @@ export class PedSystem implements System, PedService {
       p.startFlee(centre.x, centre.z);
     }
     this.tension = Math.max(this.tension, 1);
+  }
+
+  meleeStrike(origin: THREE.Vector3, forward: THREE.Vector3, damage: number): PedMeleeHit | null {
+    const hit = applyPedMeleeStrike(this.list, origin, forward, damage);
+    if (!hit) return null;
+
+    const target = this.peds.get(hit.targetId);
+    if (!target) return hit;
+    if (hit.fatal) {
+      // `applyDamage` already performed the actual knockdown. Reuse the crowd's
+      // existing consequence path for witnesses, audio and the police event.
+      this.onKnockdown(target, true);
+    } else {
+      this.ctx.tryGet(Services.Audio)?.oneShot('ped_hit', hit.position, 0.72);
+      // Includes the victim, and makes their flee vector point away from the
+      // attacker instead of whichever direction they happened to face.
+      this.scatter(origin, 12);
+      const protectedFaction = hit.faction === 'police' || hit.faction === 'ministry';
+      this.ctx.tryGet(Services.Wanted)?.addHeat(protectedFaction ? 120 : 65, hit.position);
+    }
+    return hit;
   }
 
   /* ---------------------------------------------------------------- */
@@ -416,6 +604,10 @@ export class PedSystem implements System, PedService {
     p.app.height = appearance.height;
     copyWardrobe(appearance, p);
     this.stats.spawned++;
+    // Debug fill and the boot-time batch both return before another fixed
+    // frame. Publish now so candidate queries and rendered roots immediately
+    // include this attachment instead of consulting the previous frame's grid.
+    this.grid.publish(this.list, this.env.spatial, this.env.playerPos, this.env.playerInVehicle);
   }
 
   /** Give a ped the real skinned rig. */
@@ -624,7 +816,7 @@ export class PedSystem implements System, PedService {
     let hit = false;
     const r2 = radius * radius;
     this.grid.forEachNear(x, z, (o) => {
-      if (hit) return;
+      if (hit || !o.active) return;
       const dx = o.position.x - x;
       const dz = o.position.z - z;
       if (dx * dx + dz * dz < r2) hit = true;
@@ -684,7 +876,7 @@ export class PedSystem implements System, PedService {
     this.env.tension = this.tension;
 
     t = prof.begin();
-    for (const p of this.list) p.update(dt, this.env);
+    this.grid.step(dt, this.env);
     prof.add('peds.steer', t);
 
     t = prof.begin();

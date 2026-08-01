@@ -1,0 +1,24 @@
+[debug] [vite] connecting...
+[debug] [vite] connected.
+[warning] using deprecated parameters for the initialization function; pass a single object instead
+[info] [city] 2885 buildings, 64 chunks, 58k facade + 82k surface + 2483k detail tris in 629 ms
+[info] [city/osm] Bucharest at 60%: 121.1 km of real street, 2789 nodes, 3465 edges, 732 real footprints, 2010 infilled, 40 parks, 33 squares
+[info] [interiors] 26 furniture colliders
+[info] [interiors] 6 enterable rooms registered
+[info] [props] 1410k near + 716k far tris in 49 tiles, 951 shop signs, 5589 posters, 28496 litter, 49 screens, 11948 light pools, 4470 flares, 4569 lamp sites in 442 ms
+[info] [peds] pavement graph: 1463 corners, 246 footways, 978 crossings, 386 loiter spots in 7 ms; max 120 peds
+[info] [traffic] lane graph: 8080 directed edges, budget 72
+[info] [activities] 10 activities snapped to the road graph; largest correction 35.2 m
+[info] [interiors] built buildersLobby (sealed): 4942 tris, 9 light anchors, 2.2 ms
+[debug] [vite] connecting...
+[debug] [vite] connected.
+[warning] using deprecated parameters for the initialization function; pass a single object instead
+[info] [city] 2885 buildings, 64 chunks, 58k facade + 82k surface + 2483k detail tris in 624 ms
+[info] [city/osm] Bucharest at 60%: 121.1 km of real street, 2789 nodes, 3465 edges, 732 real footprints, 2010 infilled, 40 parks, 33 squares
+[info] [interiors] 26 furniture colliders
+[info] [interiors] 6 enterable rooms registered
+[info] [props] 1410k near + 716k far tris in 49 tiles, 951 shop signs, 5589 posters, 28496 litter, 49 screens, 11948 light pools, 4470 flares, 4569 lamp sites in 388 ms
+[info] [peds] pavement graph: 1463 corners, 246 footways, 978 crossings, 386 loiter spots in 6 ms; max 120 peds
+[info] [traffic] lane graph: 8080 directed edges, budget 72
+[info] [activities] 10 activities snapped to the road graph; largest correction 35.2 m
+[info] [interiors] built buildersLobby (sealed): 4942 tris, 9 light anchors, 1.4 ms

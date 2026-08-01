@@ -32,7 +32,15 @@
 
 import type { EventBus } from '../core/events';
 import { Rng } from '../core/rng';
-import { VOICE_CONTEXTS, type VoiceContext, type VoiceLine } from './clipContexts';
+import {
+  STREET_CONTEXT_BY_SOURCE,
+  STREET_EXCLUDED_FILES,
+  STREET_VOICE_CONTEXTS,
+  VOICE_CONTEXTS,
+  type StreetVoiceSource,
+  type VoiceContext,
+  type VoiceLine,
+} from './clipContexts';
 import { bucket as legacyBucket, type VoBucket } from './clips';
 
 /** The longest a line may be and still count as a reaction. */
@@ -50,12 +58,57 @@ export interface SpokenLine {
 
 export type VoiceRoute = 'radio' | 'street';
 
-interface Request {
+/** The editorial identity carried all the way to the actual start boundary. */
+export interface VoicePlaybackRequest {
   line: SpokenLine;
-  priority: number;
+  context: string;
   route: VoiceRoute;
+}
+
+/** Last-played/active voice telemetry. A request alone must not mutate it. */
+export interface VoicePlaybackTelemetry {
+  lastKey: string;
+  lastContext: string;
+  nowPlaying: string;
+  route: VoiceRoute;
+}
+
+export type VoicePlaybackEventRequest = Pick<VoicePlaybackRequest, 'line' | 'context' | 'route'>;
+
+export type VoicePlaybackTelemetryEvent =
+  | { type: 'start'; request: VoicePlaybackEventRequest }
+  | { type: 'stop' };
+
+/**
+ * Apply the only telemetry transitions that matter to the voice surface.
+ *
+ * A line may be queued, dropped, or expire before it ever reaches WebAudio.
+ * Only `start` can establish the active and last-played source, keeping the
+ * subtitle/key/context tuple atomic.
+ */
+export function reduceVoicePlaybackTelemetry(
+  state: VoicePlaybackTelemetry,
+  event: VoicePlaybackTelemetryEvent,
+): VoicePlaybackTelemetry {
+  if (event.type === 'stop') return { ...state, nowPlaying: '' };
+  return {
+    ...state,
+    lastKey: event.request.line.key,
+    lastContext: event.request.context,
+    nowPlaying: event.request.line.text,
+    route: event.request.route,
+  };
+}
+
+/** Resolve physical source identity to its source-specific editorial pool. */
+export function streetContextForSource(source: StreetVoiceSource): VoiceContext {
+  return STREET_CONTEXT_BY_SOURCE[source];
+}
+
+interface Request extends VoicePlaybackRequest {
+  priority: number;
   /** Where a street line comes from. */
-  destination?: AudioNode;
+  destination?: VoiceAudioNode;
   speaker: string;
   /** Context time after which the request is pointless. */
   expiresAt: number;
@@ -98,7 +151,10 @@ export function buildPools(): {
   };
 
   for (const name of Object.keys(VOICE_CONTEXTS) as VoiceContext[]) {
-    const all = VOICE_CONTEXTS[name].map(toSpoken);
+    const all = VOICE_CONTEXTS[name]
+      .filter((line) => !STREET_VOICE_CONTEXTS.includes(name as (typeof STREET_VOICE_CONTEXTS)[number])
+        || !STREET_EXCLUDED_FILES.has(line.file))
+      .map(toSpoken);
     if (name === 'radioFiller') {
       for (const s of all) addFiller(s);
       reaction[name] = all;
@@ -152,9 +208,32 @@ class Bag<T> {
 
 export interface DirectorHooks {
   /** Resolve a file to a decoded buffer (the radio's LRU loader). */
-  load(file: string): Promise<AudioBuffer | null>;
+  load(file: string): Promise<VoiceAudioBuffer | null>;
   /** Already-decoded buffer, or undefined. */
-  cached(file: string): AudioBuffer | undefined;
+  cached(file: string): VoiceAudioBuffer | undefined;
+}
+
+/** Small structural seam used by the director; browser AudioNodes satisfy it. */
+export interface VoiceAudioNode {
+  readonly numberOfInputs: number;
+  readonly numberOfOutputs: number;
+}
+
+export interface VoiceAudioBuffer {
+  readonly duration: number;
+}
+
+export interface VoiceAudioBufferSource {
+  buffer: VoiceAudioBuffer | null;
+  connect(destination: VoiceAudioNode): unknown;
+  start(when?: number): void;
+  stop(when?: number): void;
+  onended: ((event: Event) => unknown) | null;
+}
+
+export interface VoiceAudioContext {
+  readonly currentTime: number;
+  createBufferSource(): VoiceAudioBufferSource;
 }
 
 export class VoiceDirector {
@@ -163,11 +242,12 @@ export class VoiceDirector {
   /** Subtitle currently on screen. */
   nowPlaying = '';
   lastKey = '';
+  /** Context of the most recent line that actually reached `start()`. */
   lastContext: string = '';
   /** Every line played this session, by key. */
   readonly played = new Map<string, number>();
 
-  private ctx: AudioContext;
+  private ctx: VoiceAudioContext;
   private hooks: DirectorHooks;
   private events: EventBus;
   private rng: Rng;
@@ -176,18 +256,18 @@ export class VoiceDirector {
   private bags = new Map<string, Bag<SpokenLine>>();
   private legacyBags = new Map<VoBucket, Bag<SpokenLine>>();
 
-  private source: AudioBufferSourceNode | null = null;
+  private source: VoiceAudioBufferSource | null = null;
   private endsAt = 0;
   private currentPriority = 0;
   private currentRoute: VoiceRoute = 'radio';
   private queue: Request[] = [];
 
   constructor(
-    ctx: AudioContext,
+    ctx: VoiceAudioContext,
     hooks: DirectorHooks,
     events: EventBus,
     /** The car-speaker chain input; every `radio`-route line goes here. */
-    private radioDestination: AudioNode,
+    private radioDestination: VoiceAudioNode,
     seed = 'gta-voice-director',
   ) {
     this.ctx = ctx;
@@ -195,6 +275,19 @@ export class VoiceDirector {
     this.events = events;
     this.rng = new Rng(seed);
     this.pools = buildPools();
+  }
+
+  private applyTelemetry(event: VoicePlaybackTelemetryEvent): void {
+    const next = reduceVoicePlaybackTelemetry({
+      lastKey: this.lastKey,
+      lastContext: this.lastContext,
+      nowPlaying: this.nowPlaying,
+      route: this.currentRoute,
+    }, event);
+    this.lastKey = next.lastKey;
+    this.lastContext = next.lastContext;
+    this.nowPlaying = next.nowPlaying;
+    this.currentRoute = next.route;
   }
 
   get speaking(): boolean {
@@ -237,9 +330,8 @@ export class VoiceDirector {
   ): boolean {
     const line = this.bagFor(context).draw();
     if (!line) return false;
-    this.lastContext = context;
     return this.schedule({
-      line,
+      line, context,
       priority,
       route: 'radio',
       speaker: opts?.speaker ?? 'CE NE ENERVEAZĂ',
@@ -256,9 +348,8 @@ export class VoiceDirector {
     }
     const line = b.draw();
     if (!line) return false;
-    this.lastContext = 'radioFiller';
     return this.schedule({
-      line, priority, route: 'radio', speaker: 'CE NE ENERVEAZĂ',
+      line, context: 'radioFiller', priority, route: 'radio', speaker: 'CE NE ENERVEAZĂ',
       expiresAt: this.ctx.currentTime + 4,
     });
   }
@@ -279,9 +370,8 @@ export class VoiceDirector {
     }
     const line = bag.draw();
     if (!line) return false;
-    this.lastContext = b;
     return this.schedule({
-      line, priority, route: 'radio', speaker: 'CE NE ENERVEAZĂ',
+      line, context: b, priority, route: 'radio', speaker: 'CE NE ENERVEAZĂ',
       expiresAt: this.ctx.currentTime + ttlFor(priority),
     });
   }
@@ -289,14 +379,19 @@ export class VoiceDirector {
   /**
    * A line heard out in the street, from a specific place. `destination` is the
    * emitter's own EQ + panner chain, so the line arrives from the kiosk, not
-   * from inside the player's head.
+   * from inside the player's head. The typed physical source selects its
+   * editorial pool; the localized speaker label is presentation only.
    */
-  requestStreet(destination: AudioNode, speaker = 'RADIO DE CHIOȘC'): boolean {
-    const line = this.bagFor('streetOverheard').draw();
+  requestStreet(
+    destination: VoiceAudioNode,
+    source: StreetVoiceSource,
+    speaker: string,
+  ): boolean {
+    const context = streetContextForSource(source);
+    const line = this.bagFor(context).draw();
     if (!line) return false;
-    this.lastContext = 'streetOverheard';
     return this.schedule({
-      line,
+      line, context,
       priority: 0.3,
       route: 'street',
       destination,
@@ -352,9 +447,7 @@ export class VoiceDirector {
     this.source = s;
     this.endsAt = now + dur;
     this.currentPriority = r.priority;
-    this.currentRoute = r.route;
-    this.nowPlaying = r.line.text;
-    this.lastKey = r.line.key;
+    this.applyTelemetry({ type: 'start', request: r });
     this.played.set(r.line.key, (this.played.get(r.line.key) ?? 0) + 1);
 
     this.events.emit('ui:subtitle', {
@@ -367,7 +460,7 @@ export class VoiceDirector {
       if (this.source === s) {
         this.source = null;
         this.currentPriority = 0;
-        this.nowPlaying = '';
+        this.applyTelemetry({ type: 'stop' });
       }
     };
   }
@@ -385,7 +478,7 @@ export class VoiceDirector {
     if (this.source) {
       this.source = null;
       this.currentPriority = 0;
-      this.nowPlaying = '';
+      this.applyTelemetry({ type: 'stop' });
     }
     // Drain: highest priority first, dropping anything whose moment has passed.
     while (this.queue.length) {
@@ -408,7 +501,7 @@ export class VoiceDirector {
     }
     this.source = null;
     this.currentPriority = 0;
-    this.nowPlaying = '';
+    this.applyTelemetry({ type: 'stop' });
   }
 
   /** Diagnostics for the measurement harness. */

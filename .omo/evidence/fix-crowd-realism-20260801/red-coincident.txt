@@ -1,0 +1,22 @@
+bun test v1.3.11 (af24e281)
+
+src/ai/peds/crowd.test.ts:
+12 |   const grid = new CrowdGrid();
+13 |   grid.rebuild([b, a]);
+14 | 
+15 |   const distance = Math.hypot(a.position.x - b.position.x, a.position.z - b.position.z);
+16 |   expect(Number.isFinite(distance)).toBe(true);
+17 |   expect(distance).toBeGreaterThanOrEqual(0.72);
+                        ^
+error: expect(received).toBeGreaterThanOrEqual(expected)
+
+Expected: >= 0.72
+Received: 0
+
+      at <anonymous> (/Users/alex.constantin/pers/grand-theft-austerity-open-world/src/ai/peds/crowd.test.ts:17:20)
+(fail) crowd grid deterministically separates pedestrians spawned at the exact same point [0.67ms]
+
+ 0 pass
+ 1 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [24.00ms]

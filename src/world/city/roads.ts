@@ -127,6 +127,8 @@ export interface RoadBuildOptions {
   nodeId(i: number, j: number): number;
   /** Called for every road segment that survives so the graph can be pruned. */
   onSegment(ai: number, aj: number, bi: number, bj: number, alive: boolean): void;
+  /** Publishes the same permanent-way centreline that this builder renders. */
+  onTramSegment?(ax: number, az: number, bx: number, bz: number): void;
   /** True where the imported real street layout takes over from the grid. */
   covered?(x: number, z: number): boolean;
 }
@@ -243,19 +245,23 @@ export function buildRoads(opt: RoadBuildOptions): void {
     /* ---- tram permanent way ---- */
     const tram = hasTram(vertical ? ai : null, vertical ? null : aj);
     if (tram) {
+      // Permanent way crosses the whole junction patch. Publishing and
+      // rendering only the trimmed carriageway span left every tram waypoint
+      // bridge running over bare asphalt between adjacent segments.
+      opt.onTramSegment?.(ax, az, bx, bz);
       const d = sink.detail(mx, mz);
       const bed = sink.surf(mx, mz);
       // Reserved central bed.
-      bed.ribbon(sx, sz, ex, ez, TRAM_GAUGE * 2 + 1.6, 0.005, 0, {
+      bed.ribbon(ax, az, bx, bz, TRAM_GAUGE * 2 + 1.6, 0.005, 0, {
         kind: Surf.tramBed, a: 0, b: 0, seed: 3,
       }, 2);
       for (const side of [-1, 1]) {
         for (const rgo of [-TRAM_GAUGE / 2, TRAM_GAUGE / 2]) {
           const off = side * (TRAM_GAUGE / 2 + 1.2) + rgo;
-          const rx0 = sx + px * off;
-          const rz0 = sz + pz * off;
-          const rx1 = ex + px * off;
-          const rz1 = ez + pz * off;
+          const rx0 = ax + px * off;
+          const rz0 = az + pz * off;
+          const rx1 = bx + px * off;
+          const rz1 = bz + pz * off;
           d.box(
             (rx0 + rx1) / 2, 0.055, (rz0 + rz1) / 2,
             vertical ? 0.09 : Math.abs(rx1 - rx0),

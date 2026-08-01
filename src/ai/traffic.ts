@@ -32,9 +32,9 @@ import {
 import { QUALITY, detectQuality, onQualityChange, type Quality } from '../render/renderer';
 import { prof } from '../characters/profile';
 import { CG, probeGroups, type PhysicsWorld } from '../physics/physics';
-import { TRAM_LANE, TrafficGraph } from './traffic/roadGraph';
+import { TRAM_LANE, TrafficGraph, laneSpawnRange } from './traffic/roadGraph';
 import { JunctionControl } from './traffic/junctions';
-import { SensorField } from './traffic/sensors';
+import { SensorField, footprint } from './traffic/sensors';
 import { TrafficAgent } from './traffic/agent';
 import type { ControllableVehicle } from './traffic/driver';
 
@@ -390,9 +390,18 @@ export class TrafficSystem implements System, TrafficService {
       const edge = graph.edges[this.rng.weighted(candidates, w)];
       if (!edge || edge.length < 18) continue;
 
-      const wantTram = this.tramCount < MAX_TRAMS && edge.tram && this.rng.bool(0.10);
+      const wantTram =
+        this.tramCount < MAX_TRAMS && edge.tram && edge.tramStraight >= 0 && this.rng.bool(0.10);
       const lane = wantTram ? TRAM_LANE : this.rng.int(0, edge.lanes);
-      const t = this.rng.range(0.1, 0.9);
+      graph.lanePoint(edge, lane, 0.5, this.probe);
+      const kind = wantTram
+        ? 'tram'
+        : this.pickKind(city.districtAt(this.probe.x, this.probe.z), edge.rank);
+      if (!kind) continue;
+
+      const spawnRange = laneSpawnRange(edge, footprint(kind)[0]);
+      if (!spawnRange) continue;
+      const t = this.rng.range(spawnRange.min, spawnRange.max);
       graph.lanePoint(edge, lane, t, this.probe);
 
       const d = Math.hypot(this.probe.x - this.focus.x, this.probe.z - this.focus.z);
@@ -431,9 +440,6 @@ export class TrafficSystem implements System, TrafficService {
         if (dx * dx + dz * dz < 121) blocked = true;
       });
       if (blocked) continue;
-
-      const kind = wantTram ? 'tram' : this.pickKind(city.districtAt(this.probe.x, this.probe.z), edge.rank);
-      if (!kind) continue;
 
       const heading = Math.atan2(edge.ux, edge.uz);
       const gh = city.spatial.groundHeight(this.probe.x, this.probe.z);

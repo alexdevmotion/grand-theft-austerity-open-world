@@ -1,0 +1,1 @@
+`checker errors` output was empty at final capture; no page errors were captured.

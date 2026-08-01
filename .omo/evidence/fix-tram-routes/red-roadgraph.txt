@@ -1,0 +1,36 @@
+bun test v1.3.11 (af24e281)
+
+src/ai/traffic/roadGraph.test.ts:
+30 |       node(0, 0, 0, 3, [1]),
+31 |       node(1, 100, 0, 3, [0]),
+32 |     ], []));
+33 | 
+34 |     expect(graph.edges[graph.edgeBetween(0, 1)].rank).toBe(2);
+35 |     expect(graph.edges[graph.edgeBetween(0, 1)].tram).toBe(false);
+                                                           ^
+error: expect(received).toBe(expected)
+
+Expected: false
+Received: true
+
+      at <anonymous> (/Users/alex.constantin/pers/grand-theft-austerity-open-world/src/ai/traffic/roadGraph.test.ts:35:55)
+(fail) explicit tram routing > a wide rank-2 road without rendered rails is never tram-routable [0.93ms]
+56 |     const phantom = graph.edges[graph.edgeBetween(1, 3)];
+57 | 
+58 |     expect([east.tram, bend.tram, west.tram, returnBend.tram]).toEqual([
+59 |       true, true, true, true,
+60 |     ]);
+61 |     expect(phantom.tram).toBe(false);
+                              ^
+error: expect(received).toBe(expected)
+
+Expected: false
+Received: true
+
+      at <anonymous> (/Users/alex.constantin/pers/grand-theft-austerity-open-world/src/ai/traffic/roadGraph.test.ts:61:26)
+(fail) explicit tram routing > rendered rail paths map both directions and choose the rail continuation [0.07ms]
+
+ 0 pass
+ 2 fail
+ 4 expect() calls
+Ran 2 tests across 1 file. [28.00ms]

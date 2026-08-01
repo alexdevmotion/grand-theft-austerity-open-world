@@ -88,6 +88,8 @@ export class CitySystem implements System, CityService {
   readonly order = 20;
 
   readonly roadNodes: RoadNode[] = [];
+  /** Exact centrelines used when the permanent-way geometry is emitted. */
+  readonly tramLines: THREE.Vector3[][] = [];
   readonly landmarks = new Map<string, Landmark>();
   readonly spatial: SpatialQuery;
 
@@ -344,6 +346,13 @@ export class CitySystem implements System, CityService {
     }
     this.osm = osm;
 
+    // The renderer consumes these same paths in `buildOsmStreets`. Publishing
+    // them on the city contract gives traffic an explicit source of rail truth
+    // instead of guessing from a road's width.
+    for (const line of osm.trams) {
+      this.tramLines.push(line.map((p) => new THREE.Vector3(p.x, 0, p.z)));
+    }
+
     const base = this.roadNodes.length;
     for (const n of osm.nodes) {
       this.roadNodes.push({
@@ -504,6 +513,12 @@ export class CitySystem implements System, CityService {
           this.roadNodes[b].links.push(a);
           this.segments.push([a, b]);
         }
+      },
+      onTramSegment: (ax, az, bx, bz) => {
+        this.tramLines.push([
+          new THREE.Vector3(ax, 0, az),
+          new THREE.Vector3(bx, 0, bz),
+        ]);
       },
     });
 

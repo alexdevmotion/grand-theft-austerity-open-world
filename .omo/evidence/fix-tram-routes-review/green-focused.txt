@@ -1,0 +1,15 @@
+bun test v1.3.11 (af24e281)
+
+src/ai/traffic/roadGraph.test.ts:
+(pass) explicit tram routing > a wide rank-2 road without rendered rails is never tram-routable [0.18ms]
+(pass) explicit tram routing > a rendered rail corridor through a facade is rejected in both directions [0.32ms]
+(pass) explicit tram routing > rendered rail paths map both directions and choose the rail continuation [0.59ms]
+[city] 2885 buildings, 64 chunks, 58k facade + 82k surface + 2483k detail tris in 492 ms
+[city/osm] Bucharest at 60%: 121.1 km of real street, 2789 nodes, 3465 edges, 732 real footprints, 2010 infilled, 40 parks, 33 squares
+[tram-test] 173 rendered lines -> 334 directed rail edges, 188 with continuations; 1188 rank-2 road edges rejected; 40 safe tram spawn edges near Casa; longest join 42.3 m; max join-to-track error 1.08 m
+(pass) explicit tram routing > the built city maps a usable bidirectional network to its visible rails [690.45ms]
+
+ 4 pass
+ 0 fail
+ 743 expect() calls
+Ran 4 tests across 1 file. [715.00ms]

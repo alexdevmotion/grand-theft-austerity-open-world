@@ -1,0 +1,25 @@
+bun test v1.3.11 (af24e281)
+
+src/ai/peds/crowd.test.ts:
+(pass) crowd grid deterministically separates pedestrians spawned at the exact same point [0.53ms]
+(pass) depenetrating an anchored cluster moves its anchors with its bodies [0.32ms]
+(pass) an anchored pedestrian cannot remain coincident with the on-foot player [0.70ms]
+111 | 
+112 |   a.update(0.2, env);
+113 |   b.update(0.2, env);
+114 | 
+115 |   const distance = Math.hypot(a.position.x - b.position.x, a.position.z - b.position.z);
+116 |   expect(distance).toBeGreaterThanOrEqual(0.72);
+                         ^
+error: expect(received).toBeGreaterThanOrEqual(expected)
+
+Expected: >= 0.72
+Received: 0.7
+
+      at <anonymous> (/Users/alex.constantin/pers/grand-theft-austerity-open-world/src/ai/peds/crowd.test.ts:116:20)
+(fail) pedestrians moving toward the same point preserve a hard body separation [0.38ms]
+
+ 3 pass
+ 1 fail
+ 21 expect() calls
+Ran 4 tests across 1 file. [25.00ms]

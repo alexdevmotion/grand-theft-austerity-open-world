@@ -189,6 +189,94 @@ function tuningFor(kind: VehicleClass, model: VehicleModel): VehicleTuning {
 const UP = new THREE.Vector3(0, 1, 0);
 const DOWN = new THREE.Vector3(0, -1, 0);
 
+/**
+ * A player car should only be rescued after the player has actually tried to
+ * get out of the trap.  A low speed by itself is not enough: it is also the
+ * normal state at a red light, in a queue, or while the player is admiring a
+ * Dacia's chrome.  Requiring both pedal directions keeps the recovery out of
+ * ordinary contact resolution and makes the trigger deterministic.
+ */
+export interface OccupiedRecoveryState {
+  stalledSeconds: number;
+  forwardStalledSeconds: number;
+  reverseStalledSeconds: number;
+  cooldown: number;
+}
+
+export interface OccupiedRecoverySample {
+  occupied: boolean;
+  groundedWheels: number;
+  wheelCount: number;
+  throttle: number;
+  planarSpeed: number;
+  dt: number;
+}
+
+const OCCUPIED_RECOVERY_INPUT = 0.38;
+const OCCUPIED_RECOVERY_SPEED = 0.55;
+const OCCUPIED_RECOVERY_SECONDS = 3.5;
+/** Each pedal direction must actually remain blocked for this long. */
+const OCCUPIED_RECOVERY_DIRECTION_SECONDS = 1;
+const OCCUPIED_RECOVERY_COOLDOWN = 5;
+
+/**
+ * Advance the grounded-player recovery detector.  This is intentionally pure
+ * gameplay state (no Rapier or scene access), so its edge cases stay pinned by
+ * a fast unit test and the simulation can call it once per fixed step.
+ */
+export function advanceOccupiedRecovery(
+  state: OccupiedRecoveryState,
+  sample: OccupiedRecoverySample,
+): boolean {
+  const dt = Math.max(0, sample.dt);
+  state.cooldown = Math.max(0, state.cooldown - dt);
+
+  // A nose against a rail or tree can unload two wheels while the other two
+  // remain planted. Half the wheel set is enough to distinguish a grounded
+  // wedge from the existing airborne rescue; requiring three of four made the
+  // exact hard-contact case we want to recover from invisible to this path.
+  const groundedMinimum = Math.max(1, Math.ceil(sample.wheelCount * 0.5));
+  const grounded = sample.groundedWheels >= groundedMinimum;
+  const intent = Math.abs(sample.throttle) >= OCCUPIED_RECOVERY_INPUT;
+  const moving = sample.planarSpeed >= OCCUPIED_RECOVERY_SPEED;
+
+  // Get moving, leave the ground, or lose the car: this is not a rescue
+  // attempt anymore.  Reset both directional dwell clocks so a previous queue
+  // cannot be combined with a later collision.
+  if (!sample.occupied || !grounded || !intent || moving) {
+    if (!sample.occupied || !grounded || moving) {
+      state.stalledSeconds = 0;
+      state.forwardStalledSeconds = 0;
+      state.reverseStalledSeconds = 0;
+    } else {
+      // A short neutral beat is how a real player changes pedals.  It retains
+      // some history, but a pause expires every part of the attempt together.
+      const decay = dt * 2.2;
+      state.stalledSeconds = Math.max(0, state.stalledSeconds - decay);
+      state.forwardStalledSeconds = Math.max(0, state.forwardStalledSeconds - decay);
+      state.reverseStalledSeconds = Math.max(0, state.reverseStalledSeconds - decay);
+    }
+    return false;
+  }
+
+  state.stalledSeconds += dt;
+  if (sample.throttle > 0) state.forwardStalledSeconds += dt;
+  else state.reverseStalledSeconds += dt;
+  if (
+    state.cooldown <= 0 &&
+    state.stalledSeconds >= OCCUPIED_RECOVERY_SECONDS &&
+    state.forwardStalledSeconds >= OCCUPIED_RECOVERY_DIRECTION_SECONDS &&
+    state.reverseStalledSeconds >= OCCUPIED_RECOVERY_DIRECTION_SECONDS
+  ) {
+    state.stalledSeconds = 0;
+    state.forwardStalledSeconds = 0;
+    state.reverseStalledSeconds = 0;
+    state.cooldown = OCCUPIED_RECOVERY_COOLDOWN;
+    return true;
+  }
+  return false;
+}
+
 /* ------------------------------------------------------------------ */
 /* Doors                                                               */
 /* ------------------------------------------------------------------ */
@@ -292,6 +380,15 @@ class Vehicle implements VehicleHandle {
   /** Decaying peak speed. Crash damage needs closing speed, not just contact —
    *  this is what stops a car wedged against a kerb grinding itself to death. */
   recentSpeed = 0;
+  /** Grounded, occupied rescue detector. Kept on the vehicle so it survives
+   *  the fixed-step boundary without conflating a queue with a real deadlock. */
+  private occupiedRecovery: OccupiedRecoveryState = {
+    stalledSeconds: 0,
+    forwardStalledSeconds: 0,
+    reverseStalledSeconds: 0,
+    cooldown: 0,
+  };
+  private occupiedRecoveryRequested = false;
 
   private _fwd = new THREE.Vector3();
   private _right = new THREE.Vector3();
@@ -411,6 +508,13 @@ class Vehicle implements VehicleHandle {
     this.body.setRotation({ x: q.x, y: q.y, z: q.z, w: q.w }, true);
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
     this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    // Publish the transform immediately. A recovery happens between the
+    // vehicle and player fixed steps; leaving this stale for one frame put the
+    // seated player at the old wall even though Rapier had moved the car.
+    this.position.set(position.x, position.y + this.tuning.spec.rideHeight, position.z);
+    this.rotation.copy(q);
+    this.object.position.copy(this.position);
+    this.object.quaternion.copy(q);
     this.upsideTime = 0;
   }
 
@@ -557,6 +661,20 @@ class Vehicle implements VehicleHandle {
 
     this.airTime = groundedWheels === 0 ? this.airTime + dt : 0;
 
+    // A grounded player car that cannot make progress is a different failure
+    // from the existing airborne rescue. The detector only arms while the
+    // player is actively trying to drive and only fires after both forward and
+    // reverse have failed; the system then finds a clear road slot below.
+    const current = body.linvel();
+    this.occupiedRecoveryRequested = advanceOccupiedRecovery(this.occupiedRecovery, {
+      occupied: this.occupants.length > 0,
+      groundedWheels,
+      wheelCount: tuning.wheels.length,
+      throttle: this.throttle,
+      planarSpeed: Math.hypot(current.x, current.z),
+      dt,
+    });
+
     // --- static friction -------------------------------------------------
     //
     // Rolling resistance is a viscous term: it scales with speed, so it can
@@ -658,6 +776,14 @@ class Vehicle implements VehicleHandle {
     const targetLong = (fwdSpeed - this.prevFwdSpeed) / dt;
     this.prevFwdSpeed = fwdSpeed;
     this.longAccel += (THREE.MathUtils.clamp(targetLong, -30, 30) - this.longAccel) * Math.min(1, dt * 7);
+  }
+
+  get needsOccupiedRecovery(): boolean {
+    return this.occupiedRecoveryRequested;
+  }
+
+  clearOccupiedRecovery(): void {
+    this.occupiedRecoveryRequested = false;
   }
 
   /* ---------------- presentation ---------------- */
@@ -807,7 +933,9 @@ class Vehicle implements VehicleHandle {
   }
 
   unbindAudio(ctx: GameContext): void {
-    if (!this.engineBound) return;
+    // Audio assigns voices to ordinary nearby traffic too, so a vehicle can
+    // be present in its cache even when it never crossed `bindAudio`. Always
+    // release by id before the Rapier body is removed.
     ctx.tryGet(Services.Audio)?.unbindEngine(this.id);
     this.engineBound = false;
   }
@@ -1331,6 +1459,18 @@ export class VehicleSystem implements System, VehicleService {
     if (this.harness) this.runHarness(dt);
     for (const v of this.list) {
       v.simulate(dt);
+      if (v.needsOccupiedRecovery && !v.isWrecked && !v.tuning.spec.railed) {
+        const slot = this.occupiedRecoverySlot(v);
+        if (slot) {
+          v.teleport(slot.pos, slot.heading);
+          this.ctx.tryGet(Services.Hud)?.toast(
+            'Tracțiune de urgență · mașina a ieșit din blocaj',
+            'info',
+            2600,
+          );
+        }
+        v.clearOccupiedRecovery();
+      }
       // Stuck rescue: a vehicle that has had no wheel on anything for four
       // seconds has fallen off geometry somewhere. Left alone it grinds down a
       // wall taking contact damage until it is scrap. Put it back on a road.
@@ -1554,6 +1694,50 @@ export class VehicleSystem implements System, VehicleService {
   /* ---------------- debug showroom ---------------- */
 
   /**
+   * Find a road slot that can take the whole occupied car, not just its
+   * centre.  A normal collision is never teleported: this is reached only by
+   * the detector above after failed forward *and* reverse attempts.  Several
+   * graph-walk offsets are tried because the nearest node can itself be boxed
+   * in by a long vehicle or a landmark forecourt.
+   */
+  private occupiedRecoverySlot(v: Vehicle): { pos: THREE.Vector3; heading: number } | null {
+    if (!this.ctx.tryGet(Services.City)) return null;
+    const offsets = [18, 34, 50, 66, 82, 98, -4, -20];
+    for (const along of offsets) {
+      const slot = this.roadSlot(along, v.position);
+      // If the graph has no traversable continuation from this node, several
+      // offsets can legitimately collapse to the same node. Never call that
+      // the rescue: it would put the player straight back in the obstacle.
+      if (slot.pos.distanceToSquared(v.position) < 8 * 8) continue;
+      if (this.recoveryFootprintClear(slot.pos, slot.heading, v)) return slot;
+    }
+    return null;
+  }
+
+  private recoveryFootprintClear(pos: THREE.Vector3, heading: number, ignore: Vehicle): boolean {
+    const city = this.ctx.tryGet(Services.City);
+    if (!city) return false;
+    const halfX = ignore.tuning.halfExtents.x + 0.65;
+    const halfZ = ignore.tuning.halfExtents.z + 0.9;
+    const sx = Math.sin(heading);
+    const sz = Math.cos(heading);
+    const points = [
+      [0, 0], [halfX, halfZ], [halfX, -halfZ], [-halfX, halfZ], [-halfX, -halfZ],
+    ] as const;
+    for (const [localX, localZ] of points) {
+      const x = pos.x + localX * Math.cos(heading) + localZ * sx;
+      const z = pos.z - localX * sx + localZ * sz;
+      if (city.spatial.isBlocked(x, z)) return false;
+    }
+    for (const other of this.list) {
+      if (other === ignore) continue;
+      const gap = (ignore.tuning.spec.length + other.tuning.spec.length) * 0.5 + 1.2;
+      if (Math.hypot(other.position.x - pos.x, other.position.z - pos.z) < gap) return false;
+    }
+    return true;
+  }
+
+  /**
    * A point on the nearest road, aligned with the road direction.
    *
    * The slot is validated before it is handed back: walking blindly down the
@@ -1563,9 +1747,9 @@ export class VehicleSystem implements System, VehicleService {
    * rejected if it lands inside a blocker, and lifted to the real ground
    * height rather than a hardcoded 0.5.
    */
-  private roadSlot(along = 0): { pos: THREE.Vector3; heading: number } {
+  private roadSlot(along = 0, origin?: THREE.Vector3): { pos: THREE.Vector3; heading: number } {
     const city = this.ctx.tryGet(Services.City);
-    const p = this.ctx.tryGet(Services.Player)?.position ?? new THREE.Vector3();
+    const p = origin?.clone() ?? this.ctx.tryGet(Services.Player)?.position ?? new THREE.Vector3();
     const pos = p.clone();
     let heading = 0;
     if (city) {

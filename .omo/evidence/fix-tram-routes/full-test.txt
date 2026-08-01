@@ -1,0 +1,616 @@
+bun test v1.3.11 (af24e281)
+
+src/core/save.test.ts:
+(pass) a corrupt, empty or timeless slot is simply "no save" [0.42ms]
+(pass) every field is validated on its own, never trusted as a blob [0.22ms]
+(pass) a full slot round-trips unchanged [0.14ms]
+(pass) an old CONTINUE record still loads, it just restores less [0.05ms]
+(pass) CONTINUE is offered only when there is something to continue [0.03ms]
+
+src/core/debug.test.ts:
+(pass) stats() with nothing registered > omits every service-backed field instead of defaulting it to zero [0.39ms]
+(pass) stats() with nothing registered > names the services it could not find [0.40ms]
+(pass) stats() with nothing registered > still reports what it can measure directly [0.05ms]
+(pass) stats() with nothing registered > the whole object is JSON-round-trippable — the harness reads it over the wire [0.06ms]
+(pass) stats() with services registered > reports real values and shrinks the unavailable list [0.05ms]
+(pass) stats() with services registered > a registered streaming service makes loadedChunks appear — including a real zero [0.06ms]
+(pass) stats() with services registered > a zero from a live service is distinguishable from a missing one [0.09ms]
+[debug] Services.Streaming providers: NONE
+(pass) nothing in the codebase registers Services.Streaming > the field is dead, and the test says so out loud [20.97ms]
+
+src/render/quality.test.ts:
+(pass) every QualitySettings field is actually consumed > the tier table and the interface have not drifted apart
+[quality] pixelRatioCap            read by render/postfx.ts
+[quality] shadowMapSize            read by render/lighting.ts, render/csm.ts
+[quality] shadowCascades           read by render/lighting.ts
+[quality] shadowDistance           read by render/lighting.ts
+[quality] ssao                     read by render/postfx.ts
+[quality] bloom                    read by render/postfx.ts
+[quality] screenSpaceReflections   read by render/postfx.ts
+[quality] msaa                     read by render/postfx.ts
+[quality] entityDrawDistance       read by world/props.ts, ai/peds.ts
+[quality] cityDrawDistance         read by world/city.ts
+[quality] maxPeds                  read by ai/peds.ts
+[quality] maxTraffic               read by ai/traffic.ts
+(pass) every QualitySettings field is actually consumed > no field is a placebo [22.44ms]
+(pass) every QualitySettings field is actually consumed > the fields that were removed have not crept back without a reader [0.04ms]
+[quality] shadowDistance           re-applied by render/lighting.ts (lighting)
+[quality] shadowCascades           re-applied by render/lighting.ts (lighting)
+[quality] shadowMapSize            re-applied by render/lighting.ts (lighting)
+[quality] entityDrawDistance       re-applied by world/props.ts (props), ai/peds.ts (peds)
+[quality] cityDrawDistance         re-applied by world/city.ts (city)
+[quality] maxPeds                  re-applied by ai/peds.ts (peds)
+[quality] maxTraffic               re-applied by ai/traffic.ts (traffic)
+(pass) setQuality re-applies what init snapshotted > every snapshotted field is registered with onQualityChange [10.76ms]
+(pass) setQuality re-applies what init snapshotted > nothing declares a field that does not exist [9.69ms]
+(pass) setQuality re-applies what init snapshotted > PostFXSystem.setQuality calls applyQuality — the other half of the fix [1.03ms]
+[quality] detectQuality() called in: ai/peds.ts, ai/traffic.ts, game.ts, render/lighting.ts, world/city.ts, world/props.ts
+(pass) setQuality re-applies what init snapshotted > the six independent detectQuality() snapshots are still bounded [22.09ms]
+(pass) the quality consumer registry > applyQuality calls every consumer with the right settings [0.15ms]
+(pass) the quality consumer registry > re-registering the same name replaces it instead of stacking [0.04ms]
+(pass) the quality consumer registry > one consumer throwing does not stop the rest [0.11ms]
+(pass) the quality consumer registry > unsubscribing removes the consumer [0.03ms]
+(pass) the quality consumer registry > the registry reports who reads what [0.12ms]
+(pass) the tiers are ordered > every numeric field is monotonically non-decreasing low -> ultra [0.08ms]
+(pass) the tiers are ordered > every boolean field is monotonically non-weakening low -> ultra [0.08ms]
+(pass) the tiers are ordered > low is materially cheaper than ultra, not cosmetically [0.01ms]
+
+src/render/renderer.test.ts:
+(pass) wantsPreservedDrawingBuffer > follows navigator.webdriver when no override is present [0.03ms]
+(pass) wantsPreservedDrawingBuffer > a real player on a plain URL does not pay for it [0.06ms]
+(pass) wantsPreservedDrawingBuffer > an automated browser keeps meter() working without asking
+(pass) wantsPreservedDrawingBuffer > capture=1 forces it on even outside automation [0.02ms]
+(pass) wantsPreservedDrawingBuffer > capture=0 forces it off even under automation — this is what makes it benchmarkable
+(pass) wantsPreservedDrawingBuffer > the override survives other params in any position
+(pass) wantsPreservedDrawingBuffer > an unrelated value is ignored rather than treated as truthy
+(pass) quality tiers > high stays at the pixel-ratio cap the 60fps claim was measured at
+(pass) quality tiers > shadow cost is bounded: high uses 3 cascades, not ultra's 4
+(pass) quality tiers > tiers are monotonic in the things that cost the most [0.03ms]
+
+src/world/geometryOrientation.test.ts:
+(pass) the analyser > separates disjoint solids instead of averaging them [0.78ms]
+(pass) the analyser > catches ONE reversed solid hiding among correct ones [0.94ms]
+(pass) the analyser > does not judge open surfaces [0.12ms]
+(pass) vehicle bodywork > every class has at least one variant and a shell with volume [0.02ms]
+(pass) vehicle bodywork > dacia: no closed part of any variant is inside out [127.56ms]
+(pass) vehicle bodywork > hatch: no closed part of any variant is inside out [100.13ms]
+(pass) vehicle bodywork > sedan: no closed part of any variant is inside out [68.51ms]
+(pass) vehicle bodywork > van: no closed part of any variant is inside out [30.80ms]
+(pass) vehicle bodywork > truck: no closed part of any variant is inside out [14.05ms]
+(pass) vehicle bodywork > bus: no closed part of any variant is inside out [20.15ms]
+(pass) vehicle bodywork > police: no closed part of any variant is inside out [16.27ms]
+(pass) vehicle bodywork > tram: no closed part of any variant is inside out [10.74ms]
+(pass) vehicle bodywork > scooter: no closed part of any variant is inside out [1.65ms]
+(pass) street props > bench is solid, not hollow [0.84ms]
+(pass) street props > litterBin is solid, not hollow [0.26ms]
+(pass) street props > stoneBollard is solid, not hollow [0.14ms]
+(pass) street props > atm is solid, not hollow [0.23ms]
+(pass) street props > phoneBox is solid, not hollow [0.23ms]
+(pass) street props > newsStand is solid, not hollow [0.34ms]
+(pass) street props > utilityCabinet is solid, not hollow [0.13ms]
+(pass) street props > bicycle is solid, not hollow [0.34ms]
+(pass) street props > eScooter is solid, not hollow [0.27ms]
+(pass) street props > trafficCone is solid, not hollow [0.19ms]
+(pass) street props > palletStack is solid, not hollow [0.54ms]
+(pass) street props > skip is solid, not hollow [0.40ms]
+(pass) street props > jerseyBarrier is solid, not hollow [0.14ms]
+(pass) street props > warningLamp is solid, not hollow [0.11ms]
+(pass) street props > planter is solid, not hollow [0.38ms]
+(pass) street props > treeGrate is solid, not hollow [0.18ms]
+(pass) street props > the props kit covers at least the fixtures a street needs [0.01ms]
+(pass) interior fitouts > buildersLobby: no closed piece of furniture is inside out [8.49ms]
+(pass) interior fitouts > buildersLobby (liberated): no closed piece of furniture is inside out [6.12ms]
+(pass) interior fitouts > recorderNewsroom: no closed piece of furniture is inside out [14.18ms]
+(pass) interior fitouts > broadcastStudio: no closed piece of furniture is inside out [13.59ms]
+(pass) interior fitouts > broadcastStudio (hijacked): no closed piece of furniture is inside out [10.16ms]
+(pass) interior fitouts > cornerShop: no closed piece of furniture is inside out [4.82ms]
+(pass) interior fitouts > buildersBar: no closed piece of furniture is inside out [4.09ms]
+(pass) interior fitouts > blockHall: no closed piece of furniture is inside out [0.82ms]
+(pass) PropBuilder primitives face the way their normals claim > box [1.36ms]
+(pass) PropBuilder primitives face the way their normals claim > box (rotated) [0.05ms]
+(pass) PropBuilder primitives face the way their normals claim > cyl [0.03ms]
+(pass) PropBuilder primitives face the way their normals claim > blob [0.07ms]
+(pass) PropBuilder primitives face the way their normals claim > tube (vertical) [0.03ms]
+(pass) PropBuilder primitives face the way their normals claim > tube (skew) [0.03ms]
+(pass) PropBuilder primitives face the way their normals claim > panel is lit from the side it faces [0.18ms]
+(pass) PropBuilder primitives face the way their normals claim > panel (one-sided) is lit from the side it faces [0.04ms]
+(pass) PropBuilder primitives face the way their normals claim > disc is lit from the side it faces [0.10ms]
+(pass) PropBuilder primitives face the way their normals claim > ground is lit from the side it faces [0.02ms]
+(pass) PropBuilder primitives face the way their normals claim > ground (unrotated) is lit from the side it faces [0.02ms]
+
+src/world/worldTruth.test.ts:
+using deprecated parameters for the initialization function; pass a single object instead
+[city] 2885 buildings, 64 chunks, 58k facade + 82k surface + 2483k detail tris in 495 ms
+[city/osm] Bucharest at 60%: 121.1 km of real street, 2789 nodes, 3465 edges, 732 real footprints, 2010 infilled, 40 parks, 33 squares
+[interiors] 26 furniture colliders
+[interiors] 6 enterable rooms registered
+(pass) the world exists > city, colliders and drawn geometry are all present [0.44ms]
+(pass) probe groups > probeGroups() is promiscuous in membership and selective in filter [0.07ms]
+(pass) probe groups > CANARY: a ground probe at a road point reports a hit [1.99ms]
+(pass) probe groups > CANARY: a SENSOR-membership probe matches nothing — the original bug [0.38ms]
+[ground] |visual-analytic| n=3210 p50=0.006 p90=0.088 p99=0.230 max=0.460 over0.05m=21% worst: (-43,39) analytic=0.40 drawn=-0.06
+(pass) ground consistency > analytic ground vs the drawn ground [46.47ms]
+[ground] |physics-analytic| n=3182 p50=0.000 p90=0.170 p99=0.170 startedInsideACollider=0
+(pass) ground consistency > analytic ground vs the collided ground [8.44ms]
+[ground] |physics-visual| n=3174 p50=0.035 p90=0.164 p99=0.170
+(pass) ground consistency > the collided ground and the drawn ground are the same ground [51.65ms]
+[ground] undrawn ground 124/3211 eg (440, 1145)@0.17 (-800, 1182)@0.17 (228, 258)@0.17 (471, 866)@0.17 (720, -471)@0.00
+(pass) ground consistency > open ground is not a hole [46.95ms]
+[footprints] n=4000 saysOpenButSolid=1 (0.0%) saysBlockedButEmpty=0 (0.0%) eg (439,146)
+(pass) building footprints > isBlocked() agrees with the building colliders [5.54ms]
+(pass) building footprints > a rotated plot is tested with the INVERSE of the collider rotation [0.05ms]
+[winding] surface: 0/82426 inside out (0.0%)
+[winding] facade: 1/58488 inside out (0.0%)
+[winding] detail: 695/2483226 inside out (0.0%)
+(pass) winding > city geometry faces the way its normals claim [40.06ms]
+[winding] ground built=1885/1970 visible=1885/1970 culledAway=0
+(pass) winding > the ground you can SEE is a subset of the ground that was BUILT [65.67ms]
+[interior] buildersLobby floorY=0.4 n=160 noFloor=0 below=0 (deepest 0.000) clear=155 onFurniture=5 nothingDrawn=0
+[interior] recorderNewsroom floorY=0.22 n=160 noFloor=0 below=0 (deepest 0.000) clear=128 onFurniture=32 nothingDrawn=0
+[interior] broadcastStudio floorY=0.22 n=160 noFloor=0 below=0 (deepest 0.000) clear=132 onFurniture=28 nothingDrawn=0
+[interior] cornerShop floorY=0.2 n=160 noFloor=0 below=0 (deepest 0.000) clear=140 onFurniture=20 nothingDrawn=0
+[interior] buildersBar floorY=0.2 n=160 noFloor=0 below=0 (deepest 0.000) clear=151 onFurniture=9 nothingDrawn=0
+[interior] blockHall floorY=0.2 n=160 noFloor=0 below=0 (deepest 0.000) clear=151 onFurniture=9 nothingDrawn=0
+(pass) interiors > every interior has a floor you can stand on, at the height it claims [40.86ms]
+[interior] buildersLobby analytic=0.400 floorY=0.4
+[interior] recorderNewsroom analytic=0.220 floorY=0.22
+[interior] broadcastStudio analytic=0.220 floorY=0.22
+[interior] cornerShop analytic=0.200 floorY=0.2
+[interior] buildersBar analytic=0.200 floorY=0.2
+[interior] blockHall analytic=0.200 floorY=0.2
+(pass) interiors > the analytic ground inside a room is the room floor, not the street [0.10ms]
+
+src/audio/audio.test.ts:
+(pass) dsp primitives > dB <-> gain round trip
+(pass) dsp primitives > rms and peak of a unit sine [2.37ms]
+(pass) dsp primitives > goertzel finds a tone and rejects its neighbours [0.68ms]
+(pass) dsp primitives > spectral centroid rises with a brighter spectrum [0.12ms]
+(pass) dsp primitives > biquad lowpass actually attenuates above cutoff [0.81ms]
+(pass) dsp primitives > envelope hits its attack peak and reaches zero at the end [0.08ms]
+(pass) dsp primitives > decayTimeTo is the inverse of an exponential decay [0.02ms]
+(pass) engine model > the Dacia is a four with a 5200 rpm ceiling [0.01ms]
+(pass) engine model > firing frequency follows rpm x cylinders / 2 [0.36ms]
+(pass) engine model > rpm rises within a gear and drops on the upshift [0.24ms]
+(pass) engine model > gear selection has hysteresis [0.21ms]
+(pass) engine model > load changes the SPECTRUM, not just the pitch [2.60ms]
+(pass) engine model > harmonics are actually present at the right frequencies [2.43ms]
+(pass) engine model > overrun appears on lift at speed and not at a standstill [0.17ms]
+(pass) engine model > standing on the throttle at rest still revs (clutch slip) [0.02ms]
+(pass) engine model > exhaust and induction beds open with load and revs [0.02ms]
+(pass) engine model > every vehicle class produces a sane note [0.13ms]
+(pass) engine model > a blocked car does not sit at the redline forever [0.13ms]
+(pass) engine model > a driver on a light throttle changes up early [0.05ms]
+(pass) engine model > first gear reaches a plausible road speed [0.04ms]
+(pass) engine model > the engine runs out of breath at the top and says so [0.05ms]
+(pass) engine model > lifting off does not change gear — the revs come down with the road [0.03ms]
+(pass) engine model > the exhaust only pops on a lift from revs [0.02ms]
+(pass) engine model > reverse whines and forward does not [0.12ms]
+(pass) engine model > a truck sits far below a scooter at full chat [0.03ms]
+(pass) tyre model > roll noise scales with speed and wetness [0.08ms]
+(pass) tyre model > squeal needs slip AND speed [0.03ms]
+(pass) tyre model > handbrake squeals on its own [0.01ms]
+(pass) tyre model > airborne wheels make no tyre noise [0.01ms]
+(pass) siren > two-tone holds two plateaus and glides between them [0.30ms]
+(pass) siren > the sweep is periodic and continuous across the wrap [0.05ms]
+(pass) siren > yelp cycles more than ten times faster than a wail
+(pass) siren > star count escalates the siren mode [0.02ms]
+(pass) siren > doppler raises the pitch on approach and lowers it on departure [0.04ms]
+(pass) siren > ratioToCents matches the equal-tempered definition [0.01ms]
+(pass) synthesised SFX bank > every id renders a finite, non-silent, non-clipping buffer [111.93ms]
+(pass) synthesised SFX bank > renderers are deterministic for a given seed [3.17ms]
+(pass) synthesised SFX bank > impacts get longer and louder with severity [2.47ms]
+(pass) synthesised SFX bank > impact has a genuine transient — it peaks early and decays [1.15ms]
+(pass) synthesised SFX bank > glass is far brighter than a body impact [48.05ms]
+(pass) synthesised SFX bank > the Dacia cough is a starter, two misfires and a catch [13.27ms]
+(pass) synthesised SFX bank > footsteps are short and the wet variant has a longer bright tail [0.52ms]
+(pass) synthesised SFX bank > the horn is harmonic — energy on integer multiples of ~400 Hz [2.22ms]
+(pass) synthesised SFX bank > explosion is low-frequency dominant and long [4.17ms]
+(pass) synthesised SFX bank > the scrape loop is seamless — both ends fade to silence [2.24ms]
+(pass) synthesised SFX bank > the mission stings are pitched, not noise [4.05ms]
+(pass) synthesised SFX bank > star_up rises and star_down falls [13.83ms]
+(pass) ambience loops > rain is high-frequency dominant, traffic is low [8.26ms]
+(pass) ambience loops > crowd sits in the speech band [14.93ms]
+(pass) ambience loops > loops end where they began, so they do not click [20.21ms]
+(pass) Ce Ne Enervează clip assignment > the manifest yields all 79 voice clips [0.04ms]
+(pass) Ce Ne Enervează clip assignment > EVERY clip is used somewhere — nothing sits on disk unheard [0.17ms]
+(pass) Ce Ne Enervează clip assignment > every bucket entry resolves to a real manifest file [0.06ms]
+(pass) Ce Ne Enervează clip assignment > every clip has a subtitle with real content [0.04ms]
+(pass) Ce Ne Enervează clip assignment > the free-roam chatter pool is broad, not three token clips [0.03ms]
+(pass) Ce Ne Enervează clip assignment > phrases are matched to context, not assigned at random [0.11ms]
+(pass) Ce Ne Enervează clip assignment > the long "complete" cuts are marked long and used as show segments [0.10ms]
+(pass) Ce Ne Enervează clip assignment > star buckets escalate monotonically and are all populated [0.02ms]
+(pass) Ce Ne Enervează clip assignment > the folk track is the manifest music entry
+(pass) street voice editorial gating > ambient sources exclude the observed unsolicited dopamine/test fragments [0.09ms]
+(pass) street voice editorial gating > each physical street source has a distinct, populated, short pool [0.31ms]
+(pass) mix defaults > every bus starts audible and below unity headroom [0.03ms]
+(pass) envelope timing of pre-rendered one-shots > applyEnvelope silences the very end of a buffer [0.88ms]
+(pass) envelope timing of pre-rendered one-shots > suspension knock is under a quarter second [0.29ms]
+(pass) envelope timing of pre-rendered one-shots > thunder rolls for over three seconds and stays sub-300 Hz [3.38ms]
+
+src/gameplay/consequence.test.ts:
+(pass) fines > cost nothing at zero stars and rise monotonically
+(pass) fines > a five-star fine hurts — more than the most expensive shop [0.13ms]
+(pass) fines > `conexiuni` makes every fine cheaper but never free [0.04ms]
+(pass) fines > stars outside 0..5 are clamped rather than throwing
+(pass) bribes > cost more the more heat you are carrying [0.03ms]
+(pass) bribes > inflate every time you do it — the joke has to stop being the answer
+(pass) bribes > are worse value than the fine for the same star, before inflation [0.01ms]
+(pass) bribes > `conexiuni` discounts them too
+(pass) release points > paying puts you at the nearer address [0.03ms]
+(pass) release points > refusing puts you at the far one — that is the whole punishment [0.02ms]
+(pass) release points > paying is never worse than refusing, wherever you were caught [0.10ms]
+(pass) repairs > an untouched car is refused rather than charged [0.03ms]
+(pass) repairs > cost rises with damage and is never free once it is real [0.01ms]
+(pass) repairs > a total wreck costs less to repair than the tow fee on a real wreck
+(pass) repairs > survives a zero-max-health handle without dividing by zero
+
+src/gameplay/player.test.ts:
+(pass) camera yaw 0: W+D and W+A turn the body a full 45 degrees into the diagonal [0.10ms]
+(pass) camera yaw 0.7: W+D and W+A turn the body a full 45 degrees into the diagonal
+(pass) camera yaw -2.4: W+D and W+A turn the body a full 45 degrees into the diagonal
+(pass) camera yaw 3.1315926535897933: W+D and W+A turn the body a full 45 degrees into the diagonal
+(pass) camera yaw 3.9: W+D and W+A turn the body a full 45 degrees into the diagonal
+(pass) a diagonal is a diagonal in the world, not just in the pose [0.02ms]
+(pass) camera yaw 0: S stays square to the camera and backpedals [0.01ms]
+(pass) camera yaw 1.3: S stays square to the camera and backpedals
+(pass) camera yaw -2.9: S stays square to the camera and backpedals
+(pass) camera yaw 0: A and D side-step, they do not turn the body [0.08ms]
+(pass) camera yaw 1.3: A and D side-step, they do not turn the body
+(pass) camera yaw -2.9: A and D side-step, they do not turn the body
+(pass) S+D is a reversing side-step, not a body turned backwards [0.02ms]
+(pass) the body/blend handover is continuous and never over-rotates [0.13ms]
+(pass) aiming pins the body to the camera in every direction [0.03ms]
+(pass) a settled capsule stands a shoe sole clear of the surface, never in it [0.04ms]
+(pass) on a kerb the soles land on the footway, not on the carriageway beside it [0.05ms]
+(pass) footing rejects surfaces that belong to a different storey [0.01ms]
+(pass) stick input is camera-relative and A/D are not swapped [0.02ms]
+
+src/gameplay/activities.test.ts:
+(pass) snapToRoadGraph > a point beside a segment lands on the segment, not on an end node [0.42ms]
+(pass) snapToRoadGraph > a point past the end of a segment clamps to the end
+(pass) snapToRoadGraph > the corner picks whichever of the two segments is closer [0.02ms]
+(pass) snapToRoadGraph > orphan node: an unlinked node never wins [0.02ms]
+(pass) snapToRoadGraph > an empty graph is reported rather than guessed at
+(pass) snapToRoadGraph > snapping is idempotent — a snapped point does not move again
+(pass) activity content > every activity has a start and a sane clock [0.03ms]
+(pass) activity content > snapping puts every authored point exactly on the graph [0.13ms]
+(pass) repairPrice > an undamaged car is refused rather than billed
+(pass) repairPrice > a wreck costs more than a scratch [0.01ms]
+
+src/gameplay/playerMelee.test.ts:
+(pass) one punch can start per cooldown even when attack is requested repeatedly
+(pass) a started punch produces exactly one impact at its contact beat [0.28ms]
+
+src/vehicles/vehicles.test.ts:
+(pass) a built body is one body, not two stacked [18.60ms]
+(pass) bodies are cached, so a respawn cannot double the geometry [0.87ms]
+(pass) the hubcap fills the tyre aperture instead of hiding in the rim well [3.26ms]
+(pass) both wheel arches clear the tyre they sit over [0.09ms]
+(pass) the arch opening is struck from the hub, not from the sill [0.03ms]
+(pass) the beltline does not kick up over the rear quarter [0.02ms]
+(pass) the 1300 keeps rectangular lamps, fine slats and chrome bumpers [0.01ms]
+
+src/vehicles/vehicleLifecycle.test.ts:
+(pass) vehicle disposal always invalidates the audio cache by id
+(pass) audio release remains safe when the service is unavailable during teardown [0.52ms]
+
+src/vehicles/recovery.test.ts:
+(pass) grounded occupied recovery waits for failed forward and reverse attempts [0.24ms]
+(pass) ordinary queues and parked cars never arm grounded recovery [0.32ms]
+(pass) a two-wheel grounded wedge still qualifies, while a stale attempt expires [0.05ms]
+(pass) an unoccupied or airborne vehicle is left to the existing rescue path [0.05ms]
+
+src/physics/physics.test.ts:
+(pass) collision group arithmetic > groups() packs (membership << 16) | filter
+(pass) collision group arithmetic > probeGroups() belongs to every group and filters to what it wants [0.26ms]
+(pass) collision group arithmetic > a probe built with probeGroups() interacts with every solid collider [0.06ms]
+(pass) collision group arithmetic > a SENSOR-membership probe cannot see the world, only the actors in it [0.03ms]
+(pass) probe-group regression ban > nothing outside physics.ts builds a query filter with SENSOR membership [9.46ms]
+(pass) probe-group regression ban > every raycast filter in the codebase comes from probeGroups or GROUP [11.24ms]
+(pass) probe-group regression ban > the allowlist is not stale — every entry still contains the thing it excuses [0.19ms]
+(pass) probe-group regression ban > the scanner can actually see the thing it bans [0.05ms]
+(pass) probe-group regression ban > physics.ts still documents why, because the ban is meaningless without it [0.11ms]
+(pass) capsule rest height > the soles sit one skin above the surface, never in it [0.02ms]
+(pass) capsule rest height > it is exactly linear in the surface it is given
+
+src/characters/body.test.ts:
+(pass) slim: the soles sit on y = 0 in character space [5.94ms]
+(pass) average: the soles sit on y = 0 in character space [2.64ms]
+(pass) stocky: the soles sit on y = 0 in character space [1.13ms]
+(pass) heavy: the soles sit on y = 0 in character space [1.64ms]
+(pass) tall: the soles sit on y = 0 in character space [0.90ms]
+(pass) short: the soles sit on y = 0 in character space [1.67ms]
+(pass) the hero fills the capsule his collider is sized from [0.46ms]
+(pass) the ankle sits one sole thickness above the ground [0.26ms]
+(pass) the rig carries a full set of digits without moving any body bone [0.04ms]
+(pass) slim: hand proportions are a hand, not a mitten [0.13ms]
+(pass) average: hand proportions are a hand, not a mitten [0.03ms]
+(pass) stocky: hand proportions are a hand, not a mitten [0.01ms]
+(pass) heavy: hand proportions are a hand, not a mitten
+(pass) tall: hand proportions are a hand, not a mitten [0.01ms]
+(pass) short: hand proportions are a hand, not a mitten
+(pass) a grip closes the fingers and a rest pose does not [2.47ms]
+(pass) the crowd does not pay for fingers it never shows [0.14ms]
+(pass) slim: no daylight between the arm and the torso [22.12ms]
+(pass) average: no daylight between the arm and the torso [15.06ms]
+(pass) stocky: no daylight between the arm and the torso [16.35ms]
+(pass) heavy: no daylight between the arm and the torso [17.86ms]
+(pass) tall: no daylight between the arm and the torso [15.73ms]
+(pass) short: no daylight between the arm and the torso [14.34ms]
+(pass) the hero specifically has no daylight through either shoulder [2.36ms]
+(pass) slim: shoulder, elbow and wrist are one continuous surface [2.21ms]
+(pass) average: shoulder, elbow and wrist are one continuous surface [1.56ms]
+(pass) stocky: shoulder, elbow and wrist are one continuous surface [1.07ms]
+(pass) heavy: shoulder, elbow and wrist are one continuous surface [1.27ms]
+(pass) tall: shoulder, elbow and wrist are one continuous surface [0.97ms]
+(pass) short: shoulder, elbow and wrist are one continuous surface [1.25ms]
+(pass) the hero has a visible neck between the collar and the jaw [0.57ms]
+(pass) no generated appearance leaves the torso or the thighs bare [1115.82ms]
+(pass) no garment is darker than real dyed cloth [0.74ms]
+(pass) every garment keeps a specular response [1.10ms]
+(pass) walking backwards leans back, not forward [1.72ms]
+(pass) strafing abducts the hips instead of swinging them fore and aft [1.93ms]
+(pass) an omitted travel vector behaves exactly like walking forward [0.53ms]
+(pass) the boarding pose travels from standing to seated [0.60ms]
+
+src/ui/map/map.test.ts:
+(pass) north is up and east is right with no rotation
+(pass) rotating the view puts the heading at the top of the frame [0.08ms]
+(pass) unproject inverts project at any rotation [0.05ms]
+(pass) view bounds cover every corner of a rotated view [0.10ms]
+(pass) the minimap opens up with speed and then flattens [0.02ms]
+(pass) angleDelta always takes the short way round [0.04ms]
+(pass) compass letters follow the heading [0.06ms]
+(pass) distances read in Romanian [0.07ms]
+(pass) the chamfered frame is a closed six-point ring [0.03ms]
+(pass) off-frame points clamp to the edge and say so [0.02ms]
+(pass) route advance tracks the segment the player is on [0.05ms]
+(pass) route advance never rewinds past the end [0.01ms]
+(pass) polyline length is the sum of its legs [0.03ms]
+(pass) off-route detection measures to the segment, not the corners [0.10ms]
+(pass) smoothing rounds corners without moving the ends [0.06ms]
+(pass) smoothing a degenerate route is a no-op [0.02ms]
+(pass) a road crossing a caption box is detected from any direction [0.05ms]
+(pass) a road that misses the caption box is not a collision [0.03ms]
+
+src/ui/menu/menu.test.ts:
+(pass) automation never gets the front-end unless it asks for it [0.04ms]
+(pass) players get the front-end, and can still turn it off [0.03ms]
+(pass) the loading screen covers all four acts, panel 01 first [0.05ms]
+(pass) panels advance once each and then hold on the last [0.04ms]
+(pass) the menu is the five rows the brief asks for [0.02ms]
+(pass) selection skips a CONTINUE with nothing to continue [0.03ms]
+(pass) selection survives a row where nothing is selectable
+(pass) credits name the cast, the tech and the music [0.11ms]
+(pass) a corrupt or empty save slot never breaks boot [0.03ms]
+(pass) a partial save slot is filled in rather than trusted [0.03ms]
+(pass) CONTINUE is offered only when there is something to continue [0.02ms]
+(pass) act numbers come from the id, or from what is finished [0.15ms]
+(pass) the CONTINUE sub-label describes the slot [0.12ms]
+(pass) quality steps without falling off either end [0.04ms]
+(pass) sensitivity is clamped and displayed the way the pause menu shows it [0.03ms]
+(pass) the sensitivity meter spans the whole legal range [0.01ms]
+
+src/world/city/builders.test.ts:
+(pass) the stated winding convention is what the code means by clockwise
+(pass) emitters whose winding matches their normals > SurfaceBuilder.rect [0.21ms]
+(pass) emitters whose winding matches their normals > SurfaceBuilder.quad [0.03ms]
+(pass) emitters whose winding matches their normals > FacadeBuilder.extrude (CW footprint) [0.09ms]
+(pass) emitters whose winding matches their normals > FacadeBuilder.cap (CW quad) [0.02ms]
+(pass) emitters whose winding matches their normals > DetailBuilder.box [0.10ms]
+(pass) emitters whose winding matches their normals > DetailBuilder.box (rotated) [0.06ms]
+(pass) emitters whose winding matches their normals > DetailBuilder.cyl [0.04ms]
+(pass) emitters whose winding matches their normals > DetailBuilder.cyl (tapered, uncapped) [0.03ms]
+(pass) emitters whose winding matches their normals > DetailBuilder.tube (vertical) [0.04ms]
+(pass) emitters whose winding matches their normals > DetailBuilder.tube (skew) [0.02ms]
+(pass) emitters whose winding matches their normals > DetailBuilder.blob [0.04ms]
+(pass) emitters whose winding matches their normals > DetailBuilder.ring [0.07ms]
+(pass) emitters whose winding matches their normals > DetailBuilder.ringPoly (CW) [0.04ms]
+(pass) emitters whose winding matches their normals > DetailBuilder.ringPoly (CCW) [0.03ms]
+(pass) emitters whose winding matches their normals > DetailBuilder.plate [0.02ms]
+(pass) emitters whose winding matches their normals > SurfaceBuilder.tri (CW) [0.06ms]
+(pass) emitters whose winding matches their normals > SurfaceBuilder.ribbon (every carriageway and marking) [0.05ms]
+(pass) emitters whose winding matches their normals > SurfaceBuilder.ribbon (run-cambered crossings) [0.06ms]
+(pass) emitters whose winding matches their normals > SurfaceBuilder.poly (parks, squares, real outlines) [0.02ms]
+(pass) emitters whose winding matches their normals > SurfaceBuilder.poly (CCW input — normalised to the same handedness) [0.03ms]
+(pass) emitters whose winding matches their normals > FacadeBuilder.cap (imported footprints with > 4 corners) [0.04ms]
+(pass) closed generated meshes are wound outward > DetailBuilder.box encloses exactly its own volume [0.12ms]
+(pass) closed generated meshes are wound outward > DetailBuilder.blob encloses a positive volume with every face outward [0.06ms]
+(pass) closed generated meshes are wound outward > DetailBuilder.cyl encloses a positive volume [0.07ms]
+(pass) closed generated meshes are wound outward > DetailBuilder.ring is four outward boxes, not four inward ones [0.05ms]
+(pass) closed generated meshes are wound outward > a reversed footprint passes the winding census and fails the volume test [0.08ms]
+(pass) closed generated meshes are wound outward > every extruded footprint the city can produce comes out solid [0.16ms]
+(pass) closed generated meshes are wound outward > an ear-clipped roof cap is wound the same way as its walls [0.06ms]
+(pass) the quarantine is empty
+(pass) roundedFrontFootprint > keeps the house winding, so the walls still face outward [0.07ms]
+(pass) roundedFrontFootprint > rounds the two STREET-side corners and no others [0.08ms]
+(pass) roundedFrontFootprint > a radius larger than the plot is clamped, not folded inside out [0.04ms]
+(pass) roundedFrontFootprint > rotates with the plot [0.02ms]
+
+src/world/city/facadeProps.test.ts:
+(pass) crowdBarrier follows the street it is placed on > east: a five-panel run is 10 m long and under 1 m wide [0.61ms]
+(pass) crowdBarrier follows the street it is placed on > north: a five-panel run is 10 m long and under 1 m wide [0.13ms]
+(pass) crowdBarrier follows the street it is placed on > diagonal: a five-panel run is 10 m long and under 1 m wide [0.11ms]
+(pass) crowdBarrier follows the street it is placed on > 30 degrees: a five-panel run is 10 m long and under 1 m wide [0.20ms]
+(pass) crowdBarrier follows the street it is placed on > unnormalised diagonal: a five-panel run is 10 m long and under 1 m wide [0.11ms]
+(pass) crowdBarrier follows the street it is placed on > it is not a chrome mirror [0.16ms]
+(pass) the other kerbside props > streetLamp reaches out over the road it is told to light [0.09ms]
+(pass) the other kerbside props > bollard and parkedCar sit at the height they claim [0.08ms]
+
+src/world/city/landmarkColliders.test.ts:
+(pass) Builders House entrance mullion > the door post is there at head height — the Dacia still cannot fit [0.06ms]
+(pass) Builders House entrance mullion > the door post stops at the lintel instead of running to the roof [0.04ms]
+(pass) Builders House entrance mullion > both leaves are still open at head height [0.02ms]
+(pass) Builders House entrance mullion > nothing else about the shell moved: the walls still reach the roof [0.03ms]
+(pass) Builders House entrance mullion > only the mullion was capped — every other box in the wall is full height [0.04ms]
+
+src/world/interiors/interiors.test.ts:
+(pass) doorways > buildersLobby: a person fits and the Dacia does not [0.02ms]
+(pass) doorways > buildersLobby: the doorway is actually a hole in the shell [0.09ms]
+(pass) doorways > buildersLobby: the walls are solid everywhere else [0.09ms]
+(pass) doorways > buildersLobby: the centre of the room is open [0.02ms]
+(pass) doorways > buildersLobby: standing spots either side of the door are clear [0.12ms]
+(pass) doorways > buildersLobby: has a floor under the whole room [0.02ms]
+(pass) doorways > buildersLobby: the room has usable proportions [0.02ms]
+(pass) doorways > recorderNewsroom: a person fits and the Dacia does not
+(pass) doorways > recorderNewsroom: the doorway is actually a hole in the shell [0.02ms]
+(pass) doorways > recorderNewsroom: the walls are solid everywhere else [0.03ms]
+(pass) doorways > recorderNewsroom: the centre of the room is open
+(pass) doorways > recorderNewsroom: standing spots either side of the door are clear
+(pass) doorways > recorderNewsroom: has a floor under the whole room
+(pass) doorways > recorderNewsroom: the room has usable proportions
+(pass) doorways > broadcastStudio: a person fits and the Dacia does not
+(pass) doorways > broadcastStudio: the doorway is actually a hole in the shell
+(pass) doorways > broadcastStudio: the walls are solid everywhere else [0.02ms]
+(pass) doorways > broadcastStudio: the centre of the room is open
+(pass) doorways > broadcastStudio: standing spots either side of the door are clear
+(pass) doorways > broadcastStudio: has a floor under the whole room
+(pass) doorways > broadcastStudio: the room has usable proportions
+(pass) doorways > cornerShop: a person fits and the Dacia does not
+(pass) doorways > cornerShop: the doorway is actually a hole in the shell
+(pass) doorways > cornerShop: the walls are solid everywhere else [0.02ms]
+(pass) doorways > cornerShop: the centre of the room is open
+(pass) doorways > cornerShop: standing spots either side of the door are clear
+(pass) doorways > cornerShop: has a floor under the whole room
+(pass) doorways > cornerShop: the room has usable proportions
+(pass) doorways > buildersBar: a person fits and the Dacia does not
+(pass) doorways > buildersBar: the doorway is actually a hole in the shell
+(pass) doorways > buildersBar: the walls are solid everywhere else [0.01ms]
+(pass) doorways > buildersBar: the centre of the room is open
+(pass) doorways > buildersBar: standing spots either side of the door are clear
+(pass) doorways > buildersBar: has a floor under the whole room
+(pass) doorways > buildersBar: the room has usable proportions
+(pass) doorways > blockHall: a person fits and the Dacia does not
+(pass) doorways > blockHall: the doorway is actually a hole in the shell
+(pass) doorways > blockHall: the walls are solid everywhere else [0.01ms]
+(pass) doorways > blockHall: the centre of the room is open
+(pass) doorways > blockHall: standing spots either side of the door are clear
+(pass) doorways > blockHall: has a floor under the whole room
+(pass) doorways > blockHall: the room has usable proportions
+(pass) entry anchors > buildersLobby: the anchor is inside the room, clear of the walls [0.07ms]
+(pass) entry anchors > buildersLobby: it faces into the room, not back out of the door [0.02ms]
+(pass) entry anchors > buildersLobby: it stands back far enough for the camera boom [0.02ms]
+(pass) entry anchors > buildersLobby: the anchor is off the door centreline [0.01ms]
+(pass) entry anchors > buildersLobby: nothing solid is standing on the anchor [0.04ms]
+(pass) entry anchors > recorderNewsroom: the anchor is inside the room, clear of the walls [0.01ms]
+(pass) entry anchors > recorderNewsroom: it faces into the room, not back out of the door
+(pass) entry anchors > recorderNewsroom: it stands back far enough for the camera boom
+(pass) entry anchors > recorderNewsroom: the anchor is off the door centreline
+(pass) entry anchors > recorderNewsroom: nothing solid is standing on the anchor
+(pass) entry anchors > broadcastStudio: the anchor is inside the room, clear of the walls
+(pass) entry anchors > broadcastStudio: it faces into the room, not back out of the door
+(pass) entry anchors > broadcastStudio: it stands back far enough for the camera boom
+(pass) entry anchors > broadcastStudio: the anchor is off the door centreline
+(pass) entry anchors > broadcastStudio: nothing solid is standing on the anchor
+(pass) entry anchors > cornerShop: the anchor is inside the room, clear of the walls
+(pass) entry anchors > cornerShop: it faces into the room, not back out of the door
+(pass) entry anchors > cornerShop: it stands back far enough for the camera boom
+(pass) entry anchors > cornerShop: the anchor is off the door centreline
+(pass) entry anchors > cornerShop: nothing solid is standing on the anchor
+(pass) entry anchors > buildersBar: the anchor is inside the room, clear of the walls
+(pass) entry anchors > buildersBar: it faces into the room, not back out of the door
+(pass) entry anchors > buildersBar: it stands back far enough for the camera boom
+(pass) entry anchors > buildersBar: the anchor is off the door centreline
+(pass) entry anchors > buildersBar: nothing solid is standing on the anchor
+(pass) entry anchors > blockHall: the anchor is inside the room, clear of the walls
+(pass) entry anchors > blockHall: it faces into the room, not back out of the door
+(pass) entry anchors > blockHall: it stands back far enough for the camera boom
+(pass) entry anchors > blockHall: the anchor is off the door centreline
+(pass) entry anchors > blockHall: nothing solid is standing on the anchor
+(pass) entry anchors > the broadcast studio no longer spawns you in the doorway [0.02ms]
+(pass) furniture colliders > buildersLobby: blockers stay inside the room and clear of the door [0.04ms]
+(pass) furniture colliders > recorderNewsroom: blockers stay inside the room and clear of the door
+(pass) furniture colliders > broadcastStudio: blockers stay inside the room and clear of the door
+(pass) furniture colliders > cornerShop: blockers stay inside the room and clear of the door
+(pass) furniture colliders > buildersBar: blockers stay inside the room and clear of the door
+(pass) furniture colliders > blockHall: blockers stay inside the room and clear of the door
+(pass) placement > every footprint is inside a void with margin [0.05ms]
+(pass) placement > interiors do not overlap each other [0.03ms]
+(pass) Builders House > the tower is a shell with a doorway, not a solid block [0.02ms]
+(pass) Builders House > the lobby floor is registered as walkable ground [0.02ms]
+(pass) Builders House > the entrance landing meets the lobby floor [0.02ms]
+(pass) Builders House > the forecourt is still there
+(pass) landmark table > every enterable interior has a landmark entry [0.03ms]
+(pass) landmark table > every landmark builds and returns colliders and a floor [5.49ms]
+(pass) fitouts > cornerShop builds geometry and light anchors [0.92ms]
+(pass) fitouts > buildersBar builds geometry and light anchors [0.40ms]
+(pass) fitouts > blockHall builds geometry and light anchors [0.19ms]
+(pass) fitouts > recorderNewsroom builds geometry and light anchors [1.79ms]
+(pass) fitouts > the lobby builds in both states and the party is brighter [1.04ms]
+(pass) fitouts > the studio builds in both states [2.74ms]
+(pass) fitouts > nothing is built outside its own room [6.65ms]
+
+src/ai/traffic/roadGraph.test.ts:
+(pass) explicit tram routing > a wide rank-2 road without rendered rails is never tram-routable [0.65ms]
+(pass) explicit tram routing > a rendered rail corridor through a facade is rejected in both directions [0.34ms]
+(pass) explicit tram routing > rendered rail paths map both directions and choose the rail continuation [0.26ms]
+[city] 2885 buildings, 64 chunks, 58k facade + 82k surface + 2483k detail tris in 427 ms
+[city/osm] Bucharest at 60%: 121.1 km of real street, 2789 nodes, 3465 edges, 732 real footprints, 2010 infilled, 40 parks, 33 squares
+[tram-test] 173 rendered lines -> 314 directed rail edges, 195 with continuations; 1192 rank-2 road edges rejected; 42 safe tram spawn edges near Casa; longest join 42.0 m
+(pass) explicit tram routing > the built city maps a usable bidirectional network to its visible rails [452.09ms]
+
+src/ai/peds/rig.test.ts:
+(pass) an imposter head shows the painted eyes, brows, nose and mouth from the front [5.80ms]
+(pass) the imposter head puts the face midline dead ahead and the seam behind [0.87ms]
+(pass) both crowd tiers put the eye line on the front of the head at the same height [14.83ms]
+(pass) dog heads never enter the human face material in either distance tier [3.87ms]
+
+src/ai/peds/crowd.test.ts:
+(pass) crowd grid deterministically separates pedestrians spawned at the exact same point [0.27ms]
+(pass) depenetrating an anchored cluster moves its anchors with its bodies [0.10ms]
+(pass) an anchored pedestrian cannot remain coincident with the on-foot player [0.32ms]
+(pass) pedestrians moving toward the same point preserve a hard body separation [0.46ms]
+
+src/ai/peds/melee.test.ts:
+(pass) a melee strike damages only the nearest living pedestrian in the forward cone
+(pass) invalid, dead, unreachable and vertically separated pedestrians are not melee targets [0.27ms]
+(pass) debug target placement stays reachable and inside the real melee cone [0.08ms]
+
+src/characters/face/face.test.ts:
+(pass) player: the skull faces outward [82.72ms]
+(pass) nicusor: the skull faces outward [74.89ms]
+(pass) ally: the skull faces outward [64.02ms]
+(pass) the eye layers face out of the head, not into the skull [2.81ms]
+(pass) player: the globe is seated inside the lid aperture [11.56ms]
+(pass) nicusor: the globe is seated inside the lid aperture [5.90ms]
+(pass) ally: the globe is seated inside the lid aperture [3.43ms]
+(pass) player: canonical head proportions [0.98ms]
+(pass) nicusor: canonical head proportions [0.32ms]
+(pass) ally: canonical head proportions [0.29ms]
+(pass) player: the cranial vault is low and flat-topped [0.28ms]
+(pass) nicusor: the cranial vault is low and flat-topped [0.16ms]
+(pass) ally: the cranial vault is low and flat-topped [0.17ms]
+(pass) the shoulders are an adult male's, not a coat hanger's [0.09ms]
+(pass) player: head reads against the shoulders, not over them [0.15ms]
+(pass) nicusor: head reads against the shoulders, not over them [0.21ms]
+(pass) ally: head reads against the shoulders, not over them [0.16ms]
+(pass) player: the sculpt is differentiable across the midline [2.46ms]
+(pass) nicusor: the sculpt is differentiable across the midline [2.11ms]
+(pass) ally: the sculpt is differentiable across the midline [1.89ms]
+(pass) player: the nose flares — wings wider than the bridge [2.86ms]
+(pass) nicusor: the nose flares — wings wider than the bridge [2.42ms]
+(pass) ally: the nose flares — wings wider than the bridge [2.28ms]
+(pass) player: the nose is long, straight and projects [2.16ms]
+(pass) nicusor: the nose is long, straight and projects [2.40ms]
+(pass) ally: the nose is long, straight and projects [2.14ms]
+(pass) player: no hair crosses the brow onto the face [31.46ms]
+(pass) nicusor: no hair crosses the brow onto the face [22.05ms]
+(pass) ally: no hair crosses the brow onto the face [20.09ms]
+(pass) player: brows, lashes and beard build without throwing [52.78ms]
+(pass) nicusor: brows, lashes and beard build without throwing [0.37ms]
+(pass) ally: brows, lashes and beard build without throwing [7.48ms]
+(pass) player: no vertex on the head is painted below the albedo floor [66.30ms]
+(pass) nicusor: no vertex on the head is painted below the albedo floor [63.94ms]
+(pass) ally: no vertex on the head is painted below the albedo floor [65.33ms]
+(pass) the player's face is painted in the same range as the body's own skin [0.63ms]
+(pass) player: hair, beard and brow paint stays above the keratin floor [0.06ms]
+(pass) nicusor: hair, beard and brow paint stays above the keratin floor
+(pass) ally: hair, beard and brow paint stays above the keratin floor
+(pass) player: the widest point of the face is the cheekbones, not the jaw [0.93ms]
+(pass) nicusor: the widest point of the face is the cheekbones, not the jaw [0.32ms]
+(pass) ally: the widest point of the face is the cheekbones, not the jaw [0.31ms]
+
+ 506 pass
+ 0 fail
+ 8907 expect() calls
+Ran 506 tests across 27 files. [4.69s]

@@ -1,0 +1,12 @@
+bun test v1.3.11 (af24e281)
+
+src/ai/peds/rig.test.ts:
+(pass) an imposter head shows the painted eyes, brows, nose and mouth from the front [7.67ms]
+(pass) the imposter head puts the face midline dead ahead and the seam behind [0.42ms]
+(pass) both crowd tiers put the eye line on the front of the head at the same height [19.18ms]
+(pass) dog heads never enter the human face material in either distance tier [4.73ms]
+
+ 4 pass
+ 0 fail
+ 23 expect() calls
+Ran 4 tests across 1 file. [63.00ms]

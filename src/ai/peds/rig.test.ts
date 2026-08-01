@@ -27,7 +27,12 @@
 
 import { expect, test } from 'bun:test';
 import * as THREE from 'three';
-import { buildImposterHeadGeometry } from './rig';
+import {
+  buildImposterHeadGeometry,
+  CrowdRenderer,
+  type PedAppearance,
+  type RigSubject,
+} from './rig';
 import { buildHumanoidGeometry } from '../../characters/humanoid';
 import { bodyMetrics, buildRig } from '../../characters/rig';
 import { rollAppearance } from '../../characters/wardrobe';
@@ -128,6 +133,81 @@ function samples(r: FrontRaster, cu: number, cv: number, ru: number, rv: number)
     if (du * du + dv * dv <= 1) count++;
   }
   return count;
+}
+
+/** Minimal canvas seam for exercising the renderer in Bun (which has no DOM). */
+function fakeCanvasDocument(): Document {
+  const gradient = { addColorStop: () => {} } as unknown as CanvasGradient;
+  const context = new Proxy({
+    createLinearGradient: () => gradient,
+    createRadialGradient: () => gradient,
+    getImageData: (_x: number, _y: number, width: number, height: number) => {
+      const w = Math.max(1, Math.ceil(width));
+      const h = Math.max(1, Math.ceil(height));
+      const data = new Uint8ClampedArray(w * h * 4);
+      for (let i = 0; i < data.length; i += 4) {
+        data[i] = 200;
+        data[i + 1] = 200;
+        data[i + 2] = 200;
+        data[i + 3] = 255;
+      }
+      return { data, width: w, height: h, colorSpace: 'srgb' } as ImageData;
+    },
+    putImageData: () => {},
+  } as Partial<CanvasRenderingContext2D>, {
+    get(target, property) {
+      const value = target[property as keyof typeof target];
+      return value ?? (() => {});
+    },
+    set(target, property, value) {
+      (target as Record<PropertyKey, unknown>)[property] = value;
+      return true;
+    },
+  }) as CanvasRenderingContext2D;
+  const canvas = {
+    width: 0,
+    height: 0,
+    getContext: () => context,
+  } as unknown as HTMLCanvasElement;
+  return { createElement: () => canvas } as unknown as Document;
+}
+
+const testColour = (hex: number) => new THREE.Color(hex).convertSRGBToLinear();
+const TEST_IMPOSTER_APP: PedAppearance = {
+  height: 1.76,
+  build: 1,
+  skin: testColour(0xb98a63),
+  hair: testColour(0x2c1f18),
+  top: testColour(0x2a3350),
+  sleeve: testColour(0x2a3350),
+  shortSleeve: false,
+  legs: testColour(0x24283a),
+  shoes: testColour(0x14121a),
+  vest: null,
+  headwear: 0,
+  hatColor: testColour(0xe8622a),
+  bag: 0,
+  bagColor: testColour(0x2a2230),
+  phone: false,
+  cigarette: false,
+  placard: null,
+};
+
+function imposterSubject(headwear: number, x: number): RigSubject {
+  return {
+    pos: new THREE.Vector3(x, 0, 0),
+    yaw: 0,
+    tiltPitch: 0,
+    tiltRoll: 0,
+    app: { ...TEST_IMPOSTER_APP, headwear },
+    pose: 'idle',
+    phase: 0,
+    speed: 0,
+    headYaw: 0,
+    headPitch: 0,
+    seed: headwear,
+    gesture: 0.6,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -258,4 +338,107 @@ test('both crowd tiers put the eye line on the front of the head at the same hei
   }
 
   skinned.dispose();
+});
+
+test('dog heads never enter the human face material in either distance tier', () => {
+  const prior = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    writable: true,
+    value: fakeCanvasDocument(),
+  });
+
+  let renderer: CrowdRenderer | null = null;
+  try {
+    renderer = new CrowdRenderer(new THREE.Group(), 2, false);
+    renderer.begin();
+    const fur = new THREE.Color(0x4a3a2e).convertSRGBToLinear();
+    renderer.drawDog(0, 0, 0, 0, 0, 1, fur, 2);
+    renderer.drawDog(2, 0, 0, 0, 0, 1, fur, 80);
+    renderer.end();
+
+    const count = (name: string) => (renderer!.root.getObjectByName(name) as THREE.InstancedMesh).count;
+    expect(count('peds-head-near')).toBe(0);
+    expect(count('peds-head-far')).toBe(0);
+    expect(count('peds-blob-near')).toBe(1);
+    expect(count('peds-blob-far')).toBe(1);
+  } finally {
+    renderer?.dispose();
+    if (prior) Object.defineProperty(globalThis, 'document', prior);
+    else delete (globalThis as { document?: Document }).document;
+  }
+});
+
+test('the shared crown pool retains dog heads at maximum pedestrian occupancy', () => {
+  const prior = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    writable: true,
+    value: fakeCanvasDocument(),
+  });
+
+  let renderer: CrowdRenderer | null = null;
+  try {
+    renderer = new CrowdRenderer(new THREE.Group(), 2, false);
+    renderer.begin();
+    const fur = testColour(0x4a3a2e);
+    for (let i = 0; i < 2; i++) {
+      renderer.draw(imposterSubject(0, i * 2), 0, 2);
+      renderer.drawDog(i * 2, 0, 0, 0, 0, 1, fur, 2);
+    }
+    renderer.end();
+
+    const crowns = renderer.root.getObjectByName('peds-blob-near') as THREE.InstancedMesh;
+    // One hair cap and one dog head for each of the two live pedestrians.
+    expect(crowns.count).toBe(4);
+  } finally {
+    renderer?.dispose();
+    if (prior) Object.defineProperty(globalThis, 'document', prior);
+    else delete (globalThis as { document?: Document }).document;
+  }
+});
+
+test('imposter hair and helmet shells stay above the face midline in both distance tiers', () => {
+  const prior = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    writable: true,
+    value: fakeCanvasDocument(),
+  });
+
+  let renderer: CrowdRenderer | null = null;
+  try {
+    const variants = [0, 2, 3, 4];
+    renderer = new CrowdRenderer(new THREE.Group(), variants.length * 2, false);
+    renderer.begin();
+    for (let i = 0; i < variants.length; i++) {
+      renderer.draw(imposterSubject(variants[i], i * 2), 0, 2);
+      renderer.draw(imposterSubject(variants[i], i * 2), 0, 80);
+    }
+    renderer.end();
+
+    const matrix = new THREE.Matrix4();
+    const position = new THREE.Vector3();
+    const rotation = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    for (const tier of ['near', 'far'] as const) {
+      const heads = renderer.root.getObjectByName(`peds-head-${tier}`) as THREE.InstancedMesh;
+      const shells = renderer.root.getObjectByName(`peds-blob-${tier}`) as THREE.InstancedMesh;
+      expect(heads.count).toBe(variants.length);
+      expect(shells.count).toBe(variants.length);
+      for (let i = 0; i < variants.length; i++) {
+        heads.getMatrixAt(i, matrix);
+        const faceMidlineY = matrix.elements[13];
+        shells.getMatrixAt(i, matrix);
+        matrix.decompose(position, rotation, scale);
+        // The shared blob geometry is centred at zero with y extent +-0.5.
+        const shellBottomY = position.y - scale.y * 0.5;
+        expect(shellBottomY - faceMidlineY).toBeGreaterThan(0.01);
+      }
+    }
+  } finally {
+    renderer?.dispose();
+    if (prior) Object.defineProperty(globalThis, 'document', prior);
+    else delete (globalThis as { document?: Document }).document;
+  }
 });

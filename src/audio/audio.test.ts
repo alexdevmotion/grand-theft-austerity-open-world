@@ -10,6 +10,8 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import * as THREE from 'three';
+import { EventBus } from '../core/events';
 import { Rng } from '../core/rng';
 import {
   additive, applyEnvelope, biquad, decayTimeTo, envelopeAt, goertzel,
@@ -24,6 +26,29 @@ import {
 import { SFX_IDS, renderSfx, renderRainLoop, renderCrowdLoop, renderTrafficLoop } from './bank';
 import { CLIPS, VO_BUCKETS, assignedKeys, bucket, bucketsFor, FOLK_TRACK } from './clips';
 import { DEFAULT_MIX } from './graph';
+import {
+  STREET_CONTEXT_BY_SOURCE,
+  STREET_EXCLUDED_FILES,
+  STREET_VOICE_CONTEXTS,
+  VOICE_CONTEXTS,
+  type StreetVoiceSource,
+} from './clipContexts';
+import {
+  buildPools,
+  VoiceDirector,
+  streetContextForSource,
+  type DirectorHooks,
+  type VoiceAudioBuffer,
+  type VoiceAudioBufferSource,
+  type VoiceAudioContext,
+  type VoiceAudioNode,
+} from './voiceDirector';
+import { EMITTER_SPEAKER } from './streetVoices';
+import {
+  AudioSystem,
+  releaseEngineVoiceResources,
+  type ReleasableEngineVoice,
+} from './audioSystem';
 
 const SR = 44100;
 
@@ -722,6 +747,176 @@ describe('Ce Ne Enervează clip assignment', () => {
   });
 });
 
+describe('street voice editorial gating', () => {
+  test('the playback pools reject every denied unsolicited street clip', () => {
+    const pools = buildPools().reaction;
+    for (const context of STREET_VOICE_CONTEXTS) {
+      for (const line of pools[context]) {
+        expect(STREET_EXCLUDED_FILES.has(line.file), `${context}: ${line.file}`).toBe(false);
+      }
+    }
+  });
+
+  test('each physical street source has a distinct, populated, short pool', () => {
+    const pools = buildPools().reaction;
+    for (const source of ['kiosk', 'doorway', 'parkedCar'] as StreetVoiceSource[]) {
+      const context = STREET_CONTEXT_BY_SOURCE[source];
+      expect(pools[context].length, `${source} pool`).toBeGreaterThanOrEqual(2);
+      expect(pools[context].every((line) => line.seconds <= 9), `${source} reaction length`).toBe(true);
+    }
+
+    const expected = {
+      kiosk: 'streetKiosk',
+      doorway: 'streetDoorway',
+      parkedCar: 'streetParkedCar',
+    } as const;
+    for (const source of Object.keys(EMITTER_SPEAKER) as StreetVoiceSource[]) {
+      expect(EMITTER_SPEAKER[source].length).toBeGreaterThan(0);
+      expect(streetContextForSource(source)).toBe(expected[source]);
+    }
+  });
+});
+
+describe('voice attribution telemetry', () => {
+  class FakeNode implements VoiceAudioNode {
+    readonly numberOfInputs = 1;
+    readonly numberOfOutputs = 1;
+  }
+
+  class FakeBuffer implements VoiceAudioBuffer {
+    constructor(readonly duration: number) {}
+  }
+
+  class FakeSource implements VoiceAudioBufferSource {
+    buffer: VoiceAudioBuffer | null = null;
+    onended: ((event: Event) => unknown) | null = null;
+    connectedTo: VoiceAudioNode | null = null;
+    startedAt: number | null = null;
+    stoppedAt: number | null = null;
+
+    connect(destination: VoiceAudioNode): void {
+      this.connectedTo = destination;
+    }
+
+    start(when = 0): void {
+      this.startedAt = when;
+    }
+
+    stop(when = 0): void {
+      this.stoppedAt = when;
+    }
+
+    end(): void {
+      this.onended?.(new Event('ended'));
+    }
+  }
+
+  class FakeContext implements VoiceAudioContext {
+    currentTime = 0;
+    readonly sources: FakeSource[] = [];
+
+    createBufferSource(): VoiceAudioBufferSource {
+      const source = new FakeSource();
+      this.sources.push(source);
+      return source;
+    }
+
+    advance(seconds: number): void {
+      this.currentTime += seconds;
+    }
+  }
+
+  test('queued street emitters retain the active tuple until the queued line starts', () => {
+    const context = new FakeContext();
+    const buffer = new FakeBuffer(0.1);
+    const hooks: DirectorHooks = {
+      cached: () => buffer,
+      load: async () => buffer,
+    };
+    const events = new EventBus();
+    const subtitles: Array<{ speaker: string; text: string }> = [];
+    events.on('ui:subtitle', ({ speaker, text }) => subtitles.push({ speaker, text }));
+
+    const radioDestination = new FakeNode();
+    const parkedDestination = new FakeNode();
+    const doorwayDestination = new FakeNode();
+    const kioskDestination = new FakeNode();
+    const thirdDestination = new FakeNode();
+    const rejectedDestination = new FakeNode();
+    const director = new VoiceDirector(
+      context,
+      hooks,
+      events,
+      radioDestination,
+      'audio-attribution-regression',
+    );
+
+    expect(director.requestStreet(
+      parkedDestination, 'parkedCar', 'DINTR-O DACIE PARCATĂ',
+    )).toBe(true);
+    expect(director.speaking).toBe(true);
+    expect(director.route).toBe('street');
+    const parked = {
+      key: director.lastKey,
+      context: director.lastContext,
+      subtitle: director.nowPlaying,
+      route: director.route,
+    };
+    expect(parked.context).toBe('streetParkedCar');
+    expect(new Set(VOICE_CONTEXTS.streetParkedCar.map((line) => line.line)).has(parked.subtitle)).toBe(true);
+
+    // These are real schedule calls. Three fit in the queue and the fourth is
+    // rejected by its capacity rule. None may retag the parked line while it
+    // is speaking, even though each draws from a source-specific clip bag.
+    expect(director.requestStreet(
+      doorwayDestination, 'doorway', 'DINTR-UN MAGAZIN',
+    )).toBe(true);
+    expect(director.requestStreet(
+      kioskDestination, 'kiosk', 'RADIO DE CHIOȘC',
+    )).toBe(true);
+    expect(director.requestStreet(
+      thirdDestination, 'parkedCar', 'ALTĂ DACIE PARCATĂ',
+    )).toBe(true);
+    expect(director.requestStreet(
+      rejectedDestination, 'doorway', 'MAGAZIN RESPINS',
+    )).toBe(false);
+    expect(director.stats().queued).toBe(3);
+    expect(director.lastKey).toBe(parked.key);
+    expect(director.lastContext).toBe(parked.context);
+    expect(director.nowPlaying).toBe(parked.subtitle);
+    expect(director.route).toBe(parked.route);
+    expect(subtitles).toHaveLength(1);
+
+    // End the real fake source, then let the director drain the still-fresh
+    // doorway request. Before update(), the parked line remains the last line
+    // and there is no subtitle; only the second source start may retag it.
+    const parkedSource = context.sources[0];
+    expect(parkedSource).toBeDefined();
+    expect(parkedSource.connectedTo).toBe(parkedDestination);
+    expect(parkedSource.startedAt).toBe(0);
+    context.advance(0.1);
+    parkedSource.end();
+    expect(director.nowPlaying).toBe('');
+    expect(director.lastKey).toBe(parked.key);
+    expect(director.lastContext).toBe(parked.context);
+
+    director.update(0.1);
+    expect(director.speaking).toBe(true);
+    expect(director.route).toBe('street');
+    expect(director.lastContext).toBe('streetDoorway');
+    const matchingDoorwayLines = buildPools().reaction.streetDoorway
+      .filter((line) => line.text === director.nowPlaying);
+    expect(matchingDoorwayLines).toHaveLength(1);
+    expect(director.lastKey).toBe(matchingDoorwayLines[0].key);
+    const doorwaySource = context.sources[1];
+    expect(doorwaySource.connectedTo).toBe(doorwayDestination);
+    expect(doorwaySource.startedAt).toBe(0.1);
+    expect(subtitles).toHaveLength(2);
+    expect(subtitles[1].speaker).toBe('DINTR-UN MAGAZIN');
+    expect(subtitles[1].text).toBe(director.nowPlaying);
+  });
+});
+
 describe('mix defaults', () => {
   test('every bus starts audible and below unity headroom', () => {
     for (const [k, v] of Object.entries(DEFAULT_MIX)) {
@@ -732,6 +927,61 @@ describe('mix defaults', () => {
       expect(v as number).toBeGreaterThan(0.5);
       expect(v as number).toBeLessThanOrEqual(1);
     }
+  });
+});
+
+describe('engine voice lifecycle', () => {
+  test('typed release transaction restores the bus and frees the tracked slot', () => {
+    interface TestSlot { active: boolean }
+    interface TestDestination { name: string }
+
+    const calls: string[] = [];
+    const destination: TestDestination = { name: 'vehicles-bus' };
+    const slot: TestSlot = { active: true };
+    const tracked = new Set<TestSlot>([slot]);
+    const voice: ReleasableEngineVoice<TestSlot, TestDestination> = {
+      slot,
+      silence: () => calls.push('silence'),
+      voiceGain: {
+        disconnect: () => calls.push('disconnect'),
+        connect: (node) => calls.push(`connect:${node.name}`),
+      },
+    };
+
+    expect(voice.slot?.active).toBe(true);
+    expect(tracked.has(slot)).toBe(true);
+    releaseEngineVoiceResources(voice, {
+      destination,
+      untrack: (releasedSlot) => {
+        calls.push('untrack');
+        tracked.delete(releasedSlot);
+      },
+      release: (releasedSlot) => {
+        calls.push('release');
+        releasedSlot.active = false;
+      },
+    });
+
+    expect(calls).toEqual([
+      'silence', 'disconnect', 'connect:vehicles-bus', 'untrack', 'release',
+    ]);
+    expect(voice.slot).toBeNull();
+    expect(slot.active).toBe(false);
+    expect(tracked.has(slot)).toBe(false);
+  });
+
+  test('real bind/unbind path is safe before WebAudio unlock', () => {
+    const system = new AudioSystem();
+    const id = 'veh-before-unlock';
+    system.bindEngine(id, new THREE.Object3D());
+    expect(system.engineBindingState(id)).toEqual({
+      bound: true, tracked: false, voiced: false, hasSlot: false,
+    });
+
+    expect(() => system.unbindEngine(id)).not.toThrow();
+    expect(system.engineBindingState(id)).toEqual({
+      bound: false, tracked: false, voiced: false, hasSlot: false,
+    });
   });
 });
 

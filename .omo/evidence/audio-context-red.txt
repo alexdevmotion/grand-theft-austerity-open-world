@@ -1,0 +1,18 @@
+bun test v1.3.11 (af24e281)
+
+src/audio/audio.test.ts:
+
+# Unhandled error between tests
+-------------------------------
+1 | })
+2 | {
+    ^
+SyntaxError: Export named 'streetContextForSpeaker' not found in module '/Users/alex.constantin/pers/grand-theft-austerity-open-world/src/audio/voiceDirector.ts'.
+      at loadAndEvaluateModule (2:1)
+-------------------------------
+
+
+ 0 pass
+ 1 fail
+ 1 error
+Ran 1 test across 1 file. [17.00ms]

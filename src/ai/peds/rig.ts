@@ -665,15 +665,18 @@ export class CrowdRenderer {
     // population inside 42 m. A cap of `min(maxPeds, 44)` here drops the
     // overflow silently, which renders as headless people.
     const headCap = maxPeds;
+    // The same untextured pool carries one crown/hair shell per imposter and
+    // one head per dog. Dog walkers can therefore need two slots each.
+    const blobCap = maxPeds * 2;
 
     this.capsNear = this.pool(capsule, bodyNear, nearCap, castShadows, 'peds-caps-near');
     this.boxNear = this.pool(box, bodyNear, Math.ceil(nearCap * 0.55), castShadows, 'peds-box-near');
     this.headNear = this.pool(head, faceNear, headCap, castShadows, 'peds-head-near');
-    this.blobNear = this.pool(blob, bodyNear, headCap, castShadows, 'peds-blob-near');
+    this.blobNear = this.pool(blob, bodyNear, blobCap, castShadows, 'peds-blob-near');
     this.capsFar = this.pool(capsule, bodyFar, farCap, false, 'peds-caps-far');
     this.boxFar = this.pool(box, bodyFar, Math.ceil(farCap * 0.4), false, 'peds-box-far');
     this.headFar = this.pool(head, faceFar, headCap, false, 'peds-head-far');
-    this.blobFar = this.pool(blob, bodyFar, headCap, false, 'peds-blob-far');
+    this.blobFar = this.pool(blob, bodyFar, blobCap, false, 'peds-blob-far');
     this.glow = this.pool(glowGeo, glowMat, maxPeds * 2, false, 'peds-glow');
   }
 
@@ -790,9 +793,15 @@ export class CrowdRenderer {
     this.push(this.near ? this.headNear : this.headFar, color);
   }
 
-  /** A head-shaped lump with no face on it: hard hats, beanies, hair shells. */
-  private blob(centre: THREE.Vector3, q: THREE.Quaternion, d: number, color: THREE.Color): void {
-    _scale.set(d, d * 1.16, d * 0.98);
+  /** An untextured rounded part: crown shells use a flatter y ratio than heads. */
+  private blob(
+    centre: THREE.Vector3,
+    q: THREE.Quaternion,
+    d: number,
+    color: THREE.Color,
+    yRatio = 1.16,
+  ): void {
+    _scale.set(d, d * yRatio, d * 0.98);
     _m.compose(centre, q, _scale);
     this.push(this.near ? this.blobNear : this.blobFar, color);
   }
@@ -920,26 +929,32 @@ export class CrowdRenderer {
     // Hair / headwear sits as a shell on the crown.
     if (app.headwear > 0 && lod < 2) {
       _mid.copy(_b);
-      _mid.y += d.headR * 0.42;
       if (app.headwear === 1) {
+        _mid.y += d.headR * 0.42;
         this.cube(_mid, _q, d.headR * 2.0, d.headR * 0.72, d.headR * 2.05, app.hatColor);
         // Peak.
         _dir.set(0, -d.headR * 0.22, d.headR * 1.35).applyQuaternion(_q).add(_mid);
         this.cube(_dir, _q, d.headR * 1.75, d.headR * 0.16, d.headR * 0.95, app.hatColor);
       } else if (app.headwear === 2) {
-        this.blob(_mid, _q, d.headR * 2.26, app.hatColor);
+        // A hard hat is a crown shell, not a second full skull. The old solid
+        // ovoid extended below the eyes and hid the mapped face underneath.
+        _mid.y += d.headR * 0.82;
+        this.blob(_mid, _q, d.headR * 2.26, app.hatColor, 0.40);
       } else if (app.headwear === 3) {
-        this.blob(_mid, _q, d.headR * 2.12, app.hatColor);
+        _mid.y += d.headR * 0.78;
+        this.blob(_mid, _q, d.headR * 2.12, app.hatColor, 0.52);
       } else {
-        // Long hair: a shell plus a fall down the back of the neck.
-        this.blob(_mid, _q, d.headR * 2.2, app.hair);
+        // Long hair: a crown cap plus a fall down the back of the neck. A full
+        // front shell made the face look disconnected from the body.
+        _mid.y += d.headR * 0.72;
+        this.blob(_mid, _q, d.headR * 2.2, app.hair, 0.56);
         _dir.set(0, -d.headR * 1.25, -d.headR * 0.72).applyQuaternion(_q).add(_mid);
         this.cube(_dir, _q, d.headR * 1.7, d.headR * 1.9, d.headR * 0.7, app.hair);
       }
     } else if (lod < 2) {
       _mid.copy(_b);
-      _mid.y += d.headR * 0.5;
-      this.blob(_mid, _q, d.headR * 1.94, app.hair);
+      _mid.y += d.headR * 0.72;
+      this.blob(_mid, _q, d.headR * 1.94, app.hair, 0.52);
     }
 
     /* ---- feet ---- */
@@ -1058,7 +1073,9 @@ export class CrowdRenderer {
 
     // Head + muzzle.
     _mid.set(x + fx * (bodyLen * 0.62), backY + 0.09 * size, z + fz * (bodyLen * 0.62));
-    this.sphere(_mid, _q, 0.19 * size, colour);
+    // `sphere` is the human face-mapped pool. A dog belongs in the untextured
+    // head-shaped pool or the shared crowd face is projected over its fur.
+    this.blob(_mid, _q, 0.19 * size, colour);
     _dir.set(0, -0.02 * size, 0.11 * size).applyQuaternion(_q).add(_mid);
     this.cube(_dir, _q, 0.08 * size, 0.07 * size, 0.12 * size, colour);
 

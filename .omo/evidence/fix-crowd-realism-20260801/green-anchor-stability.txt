@@ -1,0 +1,13 @@
+bun test v1.3.11 (af24e281)
+
+src/ai/peds/crowd.test.ts:
+(pass) crowd grid deterministically separates pedestrians spawned at the exact same point [0.87ms]
+(pass) depenetrating an anchored cluster moves its anchors with its bodies [0.13ms]
+(pass) an anchored pedestrian cannot remain coincident with the on-foot player [0.82ms]
+(pass) pedestrians moving toward the same point preserve a hard body separation [0.16ms]
+(pass) a passing pedestrian depenetrates without permanently dragging a loiter anchor [0.04ms]
+
+ 5 pass
+ 0 fail
+ 26 expect() calls
+Ran 5 tests across 1 file. [26.00ms]

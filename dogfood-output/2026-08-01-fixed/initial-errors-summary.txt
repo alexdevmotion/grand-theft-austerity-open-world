@@ -1,0 +1,1 @@
+Agent-browser `errors` output was empty for the fresh-start check (zero page errors).

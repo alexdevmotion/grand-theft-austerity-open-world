@@ -238,4 +238,6 @@ export const React = {
   downSeconds: 22,
   /** Player attention radius. */
   noticeRadius: 13.0,
+  /** Root-to-root floor: player body + pedestrian shoulders. */
+  playerSeparation: 0.9,
 } as const;

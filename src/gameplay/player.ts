@@ -37,6 +37,59 @@ const CROUCH = 1.35;
 const BACKPEDAL = 2.6;
 const JUMP_SPEED = 5.1;
 const GRAVITY = -21;
+const MELEE_COOLDOWN = 0.5;
+const MELEE_IMPACT_DELAY = 0.15;
+const MELEE_DAMAGE = 34;
+
+/**
+ * Edge-triggered melee rate limiter. Kept independent from input polling so a
+ * mouse, keyboard or future touch binding all get exactly the same cadence.
+ */
+export class MeleeCadence {
+  private cooldown = 0;
+  private impact = 0;
+  private impactPending = false;
+  readonly interval: number;
+  readonly impactDelay: number;
+
+  constructor(interval = MELEE_COOLDOWN, impactDelay = MELEE_IMPACT_DELAY) {
+    this.interval = Number.isFinite(interval) ? Math.max(0.05, interval) : MELEE_COOLDOWN;
+    this.impactDelay = Number.isFinite(impactDelay)
+      ? THREE.MathUtils.clamp(impactDelay, 0, this.interval)
+      : MELEE_IMPACT_DELAY;
+  }
+
+  get remaining(): number {
+    return this.cooldown;
+  }
+
+  get impactRemaining(): number | null {
+    return this.impactPending ? this.impact : null;
+  }
+
+  /** Advance the swing. Returns true exactly once, at the fist's contact beat. */
+  update(dt: number): boolean {
+    if (!Number.isFinite(dt) || dt <= 0) return false;
+    if (this.cooldown > 0) {
+      const next = this.cooldown - dt;
+      this.cooldown = next <= 1e-6 ? 0 : next;
+    }
+    if (!this.impactPending) return false;
+    this.impact -= dt;
+    if (this.impact > 1e-6) return false;
+    this.impact = 0;
+    this.impactPending = false;
+    return true;
+  }
+
+  tryStart(): boolean {
+    if (this.cooldown > 0) return false;
+    this.cooldown = this.interval;
+    this.impact = this.impactDelay;
+    this.impactPending = true;
+    return true;
+  }
+}
 
 /** Camera/body yaw error that starts a turn on the spot, and that ends it. */
 const TURN_IN_PLACE_START = 0.95;
@@ -319,6 +372,11 @@ export class PlayerSystem implements System, PlayerService {
   private crouching = false;
   private deathTimer = 0;
   private lookTarget: THREE.Vector3 | null = null;
+  private readonly meleeCadence = new MeleeCadence();
+  private readonly meleeForward = new THREE.Vector3();
+  private meleeSwings = 0;
+  private meleeHits = 0;
+  private lastMeleeHit: { targetId: string; fatal: boolean; at: number } | null = null;
 
   /* ---- directional locomotion ---- */
   /** Travel in body space, -1..1. +F forward, +S toward the character's LEFT. */
@@ -461,6 +519,13 @@ export class PlayerSystem implements System, PlayerService {
         spent: Math.round(this._spent),
         health: this.character.health,
       }),
+      combat: () => ({
+        swings: this.meleeSwings,
+        hits: this.meleeHits,
+        cooldown: this.meleeCadence.remaining,
+        impactIn: this.meleeCadence.impactRemaining,
+        lastHit: this.lastMeleeHit ? { ...this.lastMeleeHit } : null,
+      }),
       spend: (n: number) => this.spend(n, 'debug'),
       hurt: (n: number) => this.applyDamage(n),
       heal: (n: number) => this.heal(n, 'debug'),
@@ -501,6 +566,7 @@ export class PlayerSystem implements System, PlayerService {
 
   fixedUpdate(dt: number, ctx: GameContext): void {
     this.enterCooldown = Math.max(0, this.enterCooldown - dt);
+    const meleeImpact = this.meleeCadence.update(dt);
 
     if (this.deathTimer > 0) {
       this.deathTimer -= dt;
@@ -513,6 +579,9 @@ export class PlayerSystem implements System, PlayerService {
       return;
     }
     this.walkUpdate(dt, ctx);
+    // Resolve after locomotion so the contact cone starts at the fist's current
+    // body heading/position, not the previous physics tick's transform.
+    if (meleeImpact && !this._vehicle && !this.board) this.performMeleeImpact(ctx);
   }
 
   private _move = new THREE.Vector3();
@@ -671,7 +740,10 @@ export class PlayerSystem implements System, PlayerService {
     } else {
       state = 'walk';
     }
-    if (this.character.state !== 'punch' || state !== 'idle') this.character.state = state;
+    // The animation controller itself keeps one-shots alive while accepting the
+    // next requested locomotion state. Publishing `punch` forever while idle
+    // prevented a later punch from restarting after its first clip completed.
+    this.character.state = state;
 
     if (landing) {
       this.ctx.tryGet(Services.Camera)?.shake(Math.min(0.5, -impactSpeed * 0.03), 0.18);
@@ -679,7 +751,9 @@ export class PlayerSystem implements System, PlayerService {
 
     if (ny < -30) this.respawn();
 
-    if (!boarding && ctx.input.actionPressed('punch')) this.character.playState('punch');
+    if (!boarding && ctx.input.actionPressed('punch') && this.meleeCadence.tryStart()) {
+      this.startMeleeSwing(ctx);
+    }
 
     // Enter a nearby vehicle — unless the interaction system has a marker
     // focused, in which case E belongs to that. Standing at the community
@@ -692,6 +766,26 @@ export class PlayerSystem implements System, PlayerService {
       const near = vehicles?.nearestEnterable(this.character.position, 3.6);
       if (near) this.enterVehicle(near);
     }
+  }
+
+  private startMeleeSwing(ctx: GameContext): void {
+    this.character.playState('punch');
+    this.meleeSwings++;
+    ctx.tryGet(Services.Audio)?.oneShot('punch', this.character.position, 0.34);
+  }
+
+  private performMeleeImpact(ctx: GameContext): void {
+    this.meleeForward.set(Math.sin(this.bodyYaw), 0, Math.cos(this.bodyYaw));
+    const hit = ctx.tryGet(Services.Peds)?.meleeStrike(
+      this.character.position,
+      this.meleeForward,
+      MELEE_DAMAGE,
+    );
+    if (!hit) return;
+
+    this.meleeHits++;
+    this.lastMeleeHit = { targetId: hit.targetId, fatal: hit.fatal, at: ctx.time.elapsed };
+    ctx.tryGet(Services.Camera)?.shake(hit.fatal ? 0.3 : 0.2, 0.14);
   }
 
   /**

@@ -105,6 +105,11 @@ export interface Footprint {
 
 export interface CityService {
   readonly roadNodes: ReadonlyArray<RoadNode>;
+  /**
+   * Centre lines of permanent way that the city actually rendered. Traffic
+   * may map trams to these corridors; road rank alone is never rail metadata.
+   */
+  readonly tramLines: ReadonlyArray<ReadonlyArray<Vector3>>;
   readonly landmarks: ReadonlyMap<string, Landmark>;
   districtAt(x: number, z: number): DistrictKind;
   /** Uniformly random point on a road, for spawning. */
@@ -199,6 +204,17 @@ export interface CharacterHandle extends Damageable {
   ragdoll(impulse?: Vector3): void;
 }
 
+/** Observable result of one short-range player strike against the crowd. */
+export interface PedMeleeHit {
+  readonly targetId: string;
+  /** Stable snapshot; callers may retain it for feedback and crime reporting. */
+  readonly position: Vector3;
+  readonly faction: Faction;
+  /** Health actually removed, capped by what the target had left. */
+  readonly damage: number;
+  readonly fatal: boolean;
+}
+
 export interface PedService {
   spawn(archetype: PedArchetype, position: Vector3, headingRad: number): CharacterHandle;
   despawn(id: string): void;
@@ -208,6 +224,8 @@ export interface PedService {
   density: number;
   /** Peds flee from a point (gunshot, crash, siren). */
   scatter(centre: Vector3, radius: number): void;
+  /** Damage at most one living pedestrian in a short, body-facing melee arc. */
+  meleeStrike(origin: Vector3, forward: Vector3, damage: number): PedMeleeHit | null;
 }
 
 /* ------------------------------------------------------------------ */

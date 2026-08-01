@@ -1,0 +1,1 @@
+{"scenario":"120 sequential anchored attachments in duplicate pairs","live":120,"minPairDistance":0.7399999999999977,"totalMs":15.268125000000001}

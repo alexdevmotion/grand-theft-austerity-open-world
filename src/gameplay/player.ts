@@ -15,6 +15,7 @@
 import * as THREE from 'three';
 import type RAPIER from '@dimforge/rapier3d-compat';
 import type { GameContext, System } from '../core/engine';
+import { DOORWAY, PLACES, TOWER_SOUTH_Z, type Place } from '../content/places';
 import { CG, CHARACTER_SKIN, GROUP, PhysicsWorld, probeGroups } from '../physics/physics';
 import { CharacterFactory, HERO_APPEARANCE, type CharacterActor } from '../characters';
 import {
@@ -91,10 +92,6 @@ export class MeleeCadence {
   }
 }
 
-/** Camera/body yaw error that starts a turn on the spot, and that ends it. */
-const TURN_IN_PLACE_START = 0.95;
-const TURN_IN_PLACE_STOP = 0.10;
-
 /* ---- how travel direction is split between the body and the blend ----
  *
  * Two things have to be true at once and they pull in opposite directions:
@@ -135,6 +132,41 @@ export function travelBodyYaw(camYaw: number, travelYaw: number, aiming = false)
   if (aiming) return camYaw;
   const w = 1 - THREE.MathUtils.smoothstep(Math.abs(rel), TRAVEL_TURN_FULL, TRAVEL_TURN_NONE);
   return camYaw + rel * w;
+}
+
+/**
+ * Body heading target for one locomotion step.
+ *
+ * Free-look is deliberately not a locomotion command: while the player is
+ * standing still the camera may orbit all the way around them without moving
+ * the body. Once movement starts, travel owns the heading and the existing
+ * directional blend decides how much of that heading belongs to the body.
+ */
+export function bodyYawTarget(
+  currentYaw: number,
+  camYaw: number,
+  travelYaw: number,
+  moving: boolean,
+  aiming = false,
+): number {
+  return moving ? travelBodyYaw(camYaw, travelYaw, aiming) : currentYaw;
+}
+
+/** Spawn transform for the opening shot, authored from the story place. */
+export function playerSpawnFromPlace(place: Place = PLACES.buildersForecourt): {
+  x: number;
+  z: number;
+  yaw: number;
+} {
+  // Stay in the authored forecourt, well south-west of the giver crowd. This
+  // is the menu/reference composition: the tower looms to the right while the
+  // boulevard remains open on the left. The target is the public south door,
+  // so the opening camera starts looking at the sealed entrance rather than a
+  // blank side wall.
+  const x = place.x - 13;
+  const z = place.z - 9;
+  const yaw = Math.atan2(DOORWAY.x - x, TOWER_SOUTH_Z - z);
+  return { x, z, yaw };
 }
 
 /**
@@ -355,6 +387,7 @@ export class PlayerSystem implements System, PlayerService {
   private _vehicle: VehicleHandle | null = null;
   private _lei = 3400;
   private spawnPoint = new THREE.Vector3(0, 2, 0);
+  private spawnHeading = 0;
   private enterCooldown = 0;
   /**
    * Vehicle the player was driving when it wrecked, so the consequence fires
@@ -384,7 +417,6 @@ export class PlayerSystem implements System, PlayerService {
   private moveS = 0;
   /** World heading of travel this step; equals the camera yaw when standing. */
   private travelYaw = 0;
-  private turnInPlace = false;
   /**
    * BODY HEADING, radians. Stored here and nowhere else.
    *
@@ -434,6 +466,10 @@ export class PlayerSystem implements System, PlayerService {
   get isOnFoot(): boolean {
     return this._vehicle === null;
   }
+  /** Heading the on-foot camera should ease behind while the player moves. */
+  get cameraFollowYaw(): number {
+    return this.bodyYaw;
+  }
   get health(): number {
     return this.character.health;
   }
@@ -458,10 +494,12 @@ export class PlayerSystem implements System, PlayerService {
 
     const city = ctx.tryGet(Services.City) ?? null;
     this.city = city;
-    if (city) {
-      const bh = city.landmarks.get('buildersHouse');
-      if (bh) this.spawnPoint.set(bh.position.x + 8, 2, bh.position.z + 12);
-    }
+    const start = playerSpawnFromPlace();
+    this.spawnPoint.set(start.x, 2, start.z);
+    this.spawnHeading = start.yaw;
+    this.bodyYaw = this.spawnHeading;
+    this.prevYaw = this.spawnHeading;
+    this.desiredYaw = this.spawnHeading;
 
     this.buildHero(ctx);
     ctx.scene.add(this.character.object);
@@ -476,6 +514,7 @@ export class PlayerSystem implements System, PlayerService {
     this.controller = this.phys.createCharacterController();
 
     this.character.position.copy(this.spawnPoint);
+    this.character.object.quaternion.setFromAxisAngle(UP, this.spawnHeading);
     this.footY = this.spawnPoint.y;
 
     // Footing/locomotion diagnostics for the screenshot harness. Read-only.
@@ -631,17 +670,8 @@ export class PlayerSystem implements System, PlayerService {
      * runs off at 45 degrees; abeam and behind it stays square to the camera
      * and A/S/D feed the strafe/back axes of the gait instead of the yaw. */
     const bodyYaw = this.bodyYaw;
-    if (moving) {
-      this.turnInPlace = false;
-      this.bodyYaw = dampAngle(bodyYaw, travelBodyYaw(yaw, travelYaw, this._aiming), 13, dt);
-    } else {
-      // Idle: the body hangs where it is until the camera has swung far enough
-      // to be worth a step, then turns on the spot and settles.
-      const off = Math.abs(angleDelta(yaw, bodyYaw));
-      if (off > TURN_IN_PLACE_START) this.turnInPlace = true;
-      else if (off < TURN_IN_PLACE_STOP) this.turnInPlace = false;
-      if (this.turnInPlace) this.bodyYaw = dampAngle(bodyYaw, yaw, 6.5, dt);
-    }
+    const targetBodyYaw = bodyYawTarget(bodyYaw, yaw, travelYaw, moving, this._aiming);
+    if (moving) this.bodyYaw = dampAngle(bodyYaw, targetBodyYaw, 13, dt);
     const yawNow = this.bodyYaw;
 
     /* -------- movement in BODY space, which is what the blend wants -------- */
@@ -1097,7 +1127,6 @@ export class PlayerSystem implements System, PlayerService {
     this.footY = p.y;
     this.moveF = 0;
     this.moveS = 0;
-    this.turnInPlace = false;
     this.board = null;
   }
 
@@ -1107,7 +1136,7 @@ export class PlayerSystem implements System, PlayerService {
     this.deathTimer = 0;
     this.actor?.revive();
     this.character.state = 'idle';
-    this.teleport(this.spawnPoint);
+    this.teleport(this.spawnPoint, this.spawnHeading);
     this.ctx.events.emit('player:respawned', { position: this.spawnPoint.clone() });
   }
 

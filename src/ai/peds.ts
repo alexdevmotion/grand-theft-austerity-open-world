@@ -45,7 +45,7 @@ import {
   type CharacterActor,
 } from '../characters';
 import { EdgeKind, PavementGraph } from './peds/navigation';
-import { CIG_GLOW, CrowdRenderer, PHONE_GLOW } from './peds/rig';
+import { CIG_GLOW, crowdFaceVariant, CrowdRenderer, PHONE_GLOW } from './peds/rig';
 import { CrowdGrid, Ped, VehicleGrid, type CrowdEnv } from './peds/crowd';
 import { pickCluster, pickIdle } from './peds/behaviours';
 import { driveActor } from './peds/actors';
@@ -1096,6 +1096,10 @@ function copyWardrobe(a: Appearance, p: Ped): void {
   p.app.shortSleeve = a.shortSleeve;
   p.app.build = a.body === 'heavy' ? 1.16 : a.body === 'stocky' ? 1.08 : a.body === 'slim' ? 0.9 : 1.0;
   p.app.headwear = a.headwear !== 'none' ? 1 : a.hair === 'long' || a.hair === 'bun' ? 4 : 0;
+  // Keep the imposter in the same broad face family as the actor it promotes
+  // into. The exact fitted head still arrives with the skinned tier; sex and a
+  // stable identity no longer change at the LOD boundary.
+  p.app.faceVariant = (a.female ? 4 : 0) + (crowdFaceVariant(a.texSeed) % 4);
   lin(a.headwear !== 'none' ? a.colors.accent : a.colors.hair, p.app.hatColor);
   /* The imposter's tabard used to be keyed off `accessory === 'builderHarness'`,
    * an id that no longer exists — the player's purple harness became a site

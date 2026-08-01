@@ -466,8 +466,14 @@ export interface DoorwayReport {
 }
 
 export interface BuildersHouseService {
+  /** Re-establish the Ministry closure when restoring an earlier save. */
+  seal(): void;
+  /** Remove the Ministry's temporary closure dressing after Act IV's breach. */
+  unseal(): void;
   /** Lights up, tricolour on — Act IV's payoff. */
   liberate(): void;
+  /** The entrance still carries the visible Ministry seal/barricade. */
+  readonly sealed: boolean;
   readonly liberated: boolean;
   readonly doorway: DoorwayReport;
 }
@@ -484,6 +490,8 @@ export interface BuildersHouseService {
 export interface InteriorsService {
   /** Act IV: lights, tricolour, the room the afterparty happens in. */
   liberate(): void;
+  /** Restore the pre-finale Builders House interior for an earlier save. */
+  seal(): void;
   /** Act III: every screen in the studio flips to the builders' broadcast. */
   hijack(): void;
   /** True when (x, z) is inside a named interior's clear volume. */

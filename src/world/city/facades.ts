@@ -25,12 +25,14 @@ import {
   lFootprint,
   rectFootprint,
   roundedFrontFootprint,
+  signedArea,
   type DetailOpts,
   type FacadeParams,
   type Vec2,
 } from './builders';
 import type { DistrictSpec } from './districts';
 import { FacadeStyle } from './materials';
+import { isSimpleRing } from './osm';
 
 /* ------------------------------------------------------------------ */
 /* Palette for the detail pass                                         */
@@ -234,6 +236,9 @@ export function buildBuilding(
     footprint?: ReadonlyArray<Vec2>;
     /** Storeys from the survey. Overrides the district's height populations. */
     levels?: number;
+    /** OSM identity drives the handful of roof silhouettes a façade style cannot express. */
+    osmKind?: string;
+    osmName?: string | null;
   } = {},
 ): BuiltBuilding {
   const tier = detailTier(site.heroDist);
@@ -295,6 +300,8 @@ export function buildBuilding(
   }
 
   const seed = rng.range(0, 97);
+  const identity = `${opts.osmName ?? ''} ${opts.osmKind ?? ''}`
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   const p: FacadeParams = {
     style,
     floorH,
@@ -361,17 +368,19 @@ export function buildBuilding(
       const t2 = shrink(t1, rng.range(2.0, 4.0));
       f.extrude(t2, midTop, h, midTop, p);
       corniceAndParapet(d, site, t2, h, style, tier, rng, false);
-      roofscape(d, t2, h, tier, rng, spec, site);
+      roofscape(d, t2, h, tier, rng, spec, site, style, identity);
     } else {
       f.extrude(t1, topOfBase, h, topOfBase, p);
       corniceAndParapet(d, site, t1, h, style, tier, rng, false);
-      roofscape(d, t1, h, tier, rng, spec, site);
+      roofscape(d, t1, h, tier, rng, spec, site, style, identity);
     }
   } else {
     f.extrude(base, 0, h, 0, p);
     corniceAndParapet(d, site, base, h, style, tier, rng, true);
-    roofscape(d, base, h, tier, rng, spec, site);
+    roofscape(d, base, h, tier, rng, spec, site, style, identity);
   }
+
+  landmarkRoofline(d, base, h, site, identity);
 
   /* ---------------- storey relief ---------------- */
 
@@ -502,6 +511,40 @@ function shrink(fp: ReadonlyArray<Vec2>, inset: number): Vec2[] {
   return fp.map((v) => ({ x: b.cx + (v.x - b.cx) * sx, z: b.cz + (v.z - b.cz) * sz }));
 }
 
+/**
+ * Validate both sides of a projecting band before asking `ringPoly` to emit it.
+ *
+ * OSM's ornate outlines contain re-entrant corners for apses, light wells and
+ * party-wall notches. A bisector offset is intentionally cheap, but around a
+ * sharp notch it can cross itself. Extruding that crossed ring produced the
+ * long flashing spikes reported on a handful of buildings. Architectural
+ * relief is optional; invalid triangles are not, so an unsafe band is omitted
+ * while the surveyed wall and roof remain intact.
+ */
+export function safeDetailRing(
+  footprint: ReadonlyArray<Vec2>, offset: number, thickness: number,
+): Vec2[] | null {
+  if (footprint.length < 3 || Math.abs(signedArea(footprint)) < 0.5) return null;
+  const direction = Math.sign(signedArea(footprint));
+  const valid = (ring: ReadonlyArray<Vec2>): boolean => {
+    if (ring.length < 3 || !ring.every((p) => Number.isFinite(p.x) && Number.isFinite(p.z))) return false;
+    const area = signedArea(ring);
+    if (Math.sign(area) !== direction || Math.abs(area) < 0.5 || !isSimpleRing(ring)) return false;
+    for (let i = 0; i < ring.length; i++) {
+      const a = ring[i];
+      const b = ring[(i + 1) % ring.length];
+      if (Math.hypot(a.x - b.x, a.z - b.z) < 0.075) return false;
+    }
+    return true;
+  };
+  const outer = offset === 0
+    ? footprint.map((p) => ({ x: p.x, z: p.z }))
+    : insetPolygon(footprint, offset);
+  if (!valid(outer)) return null;
+  const inner = insetPolygon(outer, thickness);
+  return valid(inner) ? outer : null;
+}
+
 /* ------------------------------------------------------------------ */
 /* Storey relief — the thing that turns a box into a facade              */
 /* ------------------------------------------------------------------ */
@@ -556,19 +599,22 @@ function storeyRelief(
     : style === FacadeStyle.guvern || style === FacadeStyle.interbelic
       ? DetailColor.stone : DetailColor.concrete;
   const bandMR = glass ? MR.metal : MR.stone;
-  const outer = insetPolygon(fp, -proj);
-  for (let i = 1; i <= n; i++) {
-    const y = groundH + i * floorH;
-    // Sits just BELOW the floor line, which is where a sill goes: the window
-    // above it is what the shader is drawing, and this is its cill.
-    d.ringPoly(outer, y - floorH * 0.30, proj + 0.20, bandH, { color: col, mr: bandMR });
-    // Every third storey carries a deeper band — a real elevation is not an
-    // even comb, it has a base, a middle and an attic.
-    if (!glass && i % 3 === 0) {
-      d.ringPoly(
-        insetPolygon(fp, -(proj + 0.14)), y - 0.05, proj + 0.34, 0.13,
-        { color: DetailColor.stoneDark, mr: MR.stone },
-      );
+  const outer = safeDetailRing(fp, -proj, proj + 0.20);
+  const deep = !glass ? safeDetailRing(fp, -(proj + 0.14), proj + 0.34) : null;
+  if (outer) {
+    for (let i = 1; i <= n; i++) {
+      const y = groundH + i * floorH;
+      // Sits just BELOW the floor line, which is where a sill goes: the window
+      // above it is what the shader is drawing, and this is its cill.
+      d.ringPoly(outer, y - floorH * 0.30, proj + 0.20, bandH, { color: col, mr: bandMR });
+      // Every third storey carries a deeper band — a real elevation is not an
+      // even comb, it has a base, a middle and an attic.
+      if (deep && i % 3 === 0) {
+        d.ringPoly(
+          deep, y - 0.05, proj + 0.34, 0.13,
+          { color: DetailColor.stoneDark, mr: MR.stone },
+        );
+      }
     }
   }
 
@@ -633,7 +679,8 @@ function corniceAndParapet(
       ? DetailColor.stone
       : DetailColor.concrete;
   const parapetMR = style === FacadeStyle.glassCorporate ? MR.metal : MR.concrete;
-  d.ringPoly(fp, top, 0.34, parapetH, { color: parapetCol, mr: parapetMR });
+  const parapet = safeDetailRing(fp, 0, 0.34);
+  if (parapet) d.ringPoly(parapet, top, 0.34, parapetH, { color: parapetCol, mr: parapetMR });
 
   if (tier === 0) return;
 
@@ -641,24 +688,33 @@ function corniceAndParapet(
   if (style !== FacadeStyle.glassCorporate && style !== FacadeStyle.industrial) {
     const proj = style === FacadeStyle.guvern ? 1.05 : style === FacadeStyle.centruVechi ? 0.8 : 0.55;
     const ch = style === FacadeStyle.guvern ? 1.15 : 0.55;
-    d.ringPoly(
-      insetPolygon(fp, -proj), top - ch, proj + 0.34, ch,
-      { color: style === FacadeStyle.guvern ? DetailColor.stone : DetailColor.stoneDark, mr: MR.stone },
-    );
+    const cornice = safeDetailRing(fp, -proj, proj + 0.34);
+    if (cornice) {
+      d.ringPoly(
+        cornice, top - ch, proj + 0.34, ch,
+        { color: style === FacadeStyle.guvern ? DetailColor.stone : DetailColor.stoneDark, mr: MR.stone },
+      );
+    }
     // Second, thinner band — reads as a moulding profile in raking sun.
     if (tier === 2 && (style === FacadeStyle.centruVechi || style === FacadeStyle.guvern)) {
-      d.ringPoly(
-        insetPolygon(fp, -proj * 0.55), top - ch - 0.42, proj * 0.55 + 0.3, 0.3,
-        { color: DetailColor.stone, mr: MR.stone },
-      );
+      const moulding = safeDetailRing(fp, -proj * 0.55, proj * 0.55 + 0.3);
+      if (moulding) {
+        d.ringPoly(
+          moulding, top - ch - 0.42, proj * 0.55 + 0.3, 0.3,
+          { color: DetailColor.stone, mr: MR.stone },
+        );
+      }
     }
   }
 
   // Coping shadow line on the main mass of glass towers.
   if (isMain && style === FacadeStyle.glassCorporate && tier >= 1) {
-    d.ringPoly(insetPolygon(fp, -0.45), top - 0.5, 0.6, 0.28, {
-      color: DetailColor.metal, mr: MR.metal,
-    });
+    const coping = safeDetailRing(fp, -0.45, 0.6);
+    if (coping) {
+      d.ringPoly(coping, top - 0.5, 0.6, 0.28, {
+        color: DetailColor.metal, mr: MR.metal,
+      });
+    }
   }
   void site;
 }
@@ -803,6 +859,8 @@ function roofscape(
   rng: Rng,
   spec: DistrictSpec,
   site: BuildingSite,
+  style: number,
+  identity: string,
 ): void {
   // Scatter IN THE BUILDING'S OWN FRAME. Against the world axes a skewed roof
   // gets its plant thrown over the parapet and hanging in the street.
@@ -811,7 +869,9 @@ function roofscape(
     cx: (lb.u0 + lb.u1) / 2, cz: (lb.v0 + lb.v1) / 2,
     hx: (lb.u1 - lb.u0) / 2, hz: (lb.v1 - lb.v0) / 2,
   };
-  const heavy = rng.bool(spec.roofPlant);
+  const sacred = /church|cathedral|chapel|biseric|catedral|capel|manastir/.test(identity);
+  const monumental = sacred || /atene|palat|primari|muze|teatr|opera/.test(identity);
+  const heavy = !monumental && rng.bool(spec.roofPlant);
   let ru = 0;
   let rv = 0;
   const pick = (k: number): void => {
@@ -832,10 +892,11 @@ function roofscape(
   }
 
   // Advertising hoarding. Commonest on the boulevards, as in the reference.
-  const adChance = spec.style === FacadeStyle.bulevard ? 0.20
-    : spec.style === FacadeStyle.cartier ? 0.10
-      : spec.style === FacadeStyle.centruVechi ? 0.08
-        : spec.style === FacadeStyle.industrial ? 0.14 : 0.05;
+  const adChance = monumental ? 0
+    : style === FacadeStyle.bulevard ? 0.20
+      : style === FacadeStyle.cartier ? 0.10
+        : style === FacadeStyle.centruVechi ? 0.08
+          : style === FacadeStyle.industrial ? 0.14 : 0.05;
   if (b.hx > 6 && b.hz > 5 && rng.bool(adChance)) {
     rooftopHoarding(d, b, top, rng, tier, site);
   }
@@ -844,18 +905,19 @@ function roofscape(
    * DISHES ON EVERYTHING. Not a cartier special case any more — the reference
    * has them thick on interbelic boulevard blocks and old-town roofs too.
    */
-  const dishes = spec.style === FacadeStyle.glassCorporate ? 0
+  const dishes = monumental || style === FacadeStyle.glassCorporate ? 0
     : tier === 2 ? rng.int(2, 7) : tier === 1 ? rng.int(1, 5) : rng.int(0, 3);
   for (let i = 0; i < dishes; i++) satelliteDish(d, rx(0.86), top, rz(0.86), rng);
 
   // Flue stacks — masonry buildings all have them.
-  if (spec.style !== FacadeStyle.glassCorporate) {
+  if (!sacred && style !== FacadeStyle.glassCorporate) {
     const flues = tier === 0 ? rng.int(0, 2) : rng.int(1, 4);
     for (let i = 0; i < flues; i++) chimneyStack(d, rx(0.8), top, rz(0.8), rng);
   }
 
   // Plant boxes: chillers, AHUs, ducting.
-  const units = tier === 2 ? rng.int(2, 6) : tier === 1 ? rng.int(1, 4) : rng.int(0, 2);
+  const units = monumental ? 0
+    : tier === 2 ? rng.int(2, 6) : tier === 1 ? rng.int(1, 4) : rng.int(0, 2);
   for (let i = 0; i < units; i++) {
     const uh = rng.range(0.9, 2.1);
     d.box(rx(0.72), top + uh / 2, rz(0.72), rng.range(1.6, 3.6), uh, rng.range(1.4, 3.0), site.rot, {
@@ -865,7 +927,7 @@ function roofscape(
   }
 
   // Water tank on legs — a Bucharest rooftop signature.
-  if (tier >= 1 && rng.bool(0.34)) {
+  if (!monumental && tier >= 1 && rng.bool(0.34)) {
     const tx = rx(0.5);
     const tz = rz(0.5);
     d.cyl(tx, top + 1.5, tz, 1.15, 1.15, 2.1, 6, { color: DetailColor.rust, mr: [0.4, 0.72] });
@@ -873,7 +935,8 @@ function roofscape(
   }
 
   // Aerials and masts — thin, dark, and they carve the skyline against the sky.
-  const masts = tier === 2 ? rng.int(1, 4) : tier === 1 ? rng.int(1, 3) : rng.int(0, 2);
+  const masts = monumental ? 0
+    : tier === 2 ? rng.int(1, 4) : tier === 1 ? rng.int(1, 3) : rng.int(0, 2);
   for (let i = 0; i < masts; i++) {
     const mx = rx(0.8);
     const mz = rz(0.8);
@@ -893,6 +956,55 @@ function roofscape(
     }
   }
   void site;
+}
+
+/**
+ * Name/kind-driven silhouettes for Bucharest landmarks kept by the OSM pass.
+ * The footprint already supplies the real plan; this supplies the dome or
+ * spire that distinguishes a church or the Athenaeum from a flat-roofed block.
+ */
+function landmarkRoofline(
+  d: DetailBuilder,
+  fp: ReadonlyArray<Vec2>,
+  top: number,
+  site: BuildingSite,
+  identity: string,
+): void {
+  const sacred = /church|cathedral|chapel|biseric|catedral|capel|manastir/.test(identity);
+  const athenaeum = /ateneul roman|romanian athenaeum/.test(identity);
+  if (!sacred && !athenaeum) return;
+
+  const lb = localBounds(fp, site);
+  const u = (lb.u0 + lb.u1) / 2;
+  const v = (lb.v0 + lb.v1) / 2;
+  const [x, z] = local(site, u, v);
+  const radius = Math.max(0.9, Math.min((lb.u1 - lb.u0) * 0.20, (lb.v1 - lb.v0) * 0.30, 6.5));
+
+  if (athenaeum) {
+    // Pale circular drum, dark ribbed dome and a small lantern: the Athenaeum
+    // remains legible from the boulevard without a one-off mesh asset.
+    d.cyl(x, top, z, radius, radius * 0.96, 1.5, 14,
+      { color: DetailColor.stone, mr: MR.stone });
+    d.cyl(x, top + 1.5, z, radius * 0.98, radius * 0.62, radius * 0.55, 14,
+      { color: DetailColor.metal, mr: [0.45, 0.62] });
+    d.cyl(x, top + 1.5 + radius * 0.55, z, radius * 0.62, 0.18, radius * 0.42, 14,
+      { color: DetailColor.metal, mr: [0.45, 0.62] });
+    d.cyl(x, top + 1.7 + radius * 0.97, z, 0.18, 0.08, 1.0, 8,
+      { color: DetailColor.metalPale, mr: MR.metal });
+    return;
+  }
+
+  // Orthodox and historic urban churches: masonry drum, faceted metal dome,
+  // then a slender finial. The low polygon count reads as ribs, not a blob.
+  d.cyl(x, top, z, radius * 0.78, radius * 0.72, 1.1, 12,
+    { color: DetailColor.stoneDark, mr: MR.stone });
+  d.cyl(x, top + 1.1, z, radius * 0.76, radius * 0.48, radius * 0.62, 12,
+    { color: DetailColor.metal, mr: [0.5, 0.58] });
+  d.cyl(x, top + 1.1 + radius * 0.62, z, radius * 0.48, 0.08, radius * 0.55, 12,
+    { color: DetailColor.metal, mr: [0.5, 0.58] });
+  const spireY = top + 1.1 + radius * 1.17;
+  d.tube(x, spireY, z, x, spireY + Math.max(1.2, radius * 0.55), z, 0.055, 5,
+    { color: DetailColor.metalPale, mr: MR.metal });
 }
 
 /* ------------------------------------------------------------------ */
@@ -1753,12 +1865,15 @@ function leafOpt(c: THREE.Color, trans: number, wind: number): DetailOpts {
   };
 }
 
-/** The five autumn tones, weighted so gold and amber dominate. */
-const LEAF_TONES = [
-  DetailColor.leafGold, DetailColor.leaf, DetailColor.leafPale,
-  DetailColor.leafRust, DetailColor.leafOlive,
-];
-const LEAF_WEIGHTS = [4, 3.4, 2.2, 1.8, 1.4];
+/**
+ * One seasonal family per tree. Picking from all five hues for every lobe made
+ * a crown read as confetti; neighbouring clusters on a real tree turn together.
+ */
+const TREE_PALETTES = [
+  { tones: [DetailColor.leaf, DetailColor.leafGold, DetailColor.leafPale], weights: [6, 3, 0.7] },
+  { tones: [DetailColor.leafRust, DetailColor.leaf, DetailColor.leafGold], weights: [5, 2.2, 0.8] },
+  { tones: [DetailColor.leafOlive, DetailColor.leaf, DetailColor.leafGold], weights: [6, 2.0, 0.5] },
+] as const;
 
 /**
  * Autumn street tree — the CITY's mass foliage. There are several thousand of
@@ -1804,6 +1919,7 @@ export function planeTree(
    * the 7.2-9.4 m lamp heads sit level with the top of an average crown.
    */
   const species = rng.weighted([0, 1, 2], [6, 1.6, 2.4]) as 0 | 1 | 2;
+  const palette = rng.weighted(TREE_PALETTES, [5, 2.2, 1.8]);
   let h: number;
   let trunkH: number;
   let crownR: number;
@@ -1956,7 +2072,7 @@ export function planeTree(
         const tx = sx + Math.cos(a3) * crownR * rng.range(0.18, 0.40) * (species === 1 ? 0.5 : 1);
         const ty = sy + crownH * rng.range(0.06, 0.20);
         const tz = sz + Math.sin(a3) * crownR * rng.range(0.18, 0.40) * (species === 1 ? 0.5 : 1);
-        d.tube(sx, sy, sz, tx, ty, tz, trunkR * 0.3, 3, twigOpt);
+        d.tube(sx, sy, sz, tx, ty, tz, trunkR * 0.20, 3, twigOpt);
         twigTips.push(tx, ty, tz);
       }
     }
@@ -1994,7 +2110,6 @@ export function planeTree(
    */
   const thin = rng.range(0.05, 0.26);
   const bare = rng.bool(0.09);
-  const amberBias = rng.range(0.62, 0.98);
   const crownHalfH = crownH * halfHK;
   const crownMidY = crownY + crownH * (species === 1 ? 0.52 : 0.46);
 
@@ -2072,9 +2187,7 @@ export function planeTree(
     // most of the difference between a canopy and a ball of moss.
     const ly = crownMidY + cyy * crownHalfH * shell - lobeR * 0.22;
 
-    const tone = rng.next() < amberBias
-      ? rng.weighted(LEAF_TONES, LEAF_WEIGHTS)
-      : DetailColor.leafOlive;
+    const tone = rng.weighted(palette.tones, palette.weights);
     /*
      * Lobes on the underside of a canopy are shaded by the whole crown above
      * them; the shader cannot know that, so it is authored off the lobe's
@@ -2125,7 +2238,7 @@ export function planeTree(
         cz + Math.sin(ang) * sr * crownR * shell,
         r, r * 0.72, r,
         leafOpt(
-          rng.weighted(LEAF_TONES, LEAF_WEIGHTS).clone().multiplyScalar(0.48),
+          palette.tones[0].clone().multiplyScalar(0.48),
           0.35, 0.03,
         ),
         0.45, 1 + ((i * 15486 + seedBase * 39769) >>> 0), 1, LEAF_NJITTER * 0.7, 5,
@@ -2180,7 +2293,7 @@ export function planeTree(
         fz = cz + Math.sin(a) * sr * crownR * sh;
         fy = crownMidY + cyy * crownHalfH * sh - fr * 0.3;
       }
-      const tone = rng.weighted(LEAF_TONES, LEAF_WEIGHTS);
+      const tone = rng.weighted(palette.tones, palette.weights);
       d.blob(
         fx, fy, fz, fr, fr * rng.range(0.6, 0.86), fr,
         leafOpt(tone, rng.range(0.9, 1.0), 0.15 + 0.06 * rng.next()),

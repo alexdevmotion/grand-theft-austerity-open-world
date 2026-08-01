@@ -510,10 +510,75 @@ export function buildOsmStreets(opt: OsmStreetOptions): void {
         // imported kerb is twelve thousand static boxes, and the block
         // interiors already carry their own from `fillOsmGround`.
         if (run > 16 && e.rank >= 1) {
-          opt.addWalkCollider(
-            (wx0 + wx1) / 2, (wz0 + wz1) / 2,
-            run / 2, walk / 2, Math.atan2(-uz, ux), KERB_H,
-          );
+          // A pavement ribbon may visually feather into the asphalt patch, but
+          // its raised collider must stop outside the whole junction fan. The
+          // previous full-run box left its square corners across diagonal
+          // approaches, producing an invisible kerb at otherwise open joins.
+          const insetA = Math.max(0, a.patch + walk - ta);
+          const insetB = Math.max(0, b.patch + walk - tb);
+          const colliderRun = run - insetA - insetB;
+          if (colliderRun <= 8) continue;
+          const colliderStart = ta + insetA;
+
+          /*
+           * OSM ways can cross without sharing a graph node (split source ways,
+           * plaza approaches and the occasional simplified junction). A single
+           * block-long pavement collider then becomes a raised bar through the
+           * crossing road even though the asphalt patch is drawn over it. Scan
+           * the pavement strip against the same carriageway mask that authored
+           * the visible roads, split only around those crossings, and merge the
+           * remaining bins back into long boxes. This retains physical kerbs on
+           * the block while leaving every visible road seam open.
+           */
+          const bins = Math.max(1, Math.ceil(colliderRun / 3));
+          const binLength = colliderRun / bins;
+          const safe = new Array<boolean>(bins).fill(true);
+          for (let k = 0; k < bins; k++) {
+            // Sampling both ends of the bin matters at shallow crossings: its
+            // centre can be clear while one square corner cuts into a
+            // neighbouring carriageway.
+            for (const alongFraction of [0.1, 0.5, 0.9]) {
+              const along = colliderStart + (k + alongFraction) * binLength;
+              for (const across of [0.4, 0.65, 0.9]) {
+                const lateral = side * (e.width / 2 + walk * across);
+                const qx = a.x + ux * along + px * lateral;
+                const qz = a.z + uz * along + pz * lateral;
+                if (city.isCarriageway(qx, qz)) {
+                  safe[k] = false;
+                  break;
+                }
+              }
+              if (!safe[k]) break;
+            }
+          }
+          // One bin of breathing room turns a point sample into clearance for
+          // the complete oriented box at a diagonal crossing.
+          const open = safe.slice();
+          for (let k = 0; k < bins; k++) {
+            if (safe[k]) continue;
+            if (k > 0) open[k - 1] = false;
+            if (k + 1 < bins) open[k + 1] = false;
+          }
+          for (let first = 0; first < bins;) {
+            while (first < bins && !open[first]) first++;
+            if (first >= bins) break;
+            let last = first + 1;
+            while (last < bins && open[last]) last++;
+            const span = (last - first) * binLength;
+            if (span >= 6) {
+              const along = colliderStart + (first + last) * 0.5 * binLength;
+              const cwx = a.x + ux * along + px * off;
+              const cwz = a.z + uz * along + pz * off;
+              opt.addWalkCollider(
+                cwx, cwz, span / 2, walk / 2,
+                // CitySystem converts this convention to a Three/Rapier yaw by
+                // negating it. Passing the detail builder's already-negated
+                // angle mirrored every diagonal pavement across world Z.
+                Math.atan2(uz, ux), KERB_H,
+              );
+            }
+            first = last;
+          }
         }
       }
     }
@@ -525,6 +590,9 @@ export function buildOsmStreets(opt: OsmStreetOptions): void {
   for (const line of city.trams) {
     for (let i = 0; i + 1 < line.length; i++) {
       buildTramRun(sink, line[i], line[i + 1]);
+    }
+    for (let i = 1; i + 1 < line.length; i++) {
+      buildTramJoint(sink, line[i - 1], line[i], line[i + 1]);
     }
   }
 
@@ -568,10 +636,54 @@ function buildTramRun(sink: ChunkSink, a: { x: number; z: number }, b: { x: numb
   const rot = Math.atan2(-uz, ux);
   for (const side of [-1, 1]) {
     for (const rgo of [-TRAM_GAUGE / 2, TRAM_GAUGE / 2]) {
-      const off = side * (TRAM_GAUGE / 2 + 1.1) + rgo;
+      // Same track-centre spacing as the generated permanent way. Traffic gets
+      // one citywide rail contract; a hidden 10 cm OSM/grid discrepancy made a
+      // correctly guided tram visibly ride one flange instead of the bogie
+      // centre sitting over the pair.
+      const off = side * (TRAM_GAUGE / 2 + 1.2) + rgo;
       d.box(
         mx + px * off, 0.15, mz + pz * off,
         len, 0.1, 0.085, rot, { color: RAIL, mr: [0.9, 0.16] },
+      );
+    }
+  }
+}
+
+/** Steel chords that make the two offset tracks continuous through a bend. */
+function buildTramJoint(
+  sink: ChunkSink,
+  a: { x: number; z: number },
+  b: { x: number; z: number },
+  c: { x: number; z: number },
+): void {
+  const adx = b.x - a.x;
+  const adz = b.z - a.z;
+  const bdx = c.x - b.x;
+  const bdz = c.z - b.z;
+  const al = Math.hypot(adx, adz);
+  const bl = Math.hypot(bdx, bdz);
+  if (al < 1 || bl < 1) return;
+  const aux = adx / al;
+  const auz = adz / al;
+  const bux = bdx / bl;
+  const buz = bdz / bl;
+  const d = sink.detail(b.x, b.z);
+
+  for (const side of [-1, 1]) {
+    for (const railGaugeOffset of [-TRAM_GAUGE / 2, TRAM_GAUGE / 2]) {
+      const offset = side * (TRAM_GAUGE / 2 + 1.2) + railGaugeOffset;
+      const ax = b.x - auz * offset;
+      const az = b.z + aux * offset;
+      const bx = b.x - buz * offset;
+      const bz = b.z + bux * offset;
+      const dx = bx - ax;
+      const dz = bz - az;
+      const length = Math.hypot(dx, dz);
+      if (length < 0.02) continue;
+      d.box(
+        (ax + bx) / 2, 0.15, (az + bz) / 2,
+        length, 0.1, 0.085, Math.atan2(-dz / length, dx / length),
+        { color: RAIL, mr: [0.9, 0.16] },
       );
     }
   }

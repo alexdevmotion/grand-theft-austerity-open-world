@@ -17,7 +17,13 @@ import type { DetailBuilder, FacadeBuilder } from './builders';
 import { DISTRICTS } from './districts';
 import { FacadeStyle } from './materials';
 import { buildBuilding, type BuildingSite } from './facades';
-import { Cell, type OsmCity } from './osm';
+import {
+  Cell,
+  pointInRing,
+  polygonCentroid,
+  type OsmCity,
+  type OsmFootprint,
+} from './osm';
 
 export interface BlockRect {
   /** Building line — the pavement's inner edge. */
@@ -301,14 +307,19 @@ export function buildOsmFootprints(opt: OsmBuildOptions): void {
       site, spec, opt.rng,
       opt.facade(fp.cx, fp.cz), opt.detail(fp.cx, fp.cz),
       {
-        forceStyle: styleForKind(fp.kind, fp.levels, district, opt.rng),
+        forceStyle: styleForOsmBuilding(fp.kind, fp.name, fp.levels, district, opt.rng),
         footprint: fp.ring,
         levels: fp.levels,
+        osmKind: fp.kind,
+        osmName: fp.name,
       },
     );
-    opt.out.push({
-      x: built.cx, z: built.cz, hx: built.hx, hz: built.hz, height: built.height, rot: site.rot,
+    const collider = fitOsmFootprintCollider(opt.city, fp, {
+      x: built.cx, z: built.cz,
+      hx: built.hx, hz: built.hz,
+      height: built.height, rot: site.rot,
     });
+    if (collider) opt.out.push(collider);
   }
 }
 
@@ -316,25 +327,142 @@ export function buildOsmFootprints(opt: OsmBuildOptions): void {
  * What the survey knows about a building that the district plan does not.
  * A church is not a bulevard block whatever street it stands on.
  */
-function styleForKind(
-  kind: string, levels: number, district: DistrictKind, rng: Rng,
+export function styleForOsmBuilding(
+  kind: string, name: string | null, levels: number, district: DistrictKind, rng: Rng,
 ): number | undefined {
+  const identity = `${name ?? ''} ${kind}`
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+  // Identity beats a generic OSM `building=yes` tag. These named institutions
+  // and interwar hotels are among the silhouettes by which central Bucharest
+  // is recognised; turning them into curtain wall because they happen to be
+  // tall erased more city character than adding another thousand footprints.
+  if (/biseric|catedral|capel|manastir|stavropoleos/.test(identity)) {
+    return FacadeStyle.centruVechi;
+  }
+  if (/atene|palat|primari|muze|teatr|opera|universitat|bibliotec|minister|banca national/.test(identity)) {
+    return FacadeStyle.guvern;
+  }
+  if (/ambasador|aro|patria|continental|capitol|lido|bristol|cismigiu|concordia|carpati|muntenia|venezia/.test(identity)) {
+    return FacadeStyle.interbelic;
+  }
+
   switch (kind) {
     case 'church': case 'cathedral': case 'chapel':
       return FacadeStyle.centruVechi;
     case 'industrial': case 'warehouse': case 'garages': case 'garage':
       return FacadeStyle.industrial;
-    case 'office': case 'commercial': case 'retail': case 'hotel':
-      return levels >= 9 ? FacadeStyle.glassCorporate
-        : rng.bool(0.4) ? FacadeStyle.guvern : FacadeStyle.interbelic;
+    case 'office': case 'commercial': case 'retail': case 'hotel': {
+      const modernIdentity = /afi|globalworth|green gate|business (park|center)|tower|plaza|sky ?tower/.test(identity);
+      if (district === 'glassCorporate' && (levels >= 9 || modernIdentity)) {
+        return FacadeStyle.glassCorporate;
+      }
+      return rng.bool(0.34) ? FacadeStyle.guvern : FacadeStyle.interbelic;
+    }
     case 'public': case 'civic': case 'government': case 'university': case 'hospital':
       return FacadeStyle.guvern;
     case 'apartments': case 'dormitory':
-      return levels >= 8 ? FacadeStyle.cartier
-        : rng.bool(0.55) ? FacadeStyle.interbelic : FacadeStyle.bulevard;
+      if (district === 'cartier') return FacadeStyle.cartier;
+      if (district === 'centruVechi') return FacadeStyle.centruVechi;
+      return rng.bool(0.72) ? FacadeStyle.interbelic : FacadeStyle.bulevard;
     default:
       return pickStyle(district, rng);
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Conservative collision for real, often concave footprints          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Fit a collision rectangle wholly INSIDE the visible OSM footprint.
+ *
+ * The façade follows the surveyed polygon, but gameplay collision is an OBB.
+ * Using the polygon's full minimum-area bounding box for a concave or skewed
+ * block puts solid corners where no wall was drawn. On Magheru and around
+ * Piața Unirii some of those invented corners reached the carriageway, which
+ * is exactly the reported "invisible object in the road". A smaller collider
+ * is preferable to collision outside the thing the player can see.
+ */
+export function fitOsmFootprintCollider(
+  city: OsmCity,
+  fp: Pick<OsmFootprint, 'ring'>,
+  wanted: PlacedBuilding,
+): PlacedBuilding | null {
+  const rot = wanted.rot ?? 0;
+  const cs = Math.cos(rot);
+  const sn = Math.sin(rot);
+  const localOf = (x: number, z: number): [number, number] => {
+    const dx = x - wanted.x;
+    const dz = z - wanted.z;
+    return [dx * cs - dz * sn, dx * sn + dz * cs];
+  };
+  const worldOf = (u: number, v: number): [number, number] => [
+    wanted.x + u * cs + v * sn,
+    wanted.z - u * sn + v * cs,
+  ];
+
+  let u0 = Infinity; let u1 = -Infinity;
+  let v0 = Infinity; let v1 = -Infinity;
+  for (const p of fp.ring) {
+    const [u, v] = localOf(p.x, p.z);
+    u0 = Math.min(u0, u); u1 = Math.max(u1, u);
+    v0 = Math.min(v0, v); v1 = Math.max(v1, v);
+  }
+
+  const candidates: Array<[number, number]> = [[0, 0]];
+  const centre = polygonCentroid(fp.ring);
+  candidates.push(localOf(centre.x, centre.z));
+  const nu = Math.max(2, Math.min(12, Math.ceil((u1 - u0) / 4)));
+  const nv = Math.max(2, Math.min(12, Math.ceil((v1 - v0) / 4)));
+  for (let iu = 1; iu < nu; iu++) {
+    for (let iv = 1; iv < nv; iv++) {
+      candidates.push([
+        u0 + (iu / nu) * (u1 - u0),
+        v0 + (iv / nv) * (v1 - v0),
+      ]);
+    }
+  }
+  candidates.sort((a, b) => a[0] ** 2 + a[1] ** 2 - (b[0] ** 2 + b[1] ** 2));
+
+  const blocked = Cell.road | Cell.reserved | Cell.square;
+  const fits = (cu: number, cv: number, hx: number, hz: number): boolean => {
+    const [cx, cz] = worldOf(cu, cv);
+    if (city.mask.rectHits(cx, cz, hx * 2, hz * 2, rot, blocked)) return false;
+    // One-metre pitch is finer than the two-metre occupancy mask and catches
+    // a re-entrant notch between otherwise valid corners.
+    const nx = Math.max(1, Math.ceil((hx * 2) / 1));
+    const nz = Math.max(1, Math.ceil((hz * 2) / 1));
+    for (let ix = 0; ix <= nx; ix++) {
+      const u = cu + (ix / nx * 2 - 1) * hx;
+      for (let iz = 0; iz <= nz; iz++) {
+        const v = cv + (iz / nz * 2 - 1) * hz;
+        const [x, z] = worldOf(u, v);
+        if (!pointInRing(fp.ring, x, z)) return false;
+      }
+    }
+    return true;
+  };
+
+  let best: PlacedBuilding | null = null;
+  let bestArea = 0;
+  for (const [cu, cv] of candidates) {
+    const roomX = Math.min(cu - u0, u1 - cu, wanted.hx) - 0.16;
+    const roomZ = Math.min(cv - v0, v1 - cv, wanted.hz) - 0.16;
+    if (roomX < 0.42 || roomZ < 0.42) continue;
+    for (const scale of [0.96, 0.84, 0.72, 0.60, 0.48, 0.36, 0.26]) {
+      const hx = roomX * scale;
+      const hz = roomZ * scale;
+      const area = hx * hz * 4;
+      if (area <= bestArea || !fits(cu, cv, hx, hz)) continue;
+      const [x, z] = worldOf(cu, cv);
+      best = { x, z, hx, hz, height: wanted.height, rot };
+      bestArea = area;
+      // Smaller scales at this centre cannot improve the result.
+      break;
+    }
+  }
+  return best;
 }
 
 /**

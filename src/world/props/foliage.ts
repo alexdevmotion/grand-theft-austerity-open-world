@@ -37,14 +37,28 @@ const opt = (color: PropOpts['color'], mr: PropOpts['mr']): PropOpts => ({ color
  *               much smaller than it used to be: it is a floor, not the look.
  */
 const leafOpt = (color: PropOpts['color'], gain = 0.12, trans = 0.85, wind = 0): PropOpts =>
-  ({ color, mr: MR.leaf, emissive: [color.r * gain, color.g * gain, color.b * gain], trans, wind });
+  ({
+    color,
+    // Keep the stylised amber response, but do not let the low-poly lobes pick
+    // up a hard environment glint on every facet. Leaf roughness is deliberately
+    // a little higher than the shared foliage preset used by small shrubs.
+    mr: [MR.leaf[0], 0.76],
+    emissive: [color.r * gain, color.g * gain, color.b * gain], trans, wind,
+  });
 
 /**
- * Radians of normal scatter applied to every leaf cluster. +-40 degrees, which
- * is enough that a crown backlit by the sunset breaks into lit and unlit facets
- * instead of turning into a single black octagon.
+ * Radians of normal scatter applied to every leaf cluster. About 18 degrees is
+ * enough to break uniform shading without turning each low-poly lobe into a
+ * fan of unrelated folded cards.
  */
-const LEAF_NORMAL_JITTER = 0.7;
+const LEAF_NORMAL_JITTER = 0.32;
+
+/** Neighbouring clusters share one seasonal family instead of rainbow noise. */
+const TREE_PALETTES = [
+  { tones: [C.leafAmber, C.leafGold, C.leafPale], weights: [6, 3, 0.7] },
+  { tones: [C.leafRust, C.leafAmber, C.leafGold], weights: [5, 2.2, 0.8] },
+  { tones: [C.leafOlive, C.leafAmber, C.leafGold], weights: [6, 2.0, 0.5] },
+] as const;
 
 /* ------------------------------------------------------------------ */
 /* Trees                                                               */
@@ -53,14 +67,16 @@ const LEAF_NORMAL_JITTER = 0.7;
 /**
  * Autumn street tree. `thin` 0..1 controls how much of the crown has already
  * dropped: at 1 you get bare branches with a few clinging clusters.
- * ~230 triangles at full crown.
+ * Roughly 1.5-2.3k triangles at full detail (branches, shell and fringe),
+ * merged into the owning tile's single prop draw.
  */
 export function autumnTree(
   b: PropBuilder, x: number, z: number, rng: Rng,
-  scale = 1, thin = rng.range(0.06, 0.28),
+  scale = 1, thin = rng.range(0.14, 0.34),
   /** 2 = full detail, 1 = mid, 0 = distant silhouette. Halves the cluster count. */
   lod: 0 | 1 | 2 = 2,
 ): void {
+  const palette = rng.weighted(TREE_PALETTES, [5, 2.2, 1.8]);
   /*
    * SCALE. A mature Bucharest street plane tree is 8-11 m to the crown top on a
    * 2.2-3.2 m clear trunk, with a crown 4-6 m ACROSS — not the 6 m radius the
@@ -155,7 +171,7 @@ export function autumnTree(
         const tx = sx + Math.cos(a3) * crownR * rng.range(0.2, 0.38);
         const tz = sz + Math.sin(a3) * crownR * rng.range(0.2, 0.38);
         const ty = sy + crownH * rng.range(0.08, 0.26);
-        b.tube(sx, sy, sz, tx, ty, tz, trunkR * 0.29, 3, twigOpt);
+        b.tube(sx, sy, sz, tx, ty, tz, trunkR * 0.20, 3, twigOpt);
         tips.push(tx, ty, tz);
       }
     }
@@ -183,21 +199,24 @@ export function autumnTree(
    * never coverage — few big lobes far away, many small ones near, the same
    * solid mass either way, and no tier at which the crown comes apart.
    */
-  const COVER = 4.0;
-  const rWanted = lod === 2 ? 0.70 : lod === 1 ? 0.86 : 1.36;
+  // Near trees need a finer grain than the old 0.7 m-radius shell: at camera
+  // distance that size resolves as a row of rocks. The cover is kept just
+  // below one closed hull so the armature and late-autumn gaps survive instead
+  // of becoming an opaque ball. Mid/far tiers retain almost the old count.
+  const COVER = 3.2;
+  const rWanted = lod === 2 ? 0.56 : lod === 1 ? 0.82 : 1.30;
   const crownHalfH = crownH * 0.34;
   const crownMidY = crownY + crownH * 0.46;
   const silh = crownR * crownHalfH;
   const nSurf = Math.max(6, Math.min(100, Math.round((COVER * silh) / (rWanted * rWanted))));
   const lobeR = Math.sqrt((COVER * silh) / nSurf);
   // Two scales — see the long note in city/facades.ts. These structural lobes
-  // are the crown's MASS at 20 triangles each; the tuft pass at the bottom
+  // are the crown's MASS at 20-24 triangles each; the tuft pass at the bottom
   // skins their outside in 0.3 m single-ring lobes, and those are what the eye
   // resolves from the distance a third-person camera actually lives at.
   const rings = lod === 0 ? 1 : 2;
-  const lobeSeg = lod === 0 ? 6 : 5;
+  const lobeSeg = lod === 0 || lod === 2 ? 6 : 5;
   const GOLD = Math.PI * (3 - Math.sqrt(5));
-  const amberBias = rng.range(0.6, 0.98);
   const seedBase = (Math.round(cx * 13.7 + cz * 7.3) >>> 0) || 1;
 
   for (let i = 0; i < nSurf; i++) {
@@ -205,10 +224,9 @@ export function autumnTree(
     const cy = 1 - 2 * t;
     /*
      * Late autumn strips a crown from the INSIDE and the BOTTOM outwards — the
-     * outer tips hold their leaves longest. Dropping clusters uniformly, which
-     * is what `thin` used to do at up to 0.78, punches holes straight through
-     * the silhouette, and a silhouette full of holes is a handful of detached
-     * pieces rather than a thinning tree.
+     * outer tips hold their leaves longest. Dropping clusters uniformly punches
+     * holes straight through the silhouette, and a silhouette full of holes is
+     * a handful of detached pieces rather than a thinning tree.
      */
     if (rng.next() < thin * (1.0 - cy)) continue;
     const sr = Math.sqrt(Math.max(0, 1 - cy * cy));
@@ -222,9 +240,7 @@ export function autumnTree(
     const ang = i * GOLD + rng.range(-0.9, 0.9);
     const wob = rng.range(0.88, 1.12);
     const shell = rng.range(0.86, 1.06);
-    const leafC = rng.next() < amberBias
-      ? rng.weighted([C.leafGold, C.leafAmber, C.leafPale, C.leafRust], [4, 3, 2, 2])
-      : C.leafOlive;
+    const leafC = rng.weighted(palette.tones, palette.weights);
     // Lobes on the underside are shaded by the whole crown above them; the
     // shader cannot know that, so it is authored off height in the shell.
     const depth = 0.60 + 0.40 * (0.5 + 0.5 * cy);
@@ -241,7 +257,7 @@ export function autumnTree(
         leafC.clone().multiplyScalar(depth), 0.1, rng.range(0.72, 1.0),
         0.035 + 0.11 * Math.max(0, (ly - crownY) / Math.max(crownH, 0.5)),
       ),
-      // 0.32, not 0.5: on a five-segment two-ring lobe a vertex pulled to
+      // 0.32, not 0.5: on a five/six-segment two-ring lobe a vertex pulled to
       // 0.75r leaves its neighbours' quad nearly planar, and the structural
       // lobes flatten into hard cards. Raggedness is the tuft pass's job.
       0.32, 1 + ((i * 7919 + seedBase * 104729) >>> 0), rings, LEAF_NORMAL_JITTER * 0.55, lobeSeg,
@@ -251,18 +267,19 @@ export function autumnTree(
   // Backing lobes: whatever shows through a thinned crown has to be more canopy
   // in shadow — never sky, and never the trunk.
   if (lod >= 1) {
-    for (let i = 0; i < 6; i++) {
+    const nBacking = lod === 2 ? 4 : 5;
+    for (let i = 0; i < nBacking; i++) {
       const cy = rng.range(-0.5, 0.7);
       const sr = Math.sqrt(Math.max(0, 1 - cy * cy));
-      const ang = i * GOLD * 2.3;
+      const ang = i * GOLD * 2.3 + rng.range(-0.28, 0.28);
       const shell = rng.range(0.28, 0.62);
-      const r = lobeR * rng.range(1.0, 1.45);
+      const r = lobeR * rng.range(0.72, 1.12);
       b.blob(
         cx + Math.cos(ang) * sr * crownR * shell,
         crownMidY + cy * crownHalfH * shell,
         cz + Math.sin(ang) * sr * crownR * shell,
         r, r * 0.72, r,
-        leafOpt(C.leafOlive.clone().multiplyScalar(0.5), 0.08, 0.35, 0.03),
+        leafOpt(palette.tones[0].clone().multiplyScalar(0.5), 0.08, 0.35, 0.03),
         0.45, 1 + ((i * 15486 + seedBase * 39769) >>> 0), 1, LEAF_NORMAL_JITTER * 0.4, 5,
       );
     }
@@ -288,6 +305,9 @@ export function autumnTree(
     } else {
       const a = rng.range(0, Math.PI * 2);
       const cy = rng.range(-0.7, 0.95);
+      // Let the inner/bottom leaf fall expose the branch orders. Tips keep
+      // their clusters, matching the way a real late-autumn crown thins.
+      if (rng.next() < thin * (0.45 + 0.55 * (1 - cy)) * 0.65) continue;
       const sr = Math.sqrt(Math.max(0, 1 - cy * cy));
       // Radial and vertical overshoot together, never independently, or a
       // tuft near the poles floats clear of the crown it belongs to.
@@ -298,7 +318,7 @@ export function autumnTree(
     }
     b.blob(
       fx, fy, fz, fr, fr * rng.range(0.6, 0.86), fr,
-      leafOpt(rng.weighted([C.leafGold, C.leafAmber, C.leafPale, C.leafRust], [4, 3, 2, 2]),
+      leafOpt(rng.weighted(palette.tones, palette.weights),
         0.1, rng.range(0.9, 1.0), 0.15),
       0.6, 1 + ((i * 22691 + seedBase * 6353) >>> 0), 1, LEAF_NORMAL_JITTER * 0.55, 5,
     );

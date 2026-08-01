@@ -106,9 +106,9 @@ export const HERO_FACE: FaceParams = {
 };
 
 /**
- * A deliberately average face. The crowd's instanced imposters share ONE
- * painted head, so it must not carry anything that reads as an individual:
- * no stubble, no freckles, no makeup, no dramatic brow.
+ * Neutral base parameters for the crowd imposter atlas. The live renderer
+ * derives several readable identities from this baseline while preserving the
+ * same landmark proportions as fitted actor heads.
  */
 export const CROWD_FACE: FaceParams = {
   age: 0.38,
@@ -191,6 +191,38 @@ function mixHex(a: number, b: number, t: number): number {
   ) & 0xffffff;
 }
 
+export interface FaceTonePalette {
+  /** Wide, translucent form shadow used across the brow and face sides. */
+  shadow: number;
+  /** Strongest broad shadow used in sockets and under the jaw. */
+  deep: number;
+  /** Narrow landmark ink for lids, nostrils and the mouth crease. */
+  feature: number;
+  blush: number;
+}
+
+/**
+ * Baked tones for the procedural crowd face.
+ *
+ * These textures are still lit by the scene. The previous broad shadows mixed
+ * 42-60% toward near-black, which meant the darkest supported complexion had
+ * only 27% of its base luminance left before sunlight, ambient light and tone
+ * mapping were applied. In the close-up QA fixture the entire face therefore
+ * collapsed into one black mass even though the hands remained readable.
+ *
+ * Keep broad form at a reflectance the live light rig can model, then reserve
+ * the old dark range for narrow landmarks. This preserves skin hue and facial
+ * contrast without emissive fill, extra geometry, materials or draw calls.
+ */
+export function faceTonePalette(skin: number): FaceTonePalette {
+  return {
+    shadow: mixHex(skin, 0x2a1420, 0.26),
+    deep: mixHex(skin, 0x180a14, 0.38),
+    feature: mixHex(skin, 0x180a14, 0.64),
+    blush: mixHex(skin, 0xc4564e, 0.3),
+  };
+}
+
 /**
  * Paint a face into the square region (x0,y0,size). Coordinates inside follow
  * `headUv`: horizontal centre = straight ahead, vertical 0 = crown, 1 = chin.
@@ -211,9 +243,7 @@ export function paintFace(
   const L = faceLandmarks(f);
   // Half-width of the visible front of the face in atlas units (theta = +-55deg).
   const faceHalf = L.faceHalf;
-  const shadow = mixHex(skin, 0x2a1420, 0.42);
-  const deep = mixHex(skin, 0x180a14, 0.6);
-  const blush = mixHex(skin, 0xc4564e, 0.3);
+  const { shadow, deep, feature, blush } = faceTonePalette(skin);
 
   /* base skin with vertical shading */
   const grad = g.createLinearGradient(0, y0, 0, y0 + S);
@@ -309,7 +339,7 @@ export function paintFace(
     // sub-pixel stroke by the time the head reached the screen, so the eye lost
     // its top edge and the sclera bled into the lid — a pale oval with two
     // slightly darker smudges, which is the "blank oval" reading.
-    g.strokeStyle = rgb(deep, 0.95);
+    g.strokeStyle = rgb(feature, 0.95);
     g.lineWidth = Math.max(1.5, S * (0.0065 + f.makeup * 0.005));
     g.beginPath();
     g.ellipse(ex, ey, rx * 1.02, ry * 1.02, 0, Math.PI * 1.02, Math.PI * 1.98);
@@ -377,7 +407,7 @@ export function paintFace(
     g.fillStyle = bri;
     g.fillRect(cx - nw, y0 + S * (yBrow + 0.01), nw * 2, S * (yNose - yBrow));
     // nostrils + tip shadow
-    g.fillStyle = rgb(deep, 0.55);
+    g.fillStyle = rgb(feature, 0.55);
     for (const s of [-1, 1]) {
       g.beginPath();
       g.ellipse(cx + s * nw * 0.62, ny, nw * 0.26, nw * 0.16, s * 0.3, 0, 7);
@@ -404,7 +434,7 @@ export function paintFace(
     g.quadraticCurveTo(cx + mw * 0.45, my - lipH * 1.5, cx + mw, my);
     g.quadraticCurveTo(cx, my + lipH * 2.1, cx - mw, my);
     g.fill();
-    g.strokeStyle = rgb(deep, 0.6);
+    g.strokeStyle = rgb(feature, 0.6);
     g.lineWidth = Math.max(1, S * 0.0035);
     g.beginPath();
     g.moveTo(cx - mw, my);
@@ -512,7 +542,7 @@ export function paintFace(
     g.beginPath();
     g.ellipse(px, py, S * 0.020, S * 0.042, 0, 0, 7);
     g.fill();
-    g.strokeStyle = rgb(shadow, 0.6);
+    g.strokeStyle = rgb(feature, 0.6);
     g.lineWidth = Math.max(1, S * 0.003);
     g.beginPath();
     g.ellipse(px, py, S * 0.011, S * 0.026, 0, 0, 7);

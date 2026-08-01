@@ -1066,6 +1066,9 @@ Surf surfaceShade() {
   float wet = uWetness;
   /** Extra wetness on top of the base mask — gutters, low spots, tram beds. */
   float pooling = 0.0;
+  /** Merely damp roughness and mirror strength are material-specific. */
+  float dampRough = 0.36;
+  float filmMirror = 1.0;
 
   if (kind < 0.5) {
     /* ---- carriageway ---- */
@@ -1189,6 +1192,8 @@ Surf surfaceShade() {
      * carriageway and a matte footway that makes the road read as wet at all.
      */
     s.rough = 0.90 - tone * 0.07;
+    dampRough = 0.78;
+    filmMirror = 0.12;
     // Slab joints are 8 mm recesses; sunken slabs hold water. Both are relief.
     float broken = step(0.955, h21(cellId * 1.7 + 4.0));
     s.albedo *= 1.0 - 0.35 * broken;
@@ -1212,6 +1217,8 @@ Surf surfaceShade() {
     s.albedo = uKerb * (0.7 + grain * 0.5);
     // Sawn granite kerb, weathered and dusty — not a polished one.
     s.rough = 0.88;
+    dampRough = 0.82;
+    filmMirror = 0.08;
     // A kerb face is vertical: water runs straight off it.
     pooling = -0.42;
     wet *= 0.30;
@@ -1243,6 +1250,8 @@ Surf surfaceShade() {
      * below drops roughness to 0.10 and hands those pixels to the env probe.
      */
     s.rough = 0.87;
+    dampRough = 0.72;
+    filmMirror = 0.14;
     pooling = -0.22;
     wet *= 0.62;
     s.height = -0.012 * joint;
@@ -1252,12 +1261,16 @@ Surf surfaceShade() {
     float blotch = fbm2(wp * 0.35);
     s.albedo = uGrass * (0.45 + n * 0.65 + blotch * 0.35);
     s.rough = 0.95;
+    dampRough = 0.84;
+    filmMirror = 0.06;
     wet *= 0.25;
   } else if (kind < 5.5) {
     /* ---- gravel / compacted yard ---- */
     float n = fbm2(wp * 4.5);
     s.albedo = uGravelC * (0.5 + n * 0.8);
     s.rough = 0.88;
+    dampRough = 0.76;
+    filmMirror = 0.10;
     wet *= 0.5;
   } else if (kind < 6.5) {
     /* ---- water ---- */
@@ -1265,6 +1278,8 @@ Surf surfaceShade() {
     s.rough = 0.035;
     s.metal = 0.55;
     wet = 1.0;
+    dampRough = 0.035;
+    filmMirror = 1.0;
   } else if (kind < 7.5) {
     /* ---- tram bed: setts between the rails ---- */
     vec2 g = wp / vec2(0.30, 0.42);
@@ -1274,6 +1289,8 @@ Surf surfaceShade() {
     float tj = max(band(fj.x - 0.5, 0.09), band(fj.y - 0.5, 0.07));
     s.albedo *= 1.0 - 0.45 * tj;
     s.rough = 0.70;
+    dampRough = 0.58;
+    filmMirror = 0.42;
     pooling = -0.05;
   } else if (kind < 8.5) {
     /* ---- zebra crossing ---- */
@@ -1283,6 +1300,8 @@ Surf surfaceShade() {
     float wear = smoothstep(0.2, 0.8, fbm2(wp * 3.0 + 7.0));
     s.albedo = mix(s.albedo, uMarking * (0.5 + wear * 0.55), stripe * (0.5 + wear * 0.5));
     s.rough = 0.55;
+    dampRough = 0.50;
+    filmMirror = 0.38;
   } else {
     /* ---- cobbles (old town) ---- */
     vec2 g = wp / 0.26;
@@ -1295,6 +1314,8 @@ Surf surfaceShade() {
     float tone = h21(cellId + seed);
     s.albedo = uKerb * (0.35 + tone * 0.55) * (0.55 + dome * 0.7);
     s.rough = 0.68 - dome * 0.14;
+    dampRough = 0.54;
+    filmMirror = 0.45;
     // Setts are domed and their gaps are 15 mm deep: real relief, so a low sun
     // rakes across a cobbled street instead of shading a painted pattern.
     s.height = dome * 0.016;
@@ -1344,7 +1365,7 @@ Surf surfaceShade() {
   s.albedo *= mix(1.0, mix(0.62, 0.30, standing), wetAmt);
   // 0.75 dry -> 0.055 standing water. The damp end has to stay well clear of
   // mirror territory or there is no contrast between puddle and road.
-  s.rough = mix(s.rough, mix(0.36, 0.10, standing), wetAmt);
+  s.rough = mix(s.rough, mix(dampRough, 0.10, standing), wetAmt);
   s.metal = max(s.metal, wetAmt * standing * 0.02);
   // A water film FILLS surface relief; a near-mirror that still carries
   // aggregate normals turns every bump into its own glint and the road reads
@@ -1439,7 +1460,8 @@ Surf surfaceShade() {
    * The night gain is untouched: after dark the reflection genuinely is the
    * only thing on the tarmac.
    */
-  s.env = 1.0 + wetAmt * mix(0.55, 1.0, fres) * (0.30 + 0.85 * standing)
+  s.env = 1.0 + wetAmt * mix(filmMirror, 1.0, standing)
+                * mix(0.55, 1.0, fres) * (0.30 + 0.85 * standing)
                 * nightGain * nearFade * farFade;
 
   /*

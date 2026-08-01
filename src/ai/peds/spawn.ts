@@ -10,7 +10,7 @@ import * as THREE from 'three';
 import { Palette } from '../../artDirection';
 import type { Rng } from '../../core/rng';
 import type { DistrictKind, PedArchetype } from '../../core/services';
-import type { PedAppearance } from './rig';
+import { crowdFaceVariant, type PedAppearance } from './rig';
 
 const c = (hex: number) => new THREE.Color(hex).convertSRGBToLinear();
 
@@ -178,6 +178,7 @@ export function makeAppearance(archetype: PedArchetype, rng: Rng): PedAppearance
     shoes: pick(rng, SHOES),
     vest: null,
     headwear: female && rng.bool(0.62) ? 4 : rng.bool(0.18) ? 1 : 0,
+    faceVariant: (female ? 4 : 0) + (crowdFaceVariant(rng.int(0, 1 << 20)) % 4),
     hatColor: pick(rng, CIVILIAN_TOPS),
     bag: rng.bool(0.34) ? rng.weighted([1, 2, 3], [3, 2, 1.6]) : 0,
     bagColor: pick(rng, BAG_COLORS),

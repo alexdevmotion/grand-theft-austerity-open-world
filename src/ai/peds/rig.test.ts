@@ -28,7 +28,9 @@
 import { expect, test } from 'bun:test';
 import * as THREE from 'three';
 import {
+  CROWD_FACE_VARIANTS,
   buildImposterHeadGeometry,
+  crowdFaceVariant,
   CrowdRenderer,
   type PedAppearance,
   type RigSubject,
@@ -38,6 +40,7 @@ import { bodyMetrics, buildRig } from '../../characters/rig';
 import { rollAppearance } from '../../characters/wardrobe';
 import { FACE_LANDMARKS, faceLandmarks } from '../../characters/faces';
 import { Rng } from '../../core/rng';
+import { makeAppearance } from './spawn';
 
 /* ------------------------------------------------------------------ */
 /* front view with a depth buffer                                      */
@@ -185,6 +188,7 @@ const TEST_IMPOSTER_APP: PedAppearance = {
   shoes: testColour(0x14121a),
   vest: null,
   headwear: 0,
+  faceVariant: 0,
   hatColor: testColour(0xe8622a),
   bag: 0,
   bagColor: testColour(0x2a2230),
@@ -193,19 +197,19 @@ const TEST_IMPOSTER_APP: PedAppearance = {
   placard: null,
 };
 
-function imposterSubject(headwear: number, x: number): RigSubject {
+function imposterSubject(headwear: number, x: number, seed = headwear): RigSubject {
   return {
     pos: new THREE.Vector3(x, 0, 0),
     yaw: 0,
     tiltPitch: 0,
     tiltRoll: 0,
-    app: { ...TEST_IMPOSTER_APP, headwear },
+    app: { ...TEST_IMPOSTER_APP, headwear, faceVariant: crowdFaceVariant(seed) },
     pose: 'idle',
     phase: 0,
     speed: 0,
     headYaw: 0,
     headPitch: 0,
-    seed: headwear,
+    seed,
     gesture: 0.6,
   };
 }
@@ -340,6 +344,67 @@ test('both crowd tiers put the eye line on the front of the head at the same hei
   skinned.dispose();
 });
 
+test('the live imposter tier preserves deterministic face identity in one draw call', () => {
+  const prior = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    writable: true,
+    value: fakeCanvasDocument(),
+  });
+
+  let renderer: CrowdRenderer | null = null;
+  try {
+    renderer = new CrowdRenderer(new THREE.Group(), CROWD_FACE_VARIANTS, false);
+    renderer.begin();
+    for (let seed = 0; seed < CROWD_FACE_VARIANTS; seed++) {
+      renderer.draw(imposterSubject(0, seed * 2, seed), 0, 2);
+    }
+    renderer.end();
+
+    const heads = renderer.root.getObjectByName('peds-head-near') as THREE.InstancedMesh;
+    expect(heads.count).toBe(CROWD_FACE_VARIANTS);
+    // Identity is a per-instance attribute on the single live head mesh: more
+    // faces, no extra crowd draw calls.
+    const variants = heads.geometry.getAttribute('crowdFaceVariant') as THREE.InstancedBufferAttribute;
+    const actual = Array.from({ length: heads.count }, (_, i) => variants.getX(i));
+    expect(actual).toEqual(
+      Array.from({ length: heads.count }, (_, seed) => crowdFaceVariant(seed)),
+    );
+    expect(new Set(actual).size).toBe(CROWD_FACE_VARIANTS);
+
+    // Exercise the exact material hook the renderer compiles. Without the UV
+    // tile transform every instance samples tile zero despite carrying a
+    // distinct attribute, recreating the same-face symptom.
+    const material = heads.material as THREE.MeshStandardMaterial;
+    const shader = {
+      vertexShader: '#include <common>\n#include <uv_vertex>',
+      fragmentShader: '',
+      uniforms: {},
+    };
+    material.onBeforeCompile(shader as never, {} as never);
+    expect(shader.vertexShader).toContain('attribute float crowdFaceVariant;');
+    expect(shader.vertexShader).toContain('vMapUv = vec2(');
+    expect(shader.vertexShader).toContain('clamp(vMapUv, 0.0, 1.0)');
+
+    const atlas = material.map!.image as HTMLCanvasElement;
+    expect(atlas.width / atlas.height).toBe(2);
+  } finally {
+    renderer?.dispose();
+    if (prior) Object.defineProperty(globalThis, 'document', prior);
+    else delete (globalThis as { document?: Document }).document;
+  }
+});
+
+test('the actual spawn path deterministically exercises the whole face atlas', () => {
+  const sequence = (seed: string) => {
+    const rng = new Rng(seed);
+    return Array.from({ length: 96 }, () => makeAppearance('civilian', rng).faceVariant);
+  };
+  const first = sequence('crowd-face-spawn-contract');
+  expect(first).toEqual(sequence('crowd-face-spawn-contract'));
+  expect(new Set(first)).toEqual(new Set([0, 1, 2, 3, 4, 5, 6, 7]));
+});
+
 test('dog heads never enter the human face material in either distance tier', () => {
   const prior = Object.getOwnPropertyDescriptor(globalThis, 'document');
   Object.defineProperty(globalThis, 'document', {
@@ -389,8 +454,9 @@ test('the shared crown pool retains dog heads at maximum pedestrian occupancy', 
     renderer.end();
 
     const crowns = renderer.root.getObjectByName('peds-blob-near') as THREE.InstancedMesh;
-    // One hair cap and one dog head for each of the two live pedestrians.
-    expect(crowns.count).toBe(4);
+    // One hair cap, two palms and one dog head for each live pedestrian. The
+    // pool must retain all four even at maximum occupancy.
+    expect(crowns.count).toBe(8);
   } finally {
     renderer?.dispose();
     if (prior) Object.defineProperty(globalThis, 'document', prior);
@@ -425,17 +491,71 @@ test('imposter hair and helmet shells stay above the face midline in both distan
       const heads = renderer.root.getObjectByName(`peds-head-${tier}`) as THREE.InstancedMesh;
       const shells = renderer.root.getObjectByName(`peds-blob-${tier}`) as THREE.InstancedMesh;
       expect(heads.count).toBe(variants.length);
-      expect(shells.count).toBe(variants.length);
+      const partsPerFigure = tier === 'near' ? 3 : 1;
+      expect(shells.count).toBe(variants.length * partsPerFigure);
       for (let i = 0; i < variants.length; i++) {
         heads.getMatrixAt(i, matrix);
         const faceMidlineY = matrix.elements[13];
-        shells.getMatrixAt(i, matrix);
+        // At conversation distance two palms are emitted before the crown;
+        // the far LOD omits them.
+        shells.getMatrixAt(tier === 'near' ? i * 3 + 2 : i, matrix);
         matrix.decompose(position, rotation, scale);
         // The shared blob geometry is centred at zero with y extent +-0.5.
         const shellBottomY = position.y - scale.y * 0.5;
         expect(shellBottomY - faceMidlineY).toBeGreaterThan(0.01);
       }
     }
+  } finally {
+    renderer?.dispose();
+    if (prior) Object.defineProperty(globalThis, 'document', prior);
+    else delete (globalThis as { document?: Document }).document;
+  }
+});
+
+test('conversation-distance imposters retain two anatomically defined hands', () => {
+  const prior = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    writable: true,
+    value: fakeCanvasDocument(),
+  });
+
+  let renderer: CrowdRenderer | null = null;
+  try {
+    renderer = new CrowdRenderer(new THREE.Group(), 1, false);
+    renderer.begin();
+    renderer.draw(imposterSubject(0, 17), 0, 2);
+    renderer.end();
+
+    const roundedParts = renderer.root.getObjectByName('peds-blob-near') as THREE.InstancedMesh;
+    // One crown plus one palm at the end of each articulated arm. The prior
+    // imposter stopped both forearms at the wrist and therefore emitted only
+    // the crown: a mannequin silhouette whenever the skinned budget filled.
+    expect(roundedParts.count).toBe(3);
+
+    const left = new THREE.Vector3();
+    const right = new THREE.Vector3();
+    const rotation = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    const matrix = new THREE.Matrix4();
+    roundedParts.getMatrixAt(0, matrix);
+    matrix.decompose(left, rotation, scale);
+    expect(scale.y).toBeGreaterThan(scale.x);
+    expect(scale.x).toBeGreaterThan(scale.z);
+    roundedParts.getMatrixAt(1, matrix);
+    matrix.decompose(right, rotation, scale);
+    expect(left.x).toBeLessThan(17);
+    expect(right.x).toBeGreaterThan(17);
+
+    const colour = new THREE.Color();
+    roundedParts.getColorAt(0, colour);
+    expect(colour.r).toBeCloseTo(TEST_IMPOSTER_APP.skin.r, 5);
+    expect(colour.g).toBeCloseTo(TEST_IMPOSTER_APP.skin.g, 5);
+    expect(colour.b).toBeCloseTo(TEST_IMPOSTER_APP.skin.b, 5);
+    roundedParts.getColorAt(1, colour);
+    expect(colour.r).toBeCloseTo(TEST_IMPOSTER_APP.skin.r, 5);
+    expect(colour.g).toBeCloseTo(TEST_IMPOSTER_APP.skin.g, 5);
+    expect(colour.b).toBeCloseTo(TEST_IMPOSTER_APP.skin.b, 5);
   } finally {
     renderer?.dispose();
     if (prior) Object.defineProperty(globalThis, 'document', prior);

@@ -160,24 +160,34 @@ export class TrafficAgent {
       if (last && Math.hypot(last.x - x, last.z - z) < 0.6) return;
       wps.push({ x, z, hx: 0, hz: 1, len: 0, turn: 0 });
     };
+    const pushLane = (edge: LaneEdge, lane: number): void => {
+      const rail = this.graph.lanePath(edge, lane);
+      if (rail?.length) {
+        for (const p of rail) push(p.x, p.z);
+        return;
+      }
+      this.graph.laneEntry(edge, lane, _a);
+      push(_a.x, _a.z);
+      this.graph.laneExit(edge, lane, _a);
+      push(_a.x, _a.z);
+    };
 
     const e0 = this.e(this.edge);
-    this.graph.laneEntry(e0, this.lane, _a);
-    push(_a.x, _a.z);
-    this.graph.laneExit(e0, this.lane, _a);
-    push(_a.x, _a.z);
+    pushLane(e0, this.lane);
 
     let prev = e0;
     let prevLane = this.lane;
     for (let k = 0; k < this.plan.length; k++) {
       const n = this.e(this.plan[k]);
       const nLane = this.planLanes[k];
-      this.graph.cornerPoint(prev, prevLane, n, nLane, _b);
-      push(_b.x, _b.z);
-      this.graph.laneEntry(n, nLane, _a);
-      push(_a.x, _a.z);
-      this.graph.laneExit(n, nLane, _a);
-      push(_a.x, _a.z);
+      const railJoin = this.graph.laneJoinPath(prev, prevLane, n, nLane);
+      if (railJoin?.length) {
+        for (const p of railJoin) push(p.x, p.z);
+      } else {
+        this.graph.cornerPoint(prev, prevLane, n, nLane, _b);
+        push(_b.x, _b.z);
+      }
+      pushLane(n, nLane);
       prev = n;
       prevLane = nLane;
     }
@@ -310,8 +320,8 @@ export class TrafficAgent {
       return;
     }
 
-    const px = v.position.x;
-    const pz = v.position.z;
+    let px = v.position.x;
+    let pz = v.position.z;
     const speed = v.speed;
 
     /* ---- advance the route when we cross into the next edge ---- */
@@ -339,9 +349,12 @@ export class TrafficAgent {
     // Shunted off the road, flipped, or picked up by the vehicle system's stuck
     // rescue: find whatever lane we are actually in rather than trying to drive
     // back to one 40 m away through a building.
-    if (Math.abs(cross) > 22) {
+    const tramLost = this.kind === 'tram' && (
+      Math.abs(cross) > 2 || this.laneError > THREE.MathUtils.degToRad(12)
+    );
+    if (tramLost || Math.abs(cross) > 22) {
       this.reanchorTime += dt;
-      if (this.reanchorTime > 0.5) {
+      if (this.reanchorTime > (this.kind === 'tram' ? 0.25 : 0.5)) {
         this.reanchorTime = 0;
         const found = this.kind === 'tram'
           ? this.graph.nearestTramLane(px, pz, this.driver.heading, this.scratch)
@@ -351,6 +364,19 @@ export class TrafficAgent {
           this.edge = found.edge;
           this.lane = found.lane;
           this.replan(true);
+          if (this.kind === 'tram') {
+            // A rail vehicle cannot steer back from a collision as though it
+            // were a bus. Re-seat its bogie centre on the exact rendered track,
+            // pass ground height (VehicleHandle adds ride height itself), and
+            // reset yaw to the local tangent. This is a bounded derailment
+            // recovery, not a per-frame kinematic animation.
+            const pose = this.graph.closestLanePoint(
+              this.e(this.edge), TRAM_LANE, px, pz, _a,
+            );
+            v.teleport(_a, pose.heading);
+            px = v.position.x;
+            pz = v.position.z;
+          }
           cross = this.track(px, pz);
         } else {
           this.retire = true;
@@ -553,7 +579,10 @@ export class TrafficAgent {
   /** Angle between our heading and the lane we are supposed to be in. */
   get laneError(): number {
     const e = this.e(this.edge);
-    return Math.abs(wrapAngle(Math.atan2(e.ux, e.uz) - this.driver.heading));
+    const pose = this.graph.closestLanePoint(
+      e, this.lane, this.vehicle.position.x, this.vehicle.position.z, _b,
+    );
+    return Math.abs(wrapAngle(pose.heading - this.driver.heading));
   }
 
   releaseAll(junctions: JunctionControl): void {

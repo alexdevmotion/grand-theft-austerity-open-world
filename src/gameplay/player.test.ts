@@ -20,9 +20,12 @@ import { expect, test } from 'bun:test';
 import {
   bodyTravel,
   cameraTravel,
+  bodyYawTarget,
   footSurface,
+  playerSpawnFromPlace,
   travelBodyYaw,
 } from './player';
+import { PLACES } from '../content/places';
 import { CHARACTER_SKIN, capsuleRestHeight } from '../physics/physics';
 
 const DEG = Math.PI / 180;
@@ -240,4 +243,30 @@ test('stick input is camera-relative and A/D are not swapped', () => {
   const wTurned = cameraTravel(Math.PI / 2, 0, 1);
   expect(wTurned.x).toBeCloseTo(1, 9);
   expect(wTurned.z).toBeCloseTo(0, 9);
+});
+
+/* ------------------------------------------------------------------ */
+/* 5. FREE LOOK MUST NOT TURN THE BODY                                  */
+/* ------------------------------------------------------------------ */
+
+test('mouse-only orbit leaves the on-foot body heading unchanged', () => {
+  const bodyYaw = 0.35;
+  // The camera can be anywhere after a long mouse orbit. With no movement,
+  // the public locomotion target must still be the body's existing heading.
+  expect(bodyYawTarget(bodyYaw, 2.4, 2.4, false)).toBeCloseTo(bodyYaw, 12);
+  expect(bodyYawTarget(bodyYaw, -2.4, -2.4, false)).toBeCloseTo(bodyYaw, 12);
+});
+
+test('opening spawn is on the forecourt, clear of the builders, facing the sealed entrance', () => {
+  const start = playerSpawnFromPlace();
+  // Independent authored coordinates: the intended opening composition is
+  // (-59, 11), not whatever arithmetic a future implementation happens to
+  // use to reach it.
+  expect(start.x).toBe(-59);
+  expect(start.z).toBe(11);
+  // The three outside builders occupy z=20..22.8; the player starts south of
+  // them, with a clear view of the public entrance at the tower's south face.
+  expect(start.z).toBeLessThan(PLACES.buildersForecourt.z - 6);
+  expect(start.yaw).toBeGreaterThan(0.4);
+  expect(start.yaw).toBeLessThan(0.7);
 });

@@ -780,7 +780,7 @@ export class FrontEnd {
       this.root.style.transition = 'opacity .55s ease';
       this.root.style.opacity = '0';
     }, 1550);
-    const goneAt = window.setTimeout(() => this.finish(), 2150);
+    const goneAt = window.setTimeout(() => this.finish(mode), 2150);
     this.disposers.push(() => {
       clearTimeout(resumeAt);
       clearTimeout(fadeAt);
@@ -791,8 +791,9 @@ export class FrontEnd {
   private enterWorld(mode: 'new' | 'continue'): void {
     const ctx = this.ctx;
     if (!ctx) return;
-    ctx.time.paused = false;
-    ctx.input.enabled = true;
+    const handoff = worldHandoffPolicy('under-curtain');
+    ctx.time.paused = handoff.paused;
+    ctx.input.enabled = handoff.inputEnabled;
     ctx.tryGet(Services.Hud)?.setVisible(true);
 
     const save = ctx.tryGet(Services.Save);
@@ -814,16 +815,28 @@ export class FrontEnd {
       this.session = emptySession();
     }
 
-    ctx.tryGet(Services.Hud)?.toast('Clic pentru a prinde mouse-ul', 'info', 4000);
   }
 
-  private finish(): void {
+  private finish(mode: 'new' | 'continue'): void {
     this.phase = 'ingame';
     cancelAnimationFrame(this.raf);
     this.raf = 0;
     this.root.classList.add('is-gone');
     this.root.classList.remove('is-starting');
     this.root.style.opacity = '';
+
+    const ctx = this.ctx;
+    if (ctx) {
+      const handoff = worldHandoffPolicy('interactive');
+      ctx.time.paused = handoff.paused;
+      ctx.input.enabled = handoff.inputEnabled;
+    }
+
+    // Presentation that explains the opening belongs AFTER the curtain. A
+    // card emitted from enterWorld() sits hidden beneath the remaining one
+    // second of menu fade, which is precisely how the old start lost its story.
+    ctx?.events.emit('game:started', { mode });
+    ctx?.tryGet(Services.Hud)?.toast('Clic pentru a prinde mouse-ul', 'info', 4000);
   }
 
   /* ---------------------------------------------------------------- */
@@ -987,6 +1000,16 @@ export interface FrontEndGate {
   /** Should the front-end mount at all? */
   on: boolean;
   why: string;
+}
+
+export type WorldHandoffPhase = 'under-curtain' | 'interactive';
+
+/** The world may render beneath the fade, but gameplay starts after it clears. */
+export function worldHandoffPolicy(phase: WorldHandoffPhase): {
+  paused: boolean;
+  inputEnabled: boolean;
+} {
+  return { paused: false, inputEnabled: phase === 'interactive' };
 }
 
 /**

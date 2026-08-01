@@ -56,6 +56,83 @@ export interface SpokenLine {
   seconds: number;
 }
 
+export type ActivityDialoguePhase = 'start' | 'success' | 'failure';
+
+export interface ContextualDialogueLine {
+  speaker: string;
+  text: string;
+  ms: number;
+}
+
+/**
+ * Authored sidequest speech. These are dispatchers/givers addressing the
+ * actual job the player just accepted, not a random talk-radio reaction. The
+ * lines stay as data beside the voice authority so start/finish routing and
+ * subtitle reservation cannot drift into separate systems again.
+ */
+const ACTIVITY_DIALOGUE: Record<
+  string,
+  Record<ActivityDialoguePhase, ContextualDialogueLine>
+> = {
+  curier_server: {
+    start: { speaker: 'Dispecer', text: 'Serverul are două destinații. Ține rackul drept și nu frâna brusc.', ms: 4600 },
+    success: { speaker: 'Dispecer', text: 'Ambele destinații au confirmat serverul. Transferul e închis.', ms: 4000 },
+    failure: { speaker: 'Dispecer', text: 'Rackul n-a ajuns la timp. Oprim transferul și refacem traseul.', ms: 4200 },
+  },
+  curier_cafea: {
+    start: { speaker: 'Barista', text: 'Cafelele sunt pentru echipa de noapte. Două opriri, fără capace pierdute.', ms: 4600 },
+    success: { speaker: 'Barista', text: 'Toate cafelele au ajuns calde. Tura de noapte poate continua.', ms: 3900 },
+    failure: { speaker: 'Barista', text: 'Cafeaua s-a răcit pe drum. Echipa a rămas fără combustibil.', ms: 3800 },
+  },
+  curier_dovezi: {
+    start: { speaker: 'Alex Need-Aid', text: 'Stickul cu dovezi merge la două redacții. Nu-l pierde și nu opri lângă Minister.', ms: 5000 },
+    success: { speaker: 'Alex Need-Aid', text: 'Ambele redacții au copiat dovezile. Acum nu le mai poate șterge nimeni.', ms: 4500 },
+    failure: { speaker: 'Alex Need-Aid', text: 'Fereastra pentru dovezi s-a închis. Păstrează stickul; încercăm din nou.', ms: 4400 },
+  },
+  cursa_magheru: {
+    start: { speaker: 'Organizator', text: 'Magheru, tur complet. Urmează marcajele și lasă bordurile în pace.', ms: 4200 },
+    success: { speaker: 'Organizator', text: 'Turul de pe Magheru e valid. Timpul tău intră în clasament.', ms: 3800 },
+    failure: { speaker: 'Organizator', text: 'Cronometrul de pe Magheru s-a oprit. Revino la linia de start.', ms: 3900 },
+  },
+  cursa_unirii: {
+    start: { speaker: 'Organizator', text: 'Unirii, un singur tur. Păstrează viteza și treci prin fiecare poartă.', ms: 4400 },
+    success: { speaker: 'Organizator', text: 'Turul de la Unirii e omologat. Ai trecut toate porțile.', ms: 3600 },
+    failure: { speaker: 'Organizator', text: 'Ai pierdut traseul de la Unirii. Clasamentul rămâne neschimbat.', ms: 3800 },
+  },
+  evadare_centru: {
+    start: { speaker: 'Constructor', text: 'În Centrul Vechi vin trei echipaje. Pierde-le printre străzile înguste.', ms: 4500 },
+    success: { speaker: 'Constructor', text: 'Nu mai apare niciun echipaj pe camere. Ai ieșit curat din centru.', ms: 4100 },
+    failure: { speaker: 'Constructor', text: 'Încă te urmăresc prin centru. Rupe traseul și încearcă din nou.', ms: 4000 },
+  },
+  evadare_guvern: {
+    start: { speaker: 'Constructor', text: 'Lângă Palat au ridicat tot cartierul guvernamental. Fugi până pierd semnalul.', ms: 4700 },
+    success: { speaker: 'Constructor', text: 'Filtrul guvernamental te-a pierdut. Nici Palatul nu mai știe unde ești.', ms: 4300 },
+    failure: { speaker: 'Constructor', text: 'Camerele de lângă Palat încă te țin. Schimbă mașina și revino.', ms: 4000 },
+  },
+  foto_victoriei: {
+    start: { speaker: 'Alex Need-Aid', text: 'În Piața Victoriei sunt trei ecrane. Fotografiază mesajele înainte să vină patrula.', ms: 5000 },
+    success: { speaker: 'Alex Need-Aid', text: 'Cadrele din Piața Victoriei sunt clare. Le urc acum în arhivă.', ms: 4000 },
+    failure: { speaker: 'Alex Need-Aid', text: 'Patrula a închis Piața Victoriei. Ne trebuie o fereastră nouă.', ms: 3900 },
+  },
+  foto_parlament: {
+    start: { speaker: 'Alex Need-Aid', text: 'Parlamentul are trei panouri pe axa mare. Vreau fiecare portret în cadru.', ms: 4600 },
+    success: { speaker: 'Alex Need-Aid', text: 'Avem toate panourile Parlamentului. Propaganda intră în dosar.', ms: 3900 },
+    failure: { speaker: 'Alex Need-Aid', text: 'Lipsește un cadru de la Parlament. Seria nu poate fi publicată încă.', ms: 4100 },
+  },
+  foto_casa: {
+    start: { speaker: 'Constructor', text: 'Casa Constructorilor are trei ecrane puse peste sigilii. Documentează-le pe toate.', ms: 4800 },
+    success: { speaker: 'Constructor', text: 'Avem dovada de pe Casa Constructorilor. Sigiliile și ecranele sunt în același cadru.', ms: 4800 },
+    failure: { speaker: 'Constructor', text: 'Nu avem toate fațadele Casei Constructorilor. Mai trebuie o trecere.', ms: 4000 },
+  },
+};
+
+export function activityDialogue(
+  id: string,
+  phase: ActivityDialoguePhase,
+): ContextualDialogueLine | null {
+  return ACTIVITY_DIALOGUE[id]?.[phase] ?? null;
+}
+
 export type VoiceRoute = 'radio' | 'street';
 
 /** The editorial identity carried all the way to the actual start boundary. */
@@ -261,6 +338,10 @@ export class VoiceDirector {
   private currentPriority = 0;
   private currentRoute: VoiceRoute = 'radio';
   private queue: Request[] = [];
+  /** Authored story/activity subtitles own the voice surface until this time. */
+  private narrativeUntil = 0;
+  /** Prevent our own matching subtitle event from reserving against itself. */
+  private emittingSubtitle = false;
 
   constructor(
     ctx: VoiceAudioContext,
@@ -275,6 +356,16 @@ export class VoiceDirector {
     this.events = events;
     this.rng = new Rng(seed);
     this.pools = buildPools();
+
+    // MissionSystem and contextual sidequest dialogue already publish through
+    // this public surface. Treat those authored lines as the authority: stop
+    // scenery that was already talking and reject generic radio/street lines
+    // until the readable subtitle has finished. Without this reservation, a
+    // kiosk or podcast clip can overwrite an NPC's sentence after E is pressed.
+    this.events.on('ui:subtitle', ({ ms }) => {
+      if (this.emittingSubtitle) return;
+      this.reserveNarrative((ms ?? 4000) / 1000);
+    });
   }
 
   private applyTelemetry(event: VoicePlaybackTelemetryEvent): void {
@@ -306,6 +397,20 @@ export class VoiceDirector {
   /** Seconds of talking left, for schedulers that must not overlap it. */
   get remaining(): number {
     return this.speaking ? this.endsAt - this.ctx.currentTime : 0;
+  }
+
+  get narrativeReserved(): boolean {
+    return this.ctx.currentTime < this.narrativeUntil;
+  }
+
+  /** Give an authored line exclusive use of voice audio and subtitle space. */
+  reserveNarrative(seconds: number): void {
+    const duration = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+    this.narrativeUntil = Math.max(this.narrativeUntil, this.ctx.currentTime + duration);
+    // Story is allowed to interrupt scenery. This is intentionally stronger
+    // than director-vs-director priority: a visible character has begun their
+    // authored sentence, so retaining a random radio mouth would be a mismatch.
+    this.stop();
   }
 
   /** How many un-repeated lines a context still has. Proves rule 2 by measure. */
@@ -403,6 +508,7 @@ export class VoiceDirector {
   }
 
   private schedule(r: Request): boolean {
+    if (this.narrativeReserved) return false;
     // Rule 1: never cut a line off. A higher-priority request goes to the FRONT
     // of the queue and plays the moment the current line finishes.
     if (this.speaking) {
@@ -422,9 +528,11 @@ export class VoiceDirector {
   }
 
   private async play(r: Request): Promise<void> {
+    if (this.narrativeReserved) return;
     const cached = this.hooks.cached(r.line.file);
     const buf = cached ?? (await this.hooks.load(r.line.file));
     if (!buf) return;
+    if (this.narrativeReserved) return;
     // The await may have let something else start; respect rule 1 by requeueing
     // rather than cutting in.
     if (this.speaking) {
@@ -450,11 +558,16 @@ export class VoiceDirector {
     this.applyTelemetry({ type: 'start', request: r });
     this.played.set(r.line.key, (this.played.get(r.line.key) ?? 0) + 1);
 
-    this.events.emit('ui:subtitle', {
-      speaker: r.speaker,
-      text: r.line.text,
-      ms: Math.round(dur * 1000) + 400,
-    });
+    this.emittingSubtitle = true;
+    try {
+      this.events.emit('ui:subtitle', {
+        speaker: r.speaker,
+        text: r.line.text,
+        ms: Math.round(dur * 1000) + 400,
+      });
+    } finally {
+      this.emittingSubtitle = false;
+    }
 
     s.onended = () => {
       if (this.source === s) {
@@ -519,6 +632,7 @@ export class VoiceDirector {
       lastContext: this.lastContext,
       nowPlaying: this.nowPlaying,
       distinctPlayed: this.played.size,
+      narrativeReserved: this.narrativeReserved,
       bags,
     };
   }

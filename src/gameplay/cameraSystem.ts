@@ -330,6 +330,29 @@ const PHOTO_SPEED = 7.5;
 const PHOTO_FAST = 4.2;
 const PHOTO_SLOW = 0.22;
 const PHOTO_LOOK = 0.0022;
+/** On-foot free-look recenters behind the body over roughly a second. */
+const ON_FOOT_RECENTER_RATE = 3.4;
+
+/**
+ * Ease an on-foot orbit toward the character's follow heading.
+ *
+ * Looking is independent while idle. The movement flag is the explicit seam
+ * that starts the behind-the-body pan, and exponential damping makes the first
+ * frame a partial move rather than a camera snap. This is pure so the exact
+ * contract can be regression-tested without a DOM or physics world.
+ */
+export function movementRecenterYaw(
+  currentYaw: number,
+  targetYaw: number,
+  moving: boolean,
+  dt: number,
+  rate = ON_FOOT_RECENTER_RATE,
+): number {
+  if (!moving || !Number.isFinite(dt) || dt <= 0 || !Number.isFinite(rate) || rate <= 0) {
+    return currentYaw;
+  }
+  return dampAngle(currentYaw, targetYaw, rate, dt);
+}
 
 export class CameraSystem implements System, CameraDirector {
   readonly name = 'camera';
@@ -427,6 +450,11 @@ export class CameraSystem implements System, CameraDirector {
     this.currentPos.copy(ctx.camera.position);
     this.baseNear = ctx.camera.near;
     this.cutNear = this.baseNear;
+    // The player owns the opening spawn heading. Seed the orbit from it so the
+    // first rendered frame looks toward the authored Builders House entrance,
+    // instead of briefly using the zero-yaw default before input arrives.
+    const player = ctx.tryGet(Services.Player) as unknown as { desiredYaw?: number } | undefined;
+    if (player && Number.isFinite(player.desiredYaw)) this.yaw = player.desiredYaw!;
 
     // Never grab the pointer back while a menu is up — the pause screen has to
     // be usable with a visible cursor.
@@ -536,6 +564,13 @@ export class CameraSystem implements System, CameraDirector {
     this.pitch = THREE.MathUtils.clamp(this.pitch + input.axes.lookY, -0.72, 1.05);
 
     const veh = player.inVehicle;
+    if (!veh) {
+      const moving = Math.hypot(input.axes.moveX, input.axes.moveY) > 0.01;
+      const followYaw = (player as unknown as { cameraFollowYaw?: number }).cameraFollowYaw;
+      if (moving && Number.isFinite(followYaw)) {
+        this.yaw = movementRecenterYaw(this.yaw, followYaw!, true, dt);
+      }
+    }
     const rig = this.rigs[this._mode];
 
     let distance = rig.distance;

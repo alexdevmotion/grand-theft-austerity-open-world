@@ -556,6 +556,7 @@ class Vehicle implements VehicleHandle {
 
     let groundedWheels = 0;
     const rearGrip = tuning.gripRear * (1 - tuning.rearGripFade * Math.min(1, speedRatio));
+    const massPerWheel = tuning.mass / tuning.wheels.length;
 
     for (let i = 0; i < tuning.wheels.length; i++) {
       const w = tuning.wheels[i];
@@ -586,9 +587,9 @@ class Vehicle implements VehicleHandle {
       this.wheelCompression[i] = compression;
       const compressionRate = (compression - prev) / dt;
 
-      const springForce = compression * tuning.suspensionStiffness * tuning.mass * 0.25;
-      const damperForce = compressionRate * tuning.suspensionDamping * tuning.mass * 0.25;
-      const suspension = THREE.MathUtils.clamp(springForce + damperForce, 0, tuning.mass * 45);
+      const springForce = compression * tuning.suspensionStiffness * massPerWheel;
+      const damperForce = compressionRate * tuning.suspensionDamping * massPerWheel;
+      const suspension = THREE.MathUtils.clamp(springForce + damperForce, 0, massPerWheel * 45);
 
       const fv = this._tmp3.copy(hit.normal).multiplyScalar(suspension * dt);
       body.applyImpulseAtPoint({ x: fv.x, y: fv.y, z: fv.z }, { x: attach.x, y: attach.y, z: attach.z }, true);
@@ -610,11 +611,11 @@ class Vehicle implements VehicleHandle {
       const longitudinalSpeed = pointVel.dot(wheelFwd);
 
       const gripCoef = w.steered ? tuning.gripFront : rearGrip;
-      const loadFactor = suspension / (tuning.mass * 9.81 * 0.25);
-      let maxLateral = gripCoef * tuning.mass * 0.25 * Math.min(2.2, loadFactor) * dt;
+      const loadFactor = suspension / (massPerWheel * 9.81);
+      let maxLateral = gripCoef * massPerWheel * Math.min(2.2, loadFactor) * dt;
       if (this.handbrakeInput && w.handbraked) maxLateral *= tuning.handbrakeSlide;
-      const lateralImpulse = THREE.MathUtils.clamp(-lateralSpeed * tuning.mass * 0.25, -maxLateral, maxLateral);
-      const slip = Math.abs(lateralSpeed) - Math.abs(lateralImpulse) / (tuning.mass * 0.25);
+      const lateralImpulse = THREE.MathUtils.clamp(-lateralSpeed * massPerWheel, -maxLateral, maxLateral);
+      const slip = Math.abs(lateralSpeed) - Math.abs(lateralImpulse) / massPerWheel;
       this.wheelSlip[i] = Math.max(0, slip);
 
       const lv = _lv.copy(wheelRight).multiplyScalar(lateralImpulse);
@@ -638,7 +639,7 @@ class Vehicle implements VehicleHandle {
         }
       } else if (Math.abs(this.throttle) <= 0.02) {
         // Engine braking — makes it feel weighty the moment you lift.
-        longImpulse = -longitudinalSpeed * tuning.mass * 0.25 * 0.12 * dt;
+        longImpulse = -longitudinalSpeed * massPerWheel * 0.12 * dt;
       }
 
       if (this.handbrakeInput && w.handbraked) {
@@ -647,8 +648,8 @@ class Vehicle implements VehicleHandle {
 
       // Rolling resistance + aero. These are FORCES, so they must be scaled by
       // dt to become impulses; without that a car tops out at walking pace.
-      const rollRes = longitudinalSpeed * tuning.mass * 0.25 * 0.025;
-      const aero = Math.sign(longitudinalSpeed) * longitudinalSpeed * longitudinalSpeed * tuning.mass * 0.25 * 0.0016;
+      const rollRes = longitudinalSpeed * massPerWheel * 0.025;
+      const aero = Math.sign(longitudinalSpeed) * longitudinalSpeed * longitudinalSpeed * massPerWheel * 0.0016;
       longImpulse -= (rollRes + aero) * dt;
 
       const lgv = _lg.copy(wheelFwd).multiplyScalar(longImpulse);
@@ -754,7 +755,12 @@ class Vehicle implements VehicleHandle {
       const av = body.angvel();
       body.setAngvel({ x: 0, y: av.y, z: 0 }, true);
       const lv = body.linvel();
-      if (lv.y > 0) body.setLinvel({ x: lv.x, y: 0, z: lv.z }, true);
+      // Suspension must be able to lift the chassis to its ride height while
+      // the bogies are planted. Once contact is lost, positive lift is a
+      // collision launch and is stopped; while planted it is tightly capped.
+      const planted = groundedWheels >= Math.ceil(tuning.wheels.length / 2);
+      const maxLiftSpeed = planted ? 1 : 0;
+      if (lv.y > maxLiftSpeed) body.setLinvel({ x: lv.x, y: maxLiftSpeed, z: lv.z }, true);
       this.rotation.copy(_railQ);
       this.object.quaternion.copy(_railQ);
       this.upsideTime = 0;

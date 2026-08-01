@@ -23,7 +23,7 @@ import {
   roman,
 } from './session';
 import { QUALITIES, clamp, clamp01, sensLabel, stepQuality, SENS_MAX, SENS_MIN } from './settings';
-import { frontEndGate, sensPct } from './frontEnd';
+import { frontEndGate, sensPct, worldHandoffPolicy } from './frontEnd';
 
 /* ---- boot gate ---------------------------------------------------- */
 
@@ -40,6 +40,11 @@ test('players get the front-end, and can still turn it off', () => {
   expect(frontEndGate('?nomenu', false).on).toBe(false);
   expect(frontEndGate('?menu=0', false).on).toBe(false);
   expect(frontEndGate('?shot=1', false).on).toBe(false);
+});
+
+test('the fading curtain can render the world but cannot start gameplay early', () => {
+  expect(worldHandoffPolicy('under-curtain')).toEqual({ paused: false, inputEnabled: false });
+  expect(worldHandoffPolicy('interactive')).toEqual({ paused: false, inputEnabled: true });
 });
 
 /* ---- loading panels ----------------------------------------------- */
@@ -93,6 +98,7 @@ test('credits name the cast, the tech and the music', () => {
   expect(flat).toContain('Bolojan-Agatinei');
   expect(flat).toContain('Nicușor LAN');
   expect(flat).toContain('three.js');
+  expect(flat).toContain('© OpenStreetMap contributors');
   expect(flat).toContain('Dumitru Fărcaș');
 });
 

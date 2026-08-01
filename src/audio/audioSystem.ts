@@ -41,7 +41,7 @@ import { Radio, STATIONS, STATION_LABELS, type StationId } from './radio';
 import { sirenModeForStars } from './sirenModel';
 import { CLIPS, bucketsFor, FOLK_TITLE } from './clips';
 import type { EngineClass } from './engineModel';
-import { VoiceDirector } from './voiceDirector';
+import { VoiceDirector, activityDialogue } from './voiceDirector';
 import { EMITTER_SPEAKER, StreetVoices } from './streetVoices';
 import { VOICE_CONTEXTS, type VoiceContext } from './clipContexts';
 import { HornVoice, hornBaseHz } from './horn';
@@ -553,26 +553,27 @@ export class AudioSystem implements System, AudioService {
 
     e.on('mission:advance', () => {
       this.playSfx('mission_start', undefined, 0.8);
-      // "Vom trimite în luptă arma noastră cea mai bună: Georgian." — the
-      // evidence courier is the person a mission brief is about.
-      if (!this.say('recorder', 2.5)) this.radio?.say('missionStart', 2.5);
+      // MissionSystem owns the authored conversation for this exact act. A
+      // generic Recorder/podcast line here used to start at the same moment
+      // and overwrite the visible character's subtitle.
     });
     e.on('mission:complete', () => {
       this.playSfx('mission_complete', undefined, 0.85);
-      this.radio?.say('missionComplete', 2.5);
+      // The final objective may still be speaking after the run closes.
     });
     e.on('mission:failed', () => {
       this.playSfx('mission_failed', undefined, 0.85);
-      this.radio?.say('missionFailed', 2.5);
     });
 
-    e.on('activity:started', () => {
+    e.on('activity:started', ({ id }) => {
       this.playSfx('activity_start', undefined, 0.7);
-      this.radio?.say('activityStart', 1.5);
+      const line = activityDialogue(id, 'start');
+      if (line) e.emit('ui:subtitle', line);
     });
-    e.on('activity:finished', ({ score }) => {
+    e.on('activity:finished', ({ id, score }) => {
       this.playSfx(score > 0 ? 'activity_win' : 'mission_failed', undefined, 0.75);
-      this.radio?.say(score > 0 ? 'activityWin' : 'activityLose', 2);
+      const line = activityDialogue(id, score > 0 ? 'success' : 'failure');
+      if (line) e.emit('ui:subtitle', line);
     });
 
     e.on('weather:changed', ({ preset }) => {
@@ -583,12 +584,10 @@ export class AudioSystem implements System, AudioService {
     });
 
     e.on('broadcast:hijacked', () => {
-      // Act 3: the commentator takes the national address apart. "We're
-      // winning too much. We can't take it anymore."
+      // Act 3 already has a timed, authored exchange between Nicușor and Ilie.
+      // Keep the station/static transition, but do not start three unrelated
+      // podcast clips in the 300 ms before that conversation reaches the HUD.
       this.radio?.setStation('enerveaza');
-      this.say('broadcastWin', 5);
-      this.say('georgescu', 4.6);
-      this.radio?.say('broadcast', 4.4);
       this.playSfx('radio_static', undefined, 0.7);
     });
 

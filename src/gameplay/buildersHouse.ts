@@ -289,21 +289,63 @@ export class BuildersHouseSystem implements System, BuildersHouseService {
   };
   /** The init-time probe is provisional; this is the one that is believed. */
   private confirmed = false;
+  private sealGroup!: THREE.Group;
+  private sealColliders: Array<import('@dimforge/rapier3d-compat').Collider> = [];
+  private _sealed = true;
 
   get doorway(): DoorwayReport {
     return this.report;
+  }
+  get sealed(): boolean {
+    return this._sealed;
   }
   get liberated(): boolean {
     return this.ctx?.tryGet(Services.Interiors)?.liberated ?? false;
   }
 
+  seal(): void {
+    this._sealed = true;
+    if (this.sealGroup) this.sealGroup.visible = true;
+    this.ensureSealCollider();
+    this.ctx?.tryGet(Services.Interiors)?.seal();
+  }
+
+  unseal(): void {
+    this._sealed = false;
+    if (this.sealGroup) this.sealGroup.visible = false;
+    const world = this.phys?.world;
+    if (world) {
+      for (const collider of this.sealColliders) world.removeCollider(collider, false);
+    }
+    this.sealColliders.length = 0;
+  }
+
+  private ensureSealCollider(): void {
+    const phys = this.phys;
+    if (!phys?.world || this.sealColliders.length > 0) return;
+    this.sealColliders.push(phys.addStaticBox(
+      new THREE.Vector3(2.35, 1.5, 0.12),
+      new THREE.Vector3(DOORWAY.x, 1.6, TOWER_SOUTH_Z - 0.72),
+      undefined,
+      GROUP.prop,
+    ));
+  }
+
   liberate(): void {
+    this.unseal();
     this.ctx?.tryGet(Services.Interiors)?.liberate();
   }
 
   init(ctx: GameContext): void {
     this.ctx = ctx;
     ctx.provide(Services.BuildersHouse, this);
+
+    // The city owns the permanent tower; gameplay owns the temporary Ministry
+    // closure because Act IV removes it. Keeping this as a real scene group,
+    // rather than baking it into the city's merged buffers, lets the breach
+    // visibly change the same entrance the opening shot establishes.
+    this.sealGroup = createSealedEntrance();
+    ctx.scene.add(this.sealGroup);
 
     const phys = ctx.tryGet(Services.Physics) ?? null;
     this.phys = phys;
@@ -313,6 +355,12 @@ export class BuildersHouseSystem implements System, BuildersHouseService {
       this.assert();
       return;
     }
+
+    // The crossed planks are a real closure, not scenery the player can walk
+    // through. PROP membership keeps this temporary collider out of the
+    // structural doorway probe while still blocking players and vehicles; the
+    // Act IV barricade objective removes it through unseal().
+    this.ensureSealCollider();
 
     // Look, but do not operate. See `check()`.
     const probe = probeDoorway(phys);
@@ -434,8 +482,183 @@ export class BuildersHouseSystem implements System, BuildersHouseService {
   }
 
   dispose(): void {
-    /* nothing owned: the room belongs to the interiors system */
+    this.sealGroup?.removeFromParent();
+    const geometries = new Set<THREE.BufferGeometry>();
+    const materials = new Set<THREE.Material>();
+    const textures = new Set<THREE.Texture>();
+    this.sealGroup?.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (mesh.geometry) geometries.add(mesh.geometry);
+      const mats = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : [];
+      for (const mat of mats) {
+        const map = (mat as THREE.MeshStandardMaterial).map;
+        if (map) textures.add(map);
+        materials.add(mat);
+      }
+    });
+    for (const texture of textures) texture.dispose();
+    for (const material of materials) material.dispose();
+    for (const geometry of geometries) geometry.dispose();
+    // Physics is disposed before this system, so its world owns collider
+    // cleanup during engine teardown. Clear only our now-stale handles.
+    this.sealColliders.length = 0;
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* The visible opening-state closure                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Recreate the closure language from the menu/reference frame at the actual
+ * playable door: crowd-control rails, striped Ministry tape, crossed timber,
+ * an evacuation seal and a warning beacon. The system adds its temporary
+ * gameplay collider separately, outside the structural doorway probe, so this
+ * pure visual builder stays deterministic for tests.
+ */
+export function createSealedEntrance(): THREE.Group {
+  const root = new THREE.Group();
+  root.name = 'builders-house:ministry-seal';
+  root.userData.storyState = 'sealed';
+
+  const metal = new THREE.MeshStandardMaterial({
+    color: 0x4a4752, roughness: 0.64, metalness: 0.72,
+  });
+  const foot = new THREE.MeshStandardMaterial({
+    color: 0x25202e, roughness: 0.78, metalness: 0.52,
+  });
+  const wood = new THREE.MeshStandardMaterial({
+    color: 0x765035, roughness: 0.9, metalness: 0.02,
+  });
+  const red = new THREE.MeshStandardMaterial({
+    color: 0xc51f35, roughness: 0.5, metalness: 0.02,
+  });
+  const white = new THREE.MeshStandardMaterial({
+    color: 0xe8dfd4, roughness: 0.86, metalness: 0.01,
+  });
+  const paper = ministrySealMaterial();
+  const beacon = new THREE.MeshStandardMaterial({
+    color: 0xff304f, emissive: 0xff1539, emissiveIntensity: 3.2,
+    roughness: 0.28, metalness: 0.15,
+  });
+
+  const box = (
+    name: string,
+    x: number, y: number, z: number,
+    sx: number, sy: number, sz: number,
+    material: THREE.Material,
+    rz = 0,
+  ): THREE.Mesh => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), material);
+    m.name = name;
+    m.position.set(x, y, z);
+    m.rotation.z = rz;
+    m.castShadow = true;
+    m.receiveShadow = true;
+    root.add(m);
+    return m;
+  };
+
+  // Two staggered barriers turn the steps into a visible checkpoint rather
+  // than one thin line that disappears edge-on from the starting camera.
+  for (const [row, z] of [0, 1].map((row) => [row, TOWER_SOUTH_Z - 4.15 - row * 1.35] as const)) {
+    const offset = row === 0 ? -2.7 : 2.7;
+    for (const side of [-1, 1]) {
+      const cx = DOORWAY.x + offset + side * 2.25;
+      box('seal:barrier-rail', cx, 1.18, z, 4.4, 0.1, 0.12, metal);
+      box('seal:barrier-rail', cx, 0.72, z, 4.4, 0.08, 0.1, metal);
+      for (const dx of [-2.0, 0, 2.0]) {
+        box('seal:barrier-post', cx + dx, 0.78, z, 0.09, 1.5, 0.09, metal);
+      }
+      box('seal:barrier-foot', cx - 1.75, 0.08, z, 0.7, 0.1, 0.5, foot);
+      box('seal:barrier-foot', cx + 1.75, 0.08, z, 0.7, 0.1, 0.5, foot);
+    }
+  }
+
+  // Cross-brace the doorway itself. These read as timber even when the sign is
+  // occluded by Ilie or an NPC.
+  const doorZ = TOWER_SOUTH_Z - 0.72;
+  box('seal:door-plank', DOORWAY.x, 1.55, doorZ, 4.5, 0.28, 0.16, wood, 0.46);
+  box('seal:door-plank', DOORWAY.x, 1.55, doorZ - 0.03, 4.5, 0.28, 0.16, wood, -0.46);
+  box('seal:door-plank', DOORWAY.x, 2.7, doorZ, 3.3, 0.22, 0.15, wood, 0.07);
+
+  // Red-and-white tape is layered as alternating short segments so it remains
+  // striped without a texture and catches the low orange sun as geometry.
+  const tape = (z: number, y: number, width: number, phase = 0): void => {
+    const n = Math.ceil(width / 0.58);
+    for (let i = 0; i < n; i++) {
+      const sx = Math.min(0.54, width - i * 0.58);
+      if (sx <= 0) break;
+      const mat = (i + phase) % 2 === 0 ? red : white;
+      box('seal:hazard-tape', DOORWAY.x - width / 2 + i * 0.58 + sx / 2, y, z, sx, 0.1, 0.035, mat);
+    }
+  };
+  tape(TOWER_SOUTH_Z - 0.9, 1.95, 5.4);
+  tape(TOWER_SOUTH_Z - 4.22, 1.42, 13.8, 1);
+
+  const notice = box(
+    'seal:evacuation-order', DOORWAY.x, 1.92, doorZ - 0.14,
+    1.45, 1.85, 0.06, paper,
+  );
+  notice.userData.copy = 'MINISTERUL DE-ACCELERĂRII NAȚIONALE · IMOBIL SIGILAT · ORDIN DE EVACUARE';
+
+  // A small emergency lamp makes the seal legible in the night preset too.
+  box('seal:warning-beacon', DOORWAY.x, 3.55, doorZ - 0.2, 0.34, 0.22, 0.22, beacon);
+
+  return root;
+}
+
+function ministrySealMaterial(): THREE.MeshStandardMaterial {
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0xe8dfd4,
+    roughness: 0.94,
+    metalness: 0,
+    side: THREE.DoubleSide,
+  });
+  if (typeof document === 'undefined') return mat;
+
+  const canvas = document.createElement('canvas');
+  if (typeof canvas.getContext !== 'function') return mat;
+  canvas.width = 512;
+  canvas.height = 640;
+  const c = canvas.getContext('2d');
+  if (!c) return mat;
+  c.fillStyle = '#e8dfd4';
+  c.fillRect(0, 0, canvas.width, canvas.height);
+  c.fillStyle = '#b71931';
+  c.fillRect(0, 0, canvas.width, 112);
+  c.fillStyle = '#fff7eb';
+  c.font = '700 27px sans-serif';
+  c.textAlign = 'center';
+  c.fillText('MINISTERUL', 256, 48);
+  c.fillText('DE-ACCELERĂRII NAȚIONALE', 256, 84);
+  c.fillStyle = '#211625';
+  c.font = '900 50px sans-serif';
+  c.fillText('IMOBIL', 256, 230);
+  c.fillText('SIGILAT', 256, 292);
+  c.strokeStyle = '#b71931';
+  c.lineWidth = 12;
+  c.strokeRect(38, 145, 436, 198);
+  c.font = '700 26px sans-serif';
+  c.fillText('ORDIN DE EVACUARE', 256, 405);
+  c.font = '22px sans-serif';
+  c.fillText('ACCESUL INTERZIS', 256, 452);
+  c.fillText('PRIN DECIZIE PREZIDENȚIALĂ', 256, 490);
+  c.strokeStyle = '#34233a';
+  c.lineWidth = 3;
+  c.beginPath();
+  c.moveTo(90, 560);
+  c.lineTo(422, 560);
+  c.stroke();
+  c.font = 'italic 19px sans-serif';
+  c.fillText('semnat astăzi, executat ieri', 256, 600);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
+  mat.map = texture;
+  mat.color.set(0xffffff);
+  return mat;
 }
 
 /** True when `p` is inside the lobby volume. */

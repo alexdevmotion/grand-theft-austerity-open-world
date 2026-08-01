@@ -54,6 +54,8 @@ import { fitBar, fitBlockHall, fitShop } from './ambient';
 export interface InteriorsService {
   /** Act IV: lights, tricolour, the room the afterparty happens in. */
   liberate(): void;
+  /** Restore the pre-finale Builders House interior for an earlier save. */
+  seal(): void;
   /** Act III: every screen in the studio flips to the builders' broadcast. */
   hijack(): void;
   /** True when (x, z) is inside a named interior's clear volume. */
@@ -398,6 +400,12 @@ export class InteriorSystem implements System, InteriorsService {
     if (this._liberated) return;
     this._liberated = true;
     this.setState('buildersLobby', 'liberated');
+  }
+
+  seal(): void {
+    if (!this._liberated) return;
+    this._liberated = false;
+    this.setState('buildersLobby', 'sealed');
   }
 
   hijack(): void {

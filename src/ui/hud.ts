@@ -102,6 +102,12 @@ export class HudSystem implements System, HudService {
     // HUD builds itself here, at 420, long after that — so it has to check
     // rather than assume it is allowed on screen.
     if (ctx.time.paused) this.setVisible(false);
+
+    // Missions initialise before the HUD and may already have published Act I.
+    // Adopt that first route here so automation/no-menu starts are guided too;
+    // normal player starts re-affirm the same waypoint after the title curtain.
+    const offered = ctx.tryGet(Services.Missions)?.offered[0];
+    if (offered) this.setWaypoint(offered.position);
   }
 
   private _visible = true;
@@ -130,12 +136,11 @@ export class HudSystem implements System, HudService {
     this.toastTimer = window.setTimeout(() => (this.toastEl.style.opacity = '0'), ms);
   }
 
-  private subTimer = 0;
+  private subRemaining = 0;
   subtitle(speaker: string, text: string, ms = 3800): void {
     this.subtitleEl.innerHTML = speaker ? `<b>${speaker}:</b> ${text}` : text;
     this.subtitleEl.style.opacity = '1';
-    window.clearTimeout(this.subTimer);
-    this.subTimer = window.setTimeout(() => (this.subtitleEl.style.opacity = '0'), ms);
+    this.subRemaining = Math.max(0, ms / 1000);
   }
 
   private cardTimer = 0;
@@ -181,6 +186,9 @@ export class HudSystem implements System, HudService {
     // The HUD has no business on screen over a menu, and every menu in the game
     // stops the world to show itself. One flag, no cross-system reference.
     const hidden = this.ctx.time.paused || !this._visible;
+    const previousSub = this.subRemaining;
+    this.subRemaining = pauseAwareCountdown(this.subRemaining, dt, hidden);
+    if (previousSub > 0 && this.subRemaining === 0) this.subtitleEl.style.opacity = '0';
     this.root.style.display = hidden ? 'none' : '';
     if (hidden) return;
 
@@ -211,7 +219,17 @@ export class HudSystem implements System, HudService {
       return;
     }
     if (!missionHud.active) {
-      this.objEl.style.display = 'none';
+      const offer = this.ctx.tryGet(Services.Missions)?.offered[0];
+      if (!offer) {
+        this.objEl.style.display = 'none';
+        return;
+      }
+      this.objEl.style.display = '';
+      this.objEl.className = 'gta-obj offered';
+      this.objEl.innerHTML =
+        '<h3>POVESTEA CONTINUĂ</h3>' +
+        `<p>${offer.title}</p>` +
+        '<small>Urmează marcajul auriu și apasă E.</small>';
       return;
     }
     this.objEl.style.display = '';
@@ -324,6 +342,12 @@ export class HudSystem implements System, HudService {
 function fmtTime(s: number): string {
   const t = Math.max(0, Math.ceil(s));
   return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+}
+
+/** Presentation time follows the game clock, so pausing cannot eat dialogue. */
+export function pauseAwareCountdown(remaining: number, dt: number, paused: boolean): number {
+  if (paused || !Number.isFinite(dt) || dt <= 0) return Math.max(0, remaining);
+  return Math.max(0, remaining - dt);
 }
 
 /* ------------------------------------------------------------------ */

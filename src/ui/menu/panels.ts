@@ -100,7 +100,8 @@ export const CREDITS: readonly CreditBlock[] = [
   {
     role: 'ORAȘUL',
     lines: [
-      'București, generat procedural din semințe',
+      'București, generat procedural peste date stradale reale',
+      '© OpenStreetMap contributors · ODbL 1.0',
       'Centrul Vechi · Bulevard · Corporate · Guvern',
       'Cartier · Industrial · Parc',
     ],

@@ -417,7 +417,14 @@ export class OsmCity {
   private static readonly LEVEL_CELL = 120;
 
   stats = {
-    ways: 0, nodes: 0, edges: 0, footprints: 0, parks: 0, dropped: 0, roadKm: 0, generalised: 0,
+    ways: 0, nodes: 0, edges: 0, footprints: 0, parks: 0, dropped: 0,
+    roadKm: 0, generalised: 0,
+    /** Survey outlines whose sub-decimetre noise was removed before extrusion. */
+    sanitised: 0,
+    /** Footprints backed off from a compressed carriageway/square instead of intersecting it. */
+    clearanceAdjusted: 0,
+    /** Clear footprints moved a few metres into their block to preserve a named street wall. */
+    clearanceShifted: 0,
   };
 
   /** True where the survey describes the city, so the grid must stand aside. */
@@ -880,28 +887,83 @@ function squaresFromRoads(city: OsmCity, roads: RawRoad[]): void {
 
 function buildFootprints(city: OsmCity, buildings: RawBuilding[]): void {
   for (const b of buildings) {
+    const sourceVertices = Math.max(0, b.ring.length - 1);
     let ring = toRing(b.ring);
     if (ring.length < 3) continue;
+    if (ring.length < sourceVertices) city.stats.sanitised++;
     const bounds = ringBounds(ring);
     if (!overlapsWorld(bounds)) continue;
 
-    // Grow about the centroid to recover human proportions after the map
-    // compression, backing off in steps if the growth would eat the street.
-    const c = centroid(ring);
-    let grown = ring;
-    for (const g of [OSM_FIT.footprintGrow, 1.15, 1.0]) {
-      grown = g === 1 ? ring : ring.map((v) => ({
+    /*
+     * CLEARANCE IS A POLYGON TEST, NOT A VERTEX TEST.
+     *
+     * The old pass asked only whether one of the footprint's VERTICES occupied
+     * a road cell. A long apartment slab could therefore have every corner on
+     * dry land while an entire edge crossed the authored boulevard between
+     * them. In the shipped survey that left 8,576 m2 of building mass stamped
+     * into visible carriageway, including several named central buildings. Its
+     * OBB collider then became the "invisible thing" a car hit while following
+     * what was visibly road.
+     *
+     * Try the intended 18% recovery first, then progressively return toward the
+     * surveyed outline and, only where map compression makes it unavoidable,
+     * modestly below it. Edge samples catch a narrow crossing; cell-centre
+     * samples catch a road wholly enclosed by a large concave footprint. If no
+     * honest outline fits, the footprint is omitted and the street-aware infill
+     * pass gets the plot instead. A generic building behind the kerb is better
+     * than a famous building standing in the carriageway.
+     */
+    const c = polygonCentroid(ring);
+    const away = nearestMaskDirection(city, c.x, c.z, Cell.road);
+    let clear: Vec2[] | null = null;
+    let clearScale = 0;
+    let wasShifted = false;
+    for (const g of [OSM_FIT.footprintGrow, 1.12, 1.06, 1.0, 0.94, 0.88, 0.82, 0.76, 0.68, 0.60]) {
+      const candidate = g === 1 ? ring : ring.map((v) => ({
         x: c.x + (v.x - c.x) * g,
         z: c.z + (v.z - c.z) * g,
       }));
-      if (!ringHitsRoad(city, grown)) break;
+      if (!ringHitsMask(city, candidate, Cell.road | Cell.reserved | Cell.square)) {
+        clear = candidate;
+        clearScale = g;
+        break;
+      }
+      /*
+       * At 60% map scale a true-width carriageway is proportionally 67% wider
+       * than the block around it. Moving a frontage 2-12 m farther into that
+       * block is the cartographic equivalent of displacing a label off a line:
+       * the street relationship survives and named buildings such as Hotel
+       * Ambasador do not disappear merely because their surveyed wall and the
+       * widened gameplay lane share a cell. Never translate across another
+       * footprint; `Cell.built` makes an occupied block authoritative.
+       */
+      if (away && g <= 1.0) {
+        for (let shift = 2; shift <= 12; shift += 2) {
+          const moved = candidate.map((v) => ({
+            x: v.x + away.x * shift,
+            z: v.z + away.z * shift,
+          }));
+          if (!ringHitsMask(
+            city, moved, Cell.road | Cell.reserved | Cell.square | Cell.built,
+          )) {
+            clear = moved;
+            clearScale = g;
+            wasShifted = true;
+            break;
+          }
+        }
+        if (clear) break;
+      }
     }
-    ring = grown;
+    if (!clear) { city.stats.dropped++; continue; }
+    ring = clear;
+    if (clearScale < OSM_FIT.footprintGrow) city.stats.clearanceAdjusted++;
+    if (wasShifted) city.stats.clearanceShifted++;
 
     const area = Math.abs(signedArea(ring));
     if (area < 34) { city.stats.dropped++; continue; }
 
-    const cc = centroid(ring);
+    const cc = polygonCentroid(ring);
     if (!inWorld(cc.x, cc.z)) { city.stats.dropped++; continue; }
     if (isReserved(city, cc.x, cc.z)) { city.stats.dropped++; continue; }
     if (city.mask.has(cc.x, cc.z, Cell.road)) { city.stats.dropped++; continue; }
@@ -956,9 +1018,57 @@ function isPlaceName(n: string, area: number, kind: string): boolean {
   return area > 1600;
 }
 
-function ringHitsRoad(city: OsmCity, ring: ReadonlyArray<Vec2>): boolean {
-  for (const v of ring) if (city.mask.has(v.x, v.z, Cell.road)) return true;
+/**
+ * True when an outline touches occupied cells along an edge OR through its
+ * interior. Sampling at half the occupancy-cell pitch makes this red-capable
+ * for even a one-cell sliver without turning footprint import into a raster
+ * operation at render resolution.
+ */
+function ringHitsMask(city: OsmCity, ring: ReadonlyArray<Vec2>, bits: number): boolean {
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i];
+    const b = ring[(i + 1) % ring.length];
+    const len = Math.hypot(b.x - a.x, b.z - a.z);
+    const steps = Math.max(1, Math.ceil(len / (CELL * 0.5)));
+    for (let k = 0; k <= steps; k++) {
+      const t = k / steps;
+      if (city.mask.has(a.x + (b.x - a.x) * t, a.z + (b.z - a.z) * t, bits)) return true;
+    }
+  }
+
+  const b = ringBounds(ring);
+  const x0 = Math.floor(b.x0 / CELL) * CELL + CELL * 0.5;
+  const z0 = Math.floor(b.z0 / CELL) * CELL + CELL * 0.5;
+  for (let z = z0; z <= b.z1; z += CELL) {
+    for (let x = x0; x <= b.x1; x += CELL) {
+      if (pointInRing(ring, x, z) && city.mask.has(x, z, bits)) return true;
+    }
+  }
   return false;
+}
+
+/** Direction away from the nearest occupied cell, or toward clear land when already inside one. */
+function nearestMaskDirection(
+  city: OsmCity, cx: number, cz: number, bits: number,
+): Vec2 | null {
+  const startsOccupied = city.mask.has(cx, cz, bits);
+  let best = Infinity;
+  let dx = 0;
+  let dz = 0;
+  const reach = 48;
+  for (let z = cz - reach; z <= cz + reach; z += CELL) {
+    for (let x = cx - reach; x <= cx + reach; x += CELL) {
+      const occupied = city.mask.has(x, z, bits);
+      if (startsOccupied ? occupied : !occupied) continue;
+      const ex = startsOccupied ? x - cx : cx - x;
+      const ez = startsOccupied ? z - cz : cz - z;
+      const d2 = ex * ex + ez * ez;
+      if (d2 > 1e-6 && d2 < best) { best = d2; dx = ex; dz = ez; }
+    }
+  }
+  if (!Number.isFinite(best)) return null;
+  const d = Math.hypot(dx, dz);
+  return d > 1e-5 ? { x: dx / d, z: dz / d } : null;
 }
 
 /**
@@ -1017,18 +1127,131 @@ function buildTrams(city: OsmCity, trams: Array<{ path: Array<[number, number]> 
 /* ------------------------------------------------------------------ */
 
 function toRing(raw: Array<[number, number]>): Vec2[] {
-  const out: Vec2[] = [];
-  for (const p of raw) out.push({ x: toWorldX(p[0]), z: toWorldZ(p[1]) });
-  // OSM closes its rings; the builders do not want the duplicate.
-  while (out.length > 1) {
-    const a = out[0];
-    const b = out[out.length - 1];
-    if (Math.hypot(a.x - b.x, a.z - b.z) < 0.05) out.pop();
-    else break;
+  return sanitiseRing(raw.map((p) => ({ x: toWorldX(p[0]), z: toWorldZ(p[1]) })));
+}
+
+/** Distance from p to the finite segment a-b. */
+function segmentDistance(p: Vec2, a: Vec2, b: Vec2): number {
+  const dx = b.x - a.x;
+  const dz = b.z - a.z;
+  const l2 = dx * dx + dz * dz;
+  if (l2 < 1e-9) return Math.hypot(p.x - a.x, p.z - a.z);
+  const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.z - a.z) * dz) / l2));
+  return Math.hypot(p.x - (a.x + dx * t), p.z - (a.z + dz * t));
+}
+
+/**
+ * Remove survey noise that cannot survive the game's 60% map fit.
+ *
+ * Several ornate OSM outlines contain centimetre-scale consecutive segments
+ * (Stavropoleos arrived with 209 vertices, 112 of them under 5 cm apart after
+ * projection). Those edges are below a pixel before the player is even across
+ * the street, but every one becomes a full-height facade quad and participates
+ * in the parapet offset. The result is zero-area walls, crossed cornice bands
+ * and the flashing building spikes reported as geometry artifacts.
+ *
+ * A 28 cm spacing floor plus an 8 cm collinearity tolerance preserves doors,
+ * apses and courtyard notches while discarding topology the renderer cannot
+ * resolve. If simplification somehow changes a simple ring into a crossing
+ * one, the merely de-duplicated source wins.
+ */
+export function sanitiseRing(input: ReadonlyArray<Vec2>): Vec2[] {
+  const finite = input.filter((p) => Number.isFinite(p.x) && Number.isFinite(p.z));
+  while (finite.length > 1
+    && Math.hypot(finite[0].x - finite[finite.length - 1].x, finite[0].z - finite[finite.length - 1].z) < 0.05) {
+    finite.pop();
   }
-  // Normalise to the clockwise-from-above winding the builders assume.
+  if (finite.length < 3) return [];
+
+  const dedup: Vec2[] = [];
+  for (const p of finite) {
+    const last = dedup[dedup.length - 1];
+    if (!last || Math.hypot(p.x - last.x, p.z - last.z) >= 0.28) dedup.push({ x: p.x, z: p.z });
+  }
+  if (dedup.length > 3
+    && Math.hypot(dedup[0].x - dedup[dedup.length - 1].x, dedup[0].z - dedup[dedup.length - 1].z) < 0.28) {
+    dedup.pop();
+  }
+
+  let out = dedup;
+  for (let pass = 0; pass < 4 && out.length > 3; pass++) {
+    let changed = false;
+    const next: Vec2[] = [];
+    for (let i = 0; i < out.length; i++) {
+      const prev = out[(i - 1 + out.length) % out.length];
+      const cur = out[i];
+      const after = out[(i + 1) % out.length];
+      const e0 = Math.hypot(cur.x - prev.x, cur.z - prev.z);
+      const e1 = Math.hypot(after.x - cur.x, after.z - cur.z);
+      const forward = (cur.x - prev.x) * (after.x - cur.x) + (cur.z - prev.z) * (after.z - cur.z);
+      const canDrop = next.length + (out.length - i - 1) >= 3;
+      if (canDrop
+        && (Math.min(e0, e1) < 0.28 || (forward >= 0 && segmentDistance(cur, prev, after) < 0.08))) {
+        changed = true;
+        continue;
+      }
+      next.push(cur);
+    }
+    if (next.length < 3) break;
+    out = next;
+    if (!changed) break;
+  }
+
+  if (out.length < 3 || !isSimpleRing(out)) out = dedup.map((p) => ({ x: p.x, z: p.z }));
   if (signedArea(out) > 0) out.reverse();
   return out;
+}
+
+function orient(a: Vec2, b: Vec2, c: Vec2): number {
+  return (b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x);
+}
+
+function onSegment(a: Vec2, b: Vec2, p: Vec2): boolean {
+  return p.x >= Math.min(a.x, b.x) - 1e-7 && p.x <= Math.max(a.x, b.x) + 1e-7
+    && p.z >= Math.min(a.z, b.z) - 1e-7 && p.z <= Math.max(a.z, b.z) + 1e-7;
+}
+
+function segmentsCross(a: Vec2, b: Vec2, c: Vec2, d: Vec2): boolean {
+  const a0 = orient(a, b, c);
+  const a1 = orient(a, b, d);
+  const b0 = orient(c, d, a);
+  const b1 = orient(c, d, b);
+  if (((a0 > 1e-7 && a1 < -1e-7) || (a0 < -1e-7 && a1 > 1e-7))
+    && ((b0 > 1e-7 && b1 < -1e-7) || (b0 < -1e-7 && b1 > 1e-7))) return true;
+  return (Math.abs(a0) <= 1e-7 && onSegment(a, b, c))
+    || (Math.abs(a1) <= 1e-7 && onSegment(a, b, d))
+    || (Math.abs(b0) <= 1e-7 && onSegment(c, d, a))
+    || (Math.abs(b1) <= 1e-7 && onSegment(c, d, b));
+}
+
+/** True for a non-self-touching polygon ring. Exported for geometry probes. */
+export function isSimpleRing(ring: ReadonlyArray<Vec2>): boolean {
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i];
+    const b = ring[(i + 1) % ring.length];
+    for (let j = i + 1; j < ring.length; j++) {
+      if (j === i || j === (i + 1) % ring.length || i === (j + 1) % ring.length) continue;
+      if (segmentsCross(a, b, ring[j], ring[(j + 1) % ring.length])) return false;
+    }
+  }
+  return true;
+}
+
+/** Area-weighted centre for a polygon; unlike the vertex mean it is not biased by ornate edges. */
+export function polygonCentroid(ring: ReadonlyArray<Vec2>): Vec2 {
+  let twiceArea = 0;
+  let x = 0;
+  let z = 0;
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i];
+    const b = ring[(i + 1) % ring.length];
+    const cross = a.x * b.z - b.x * a.z;
+    twiceArea += cross;
+    x += (a.x + b.x) * cross;
+    z += (a.z + b.z) * cross;
+  }
+  if (Math.abs(twiceArea) < 1e-7) return centroid(ring);
+  return { x: x / (3 * twiceArea), z: z / (3 * twiceArea) };
 }
 
 export function centroid(ring: ReadonlyArray<Vec2>): Vec2 {

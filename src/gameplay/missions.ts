@@ -42,6 +42,7 @@ import {
   nextMission,
   type MissionDef,
   type ObjectiveDef,
+  type Say,
   type Vec3Lite,
 } from './missionState';
 import { missionHud, resetMissionHud } from './hudState';
@@ -51,12 +52,66 @@ import type { CameraDirector, CinematicShot } from './cameraSystem';
 
 const GIVER_ID = 'story:giver';
 const OBJ_ID = 'story:objective';
+const OPENING_TITLE = 'PROLOG — CASA SUB SIGILIU';
+const OPENING_BRIEF =
+  'Georgescu a închis Casa Constructorilor. Ministerul confiscă ultimul server. ' +
+  'Vorbește cu constructorii de la intrare.';
 
-interface PendingLine {
+const FORECOURT_BUILDERS: ReadonlyArray<readonly [number, number, number]> = [
+  [-46, 20, 0], [-51.5, 22.5, 0.5], [-40.5, 22.8, -0.5],
+];
+const LOBBY_BUILDERS: ReadonlyArray<readonly [number, number, number]> = [
+  [LOBBY.cx - 9.5, LOBBY.cz - 3.0, 0.9],
+  [LOBBY.cx - 8.0, LOBBY.cz + 3.4, 1.5],
+  [LOBBY.cx - 2.0, LOBBY.cz + 6.2, 3.0],
+  [LOBBY.cx + 3.0, LOBBY.cz - 5.2, 2.2],
+  [LOBBY.cx + 8.5, LOBBY.cz + 0.5, 4.3],
+  [LOBBY.cx + 6.5, LOBBY.cz + 5.6, 3.6],
+  [LOBBY.cx - 5.0, LOBBY.cz - 6.4, 0.2],
+];
+
+export interface PendingLine {
   at: number;
   speaker: string;
   text: string;
   ms: number;
+}
+
+/** Pure scheduling seam for authored subtitles; used by the runtime and tests. */
+export function appendDialogue(
+  existing: readonly PendingLine[],
+  clock: number,
+  say: readonly Say[],
+  busyUntil = 0,
+): PendingLine[] {
+  if (say.length === 0) return [...existing];
+  // `existing` contains only lines not yet emitted. `busyUntil` retains the
+  // reservation of the line currently visible on the HUD after it was shifted
+  // from that queue, preventing the next interaction from overwriting it.
+  let base = existing.length === 0 ? busyUntil : Math.max(clock, busyUntil);
+  for (const line of existing) {
+    base = Math.max(base, line.at + line.ms / 1000 + 0.16);
+  }
+  return [
+    ...existing,
+    ...say.map((s) => ({
+      at: base + (s.delayMs ?? 0) / 1000,
+      speaker: s.speaker,
+      text: s.text,
+      ms: s.ms ?? 4000,
+    })),
+  ].sort((a, b) => a.at - b.at);
+}
+
+/** Reconcile the persistent finale beat without replaying its camera/audio. */
+export function restoreFinaleState(
+  completed: ReadonlySet<string>,
+  house: Pick<import('../core/services').BuildersHouseService, 'seal' | 'liberate'> | undefined,
+): boolean {
+  const liberated = completed.has('act4_giftshop');
+  if (liberated) house?.liberate();
+  else house?.seal();
+  return liberated;
 }
 
 const _v = new THREE.Vector3();
@@ -74,6 +129,7 @@ export class MissionSystem implements System, MissionService {
   private run: MissionRun | null = null;
   private lines: PendingLine[] = [];
   private lineClock = 0;
+  private lineBusyUntil = 0;
   private failBanner = 0;
   private lastFailedId: string | null = null;
 
@@ -125,6 +181,21 @@ export class MissionSystem implements System, MissionService {
     this.placeCast();
     this.offerNext();
 
+    // MenuSystem emits only after the curtain has fully cleared. Showing this
+    // during boot used to put the story card underneath the title overlay,
+    // leaving the playable opening with no premise or direction at all.
+    ctx.events.on('game:started', ({ mode }) => {
+      this.routeToOffer();
+      if (mode !== 'new' || this._current || this._completed.size > 0) return;
+      this.hud()?.missionCard(OPENING_TITLE, OPENING_BRIEF);
+      this.enqueueDialogue([{
+        speaker: 'ȘTIRI',
+        text: 'Președintele Georgescu a ordonat evacuarea Casei Constructorilor. Ministerul a sigilat intrarea în această dimineață.',
+        delayMs: 180,
+        ms: 6800,
+      }]);
+    });
+
     ctx.events.on('player:died', () => {
       if (this.run?.isRunning && (this.run.def.failOnDeath ?? true)) this.failRun('ai murit');
     });
@@ -148,10 +219,7 @@ export class MissionSystem implements System, MissionService {
     });
 
     // Builders waiting outside their own front door.
-    const forecourt: Array<[number, number, number]> = [
-      [-46, 20, 0], [-51.5, 22.5, 0.5], [-40.5, 22.8, -0.5],
-    ];
-    forecourt.forEach(([x, z, yaw], i) => {
+    FORECOURT_BUILDERS.forEach(([x, z, yaw], i) => {
       this.cast.add({ id: `builder_out${i}`, name: 'Constructor', role: 'builder', x, z, yaw, parties: true });
     });
 
@@ -168,16 +236,7 @@ export class MissionSystem implements System, MissionService {
      * middle of the floor empty for the party to fill. `FINALE_RING` is where
      * they go when the lights come on.
      */
-    const inside: Array<[number, number, number]> = [
-      [LOBBY.cx - 9.5, LOBBY.cz - 3.0, 0.9],
-      [LOBBY.cx - 8.0, LOBBY.cz + 3.4, 1.5],
-      [LOBBY.cx - 2.0, LOBBY.cz + 6.2, 3.0],
-      [LOBBY.cx + 3.0, LOBBY.cz - 5.2, 2.2],
-      [LOBBY.cx + 8.5, LOBBY.cz + 0.5, 4.3],
-      [LOBBY.cx + 6.5, LOBBY.cz + 5.6, 3.6],
-      [LOBBY.cx - 5.0, LOBBY.cz - 6.4, 0.2],
-    ];
-    inside.forEach(([x, z, yaw], i) => {
+    LOBBY_BUILDERS.forEach(([x, z, yaw], i) => {
       this.cast.add({ id: `builder_in${i}`, name: 'Constructor', role: 'builder', x, z, yaw, parties: true });
     });
   }
@@ -201,12 +260,17 @@ export class MissionSystem implements System, MissionService {
       this.toast(`Mai întâi: ${CAMPAIGN_BY_ID.get(def.requires)?.title ?? def.requires}`, 'bad');
       return;
     }
-    this.clearMarkers();
+    // Starting the act must not erase the prologue/news line the player just
+    // received. New objective dialogue appends behind that active reservation;
+    // explicit abandon/fail/restore/restart paths clear stale dialogue first.
+    this.clearMarkers(false);
     this.run = new MissionRun(def);
     this._current = def.id;
     this._title = def.title;
     this.failBanner = 0;
     missionHud.failed = '';
+
+    if (def.id === 'act4_giftshop') this.resetBuildersHouseOpening();
 
     this.hud()?.missionCard(`ACTUL ${romanNumeral(def.act)} — ${def.title}`, def.brief);
     this.ctx.events.emit('ui:missionCard', { title: def.title, subtitle: def.brief });
@@ -226,7 +290,8 @@ export class MissionSystem implements System, MissionService {
     this.run = null;
     this._current = null;
     this._title = '';
-    this.clearMarkers();
+    if (id === 'act4_giftshop') this.resetBuildersHouseOpening();
+    this.clearMarkers(true);
     resetMissionHud();
     this.ctx.events.emit('mission:failed', { id, reason: 'abandoned' });
     this.toast('Misiune abandonată', 'bad');
@@ -247,11 +312,21 @@ export class MissionSystem implements System, MissionService {
     this._title = '';
     this.lastFailedId = null;
     this.failBanner = 0;
-    this.clearMarkers();
+    this.clearMarkers(true);
     this.cancelFinalePan();
     resetMissionHud();
 
     this._completed = new Set(completed.filter((id) => CAMPAIGN_BY_ID.has(id)));
+    this.partyOn = restoreFinaleState(
+      this._completed,
+      this.ctx.tryGet(Services.BuildersHouse),
+    );
+    if (this.partyOn) this.stageFinaleCast();
+    else this.resetBuilderCast();
+    this.cast.setParty(this.partyOn);
+    // Restore the persistent bed, but none of the finale's one-shot camera,
+    // shake, radio or subtitle presentation.
+    this.ctx.tryGet(Services.Audio)?.setMusic(this.partyOn ? 'afterparty' : null, 0.8);
 
     if (currentId && CAMPAIGN_BY_ID.has(currentId)) {
       // A saved act must not be blocked by its own `requires` gate: the save
@@ -269,7 +344,7 @@ export class MissionSystem implements System, MissionService {
   restart(): void {
     const id = this._current ?? this.lastFailedId;
     if (!id) return;
-    this.clearMarkers();
+    this.clearMarkers(true);
     this.cancelFinalePan();
     this.run = null;
     this._current = null;
@@ -286,8 +361,6 @@ export class MissionSystem implements System, MissionService {
     const o = run.objective;
 
     this.interaction.remove(OBJ_ID);
-    this.lines.length = 0;
-    this.lineClock = 0;
 
     if (o.stars !== undefined) this.ctx.tryGet(Services.Wanted)?.setStars(o.stars);
 
@@ -323,17 +396,9 @@ export class MissionSystem implements System, MissionService {
       });
     }
 
-    for (const s of o.say ?? []) {
-      this.lines.push({
-        at: (s.delayMs ?? 0) / 1000,
-        speaker: s.speaker,
-        text: s.text,
-        ms: s.ms ?? 4000,
-      });
-    }
-    if (o.voice) {
-      this.ctx.events.emit('audio:oneShot', { id: `voice:${o.voice}`, volume: 1 });
-    }
+    // Travel calls/warnings belong when the beat begins. Interaction dialogue
+    // marked `complete` waits for the actual E press in satisfy().
+    if ((o.sayAt ?? 'enter') === 'enter') this.enqueueObjectiveDialogue(o);
 
     this.pushHud();
   }
@@ -343,6 +408,7 @@ export class MissionSystem implements System, MissionService {
     const run = this.run;
     if (!run || !run.isRunning) return;
     const o = run.objective;
+    if (o.sayAt === 'complete') this.enqueueObjectiveDialogue(o);
     if (o.hijack) this.ctx.events.emit('broadcast:hijacked', {});
     if (o.xp) this.ctx.tryGet(Services.Progression)?.addXp(o.xp, `obiectiv:${o.id}`);
     this.onObjectiveDone(o);
@@ -371,6 +437,7 @@ export class MissionSystem implements System, MissionService {
       case 'barricade':
         this.toast('Baricada e jos', 'good');
         this.ctx.tryGet(Services.Peds)?.scatter(_v.set(PLACES.barricade.x, 0, PLACES.barricade.z), 30);
+        this.ctx.tryGet(Services.BuildersHouse)?.unseal();
         break;
       case 'enter': {
         /*
@@ -432,6 +499,19 @@ export class MissionSystem implements System, MissionService {
     this.partyOn = true;
     this.ctx.tryGet(Services.BuildersHouse)?.liberate();
 
+    this.stageFinaleCast();
+    this.cast.setParty(true);
+
+    this.ctx.tryGet(Services.Wanted)?.clear();
+    this.ctx.tryGet(Services.Audio)?.setMusic('afterparty', 1.5);
+    this.ctx.tryGet(Services.Camera)?.shake(0.25, 0.5);
+    this.ctx.events.emit('radio:line', { text: 'Casa Constructorilor e din nou deschisă. Muzica e a noastră.' });
+
+    this.queueFinalePan();
+  }
+
+  private stageFinaleCast(): void {
+
     // A ring around the dance floor, everyone facing the decks on the
     // reception counter. The ring is authored in room-relative metres so it
     // follows the lobby if the tower ever moves.
@@ -452,14 +532,19 @@ export class MissionSystem implements System, MissionService {
       // Face the decks, so the crowd reads as an audience and not a queue.
       this.cast.moveTo(id, x, z, Math.atan2(LOBBY_RECEPTION.x - x, LOBBY_RECEPTION.z - z));
     });
-    this.cast.setParty(true);
+  }
 
-    this.ctx.tryGet(Services.Wanted)?.clear();
-    this.ctx.tryGet(Services.Audio)?.setMusic('afterparty', 1.5);
-    this.ctx.tryGet(Services.Camera)?.shake(0.25, 0.5);
-    this.ctx.events.emit('radio:line', { text: 'Casa Constructorilor e din nou deschisă. Muzica e a noastră.' });
+  private resetBuilderCast(): void {
+    FORECOURT_BUILDERS.forEach(([x, z, yaw], i) => this.cast.moveTo(`builder_out${i}`, x, z, yaw));
+    LOBBY_BUILDERS.forEach(([x, z, yaw], i) => this.cast.moveTo(`builder_in${i}`, x, z, yaw));
+  }
 
-    this.queueFinalePan();
+  private resetBuildersHouseOpening(): void {
+    this.partyOn = false;
+    this.ctx.tryGet(Services.BuildersHouse)?.seal();
+    this.resetBuilderCast();
+    this.cast.setParty(false);
+    this.ctx.tryGet(Services.Audio)?.setMusic(null, 0.8);
   }
 
   /* ---------------------------------------------------------------- */
@@ -534,7 +619,9 @@ export class MissionSystem implements System, MissionService {
     const run = this.run!;
     const def = run.def;
     this._completed.add(def.id);
-    this.clearMarkers();
+    // The final interaction's answer is presentation state, not a marker.
+    // Keep it alive after the run becomes null.
+    this.clearMarkers(false);
 
     this.ctx.tryGet(Services.Progression)?.addXp(def.rewardXp, `misiune:${def.id}`);
     this.ctx.tryGet(Services.Player)?.addLei(def.rewardLei, `misiune:${def.id}`);
@@ -555,7 +642,8 @@ export class MissionSystem implements System, MissionService {
     const title = run.def.title;
     run.fail(reason);
     this.lastFailedId = id;
-    this.clearMarkers();
+    if (id === 'act4_giftshop') this.resetBuildersHouseOpening();
+    this.clearMarkers(true);
     this.ctx.events.emit('mission:failed', { id, reason });
     this.hud()?.missionCard(`${title} — EȘUAT`, reason);
 
@@ -593,14 +681,48 @@ export class MissionSystem implements System, MissionService {
     // Published for the map. Same position object the interactable got: the
     // giver never moves once placed, and a second copy could only drift.
     this._offered.push({ id: def.id, title: label, position: p });
+    this.routeToOffer();
   }
 
-  private clearMarkers(): void {
+  /** Keep an offered story act discoverable outside the full-screen map. */
+  private routeToOffer(): void {
+    const offer = this._offered[0];
+    if (offer) this.hud()?.setWaypoint(offer.position);
+  }
+
+  private clearMarkers(clearDialogue = false): void {
     this.interaction.remove(OBJ_ID);
     this.interaction.remove(GIVER_ID);
     this._offered.length = 0;
     this.hud()?.setWaypoint(null);
+    if (clearDialogue) this.clearDialogue();
+  }
+
+  private enqueueObjectiveDialogue(o: ObjectiveDef): void {
+    this.enqueueDialogue(o.say ?? []);
+    if (o.voice) {
+      this.ctx.events.emit('audio:oneShot', { id: `voice:${o.voice}`, volume: 1 });
+    }
+  }
+
+  /**
+   * Append a coherent sequence to one game clock. Its first line begins only
+   * after any line already queued has finished displaying, so a fast objective
+   * transition cannot make two speakers overwrite the same subtitle slot.
+   */
+  private enqueueDialogue(say: readonly Say[]): void {
+    if (say.length === 0) return;
+    if (this.lines.length === 0 && this.lineClock >= this.lineBusyUntil) {
+      this.lineClock = 0;
+      this.lineBusyUntil = 0;
+    }
+    this.lines = appendDialogue(this.lines, this.lineClock, say, this.lineBusyUntil);
+  }
+
+  private clearDialogue(): void {
     this.lines.length = 0;
+    this.lineClock = 0;
+    this.lineBusyUntil = 0;
   }
 
   /** Abandon/restore/restart must not leave a finale pan queued. */
@@ -622,17 +744,11 @@ export class MissionSystem implements System, MissionService {
     // Before the early-out: the finale pan outlives the act that started it.
     this.tickFinalePan(dt);
 
+    // Completion dialogue also outlives the MissionRun it completed.
+    this.tickDialogue(dt, ctx);
+
     const run = this.run;
     if (!run || !run.isRunning) return;
-
-    // Dialogue, on the game clock so pausing pauses the conversation.
-    this.lineClock += dt;
-    for (let i = this.lines.length - 1; i >= 0; i--) {
-      const l = this.lines[i];
-      if (this.lineClock < l.at) continue;
-      this.lines.splice(i, 1);
-      ctx.events.emit('ui:subtitle', { speaker: l.speaker, text: l.text, ms: l.ms });
-    }
 
     if (run.tick(dt) === 'timeout') {
       this.failRun('timp expirat');
@@ -641,6 +757,18 @@ export class MissionSystem implements System, MissionService {
 
     this.evaluate(dt, ctx);
     this.pushHud();
+  }
+
+  /** Dialogue follows the pause-aware game clock and preserves author order. */
+  private tickDialogue(dt: number, ctx: GameContext): void {
+    if (this.lines.length === 0 && this.lineClock >= this.lineBusyUntil) return;
+    this.lineClock += dt;
+    if (this.lineClock < this.lineBusyUntil) return;
+    const next = this.lines[0];
+    if (!next || this.lineClock < next.at) return;
+    const l = this.lines.shift()!;
+    this.lineBusyUntil = this.lineClock + l.ms / 1000 + 0.16;
+    ctx.events.emit('ui:subtitle', { speaker: l.speaker, text: l.text, ms: l.ms });
   }
 
   /** Ask the world whether the current objective's trigger has fired. */
@@ -779,6 +907,7 @@ export class MissionSystem implements System, MissionService {
         focus: this.interaction.focusLabel,
         cast: this.cast.all,
         party: this.partyOn,
+        sealed: this.ctx.tryGet(Services.BuildersHouse)?.sealed ?? true,
         lobbyLiberated: this.ctx.tryGet(Services.BuildersHouse)?.liberated ?? false,
         /** Act IV is unplayable if `passable` is false. Checked every boot. */
         doorway: this.ctx.tryGet(Services.BuildersHouse)?.doorway ?? {
@@ -838,7 +967,7 @@ export class MissionSystem implements System, MissionService {
 
   dispose(): void {
     if (!this.ctx) return;
-    this.clearMarkers();
+    this.clearMarkers(true);
   }
 }
 

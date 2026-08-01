@@ -434,6 +434,16 @@ export interface WetOptions {
   puddles?: boolean;
   /** Strength of the vertical sky smear. */
   mirror?: number;
+  /** Roughness of the merely damp film. Concrete stays much rougher than asphalt. */
+  dampRoughness?: number;
+  /** Roughness where water has pooled. */
+  puddleRoughness?: number;
+  /** Fraction of `mirror` present outside standing puddles. */
+  filmMirror?: number;
+  /** How much a damp film flattens the material's normal detail. */
+  filmNormalFlatten?: number;
+  /** How much standing water flattens the material's normal detail. */
+  puddleNormalFlatten?: number;
 }
 
 /**
@@ -447,6 +457,11 @@ function applyWetGround(mat: THREE.MeshStandardMaterial, opts: WetOptions = {}):
   const amount = opts.amount ?? 1.0;
   const puddles = opts.puddles !== false;
   const mirror = opts.mirror ?? 1.0;
+  const dampRoughness = opts.dampRoughness ?? 0.300;
+  const puddleRoughness = opts.puddleRoughness ?? 0.035;
+  const filmMirror = opts.filmMirror ?? 1.0;
+  const filmNormalFlatten = opts.filmNormalFlatten ?? 0.94;
+  const puddleNormalFlatten = opts.puddleNormalFlatten ?? 0.995;
 
   const prev = mat.onBeforeCompile;
   mat.onBeforeCompile = function (shader, renderer) {
@@ -464,12 +479,25 @@ function applyWetGround(mat: THREE.MeshStandardMaterial, opts: WetOptions = {}):
     shader.uniforms.uSunCoreW = SHARED.sunCore;
     shader.uniforms.uMirror = { value: mirror };
     shader.uniforms.uPuddles = { value: puddles ? 1 : 0 };
+    shader.uniforms.uDampRoughness = { value: dampRoughness };
+    shader.uniforms.uPuddleRoughness = { value: puddleRoughness };
+    shader.uniforms.uFilmMirror = { value: filmMirror };
+    shader.uniforms.uFilmNormalFlatten = { value: filmNormalFlatten };
+    shader.uniforms.uPuddleNormalFlatten = { value: puddleNormalFlatten };
 
     shader.vertexShader = WORLD_VERT_HEAD + shader.vertexShader;
     shader.vertexShader = shader.vertexShader.replace('#include <worldpos_vertex>', WORLD_VERT_BODY);
 
     shader.fragmentShader =
-      SKY_GLSL + 'uniform float uMirror;\nuniform float uPuddles;\n' + shader.fragmentShader;
+      SKY_GLSL + /* glsl */ `
+      uniform float uMirror;
+      uniform float uPuddles;
+      uniform float uDampRoughness;
+      uniform float uPuddleRoughness;
+      uniform float uFilmMirror;
+      uniform float uFilmNormalFlatten;
+      uniform float uPuddleNormalFlatten;
+      ` + shader.fragmentShader;
 
     // Wet darkening + puddle mask, evaluated before anything reads albedo.
     shader.fragmentShader = shader.fragmentShader.replace(
@@ -511,9 +539,14 @@ function applyWetGround(mat: THREE.MeshStandardMaterial, opts: WetOptions = {}):
       // and scatters. Only standing water in puddles gets near-mirror values.
       // Driving open road down to 0.085 made every surviving normal detail a
       // specular glint and the street read as glitter.
-      // 0.30 damp -> 0.035 standing water. The damp end must stay well above
-      // mirror territory or the whole road collapses into one reflectivity.
-      roughnessFactor = mix(roughnessFactor, mix(0.300, 0.035, gPuddle), gWet);
+      // Damp and pooled roughness are material properties, not constants.
+      // Weathered concrete must retain its chalky aggregate while a puddle on
+      // asphalt may approach mirror-flat water.
+      roughnessFactor = mix(
+        roughnessFactor,
+        mix(uDampRoughness, uPuddleRoughness, gPuddle),
+        gWet
+      );
       `,
     );
 
@@ -527,7 +560,11 @@ function applyWetGround(mat: THREE.MeshStandardMaterial, opts: WetOptions = {}):
       '#include <normal_fragment_maps>',
       /* glsl */ `
       #include <normal_fragment_maps>
-      normal = normalize(mix(normal, nonPerturbedNormal, gWet * mix(0.94, 0.995, gPuddle)));
+      normal = normalize(mix(
+        normal,
+        nonPerturbedNormal,
+        gWet * mix(uFilmNormalFlatten, uPuddleNormalFlatten, gPuddle)
+      ));
       `,
     );
 
@@ -537,7 +574,9 @@ function applyWetGround(mat: THREE.MeshStandardMaterial, opts: WetOptions = {}):
       '#include <opaque_fragment>',
       /* glsl */ `
       {
-        float wetK = gWet * uMirror;
+        // A merely damp film is a subdued Fresnel sheen. The full sky mirror
+        // is reserved for standing water; otherwise concrete becomes a lake.
+        float wetK = gWet * uMirror * mix(uFilmMirror, 1.0, gPuddle);
         if (wetK > 0.001) {
           vec3 Vw = normalize(vWPosG - cameraPosition);
           vec3 Nw = normalize(vWNormG);
@@ -613,12 +652,18 @@ function applyWetGround(mat: THREE.MeshStandardMaterial, opts: WetOptions = {}):
     );
   };
 
-  mat.customProgramCacheKey = () => `wet:${amount}:${puddles}:${mirror}`;
+  mat.customProgramCacheKey = () => [
+    'wet', amount, puddles, mirror, dampRoughness, puddleRoughness,
+    filmMirror, filmNormalFlatten, puddleNormalFlatten,
+  ].join(':');
   mat.userData.gtaWet = true;
   // Recorded so tiledFor() can rebuild the injection after cloning — see the
   // note there. Without this the whole wet-ground system silently disappears
   // from every tiled surface in the game.
-  mat.userData.gtaWetOpts = { amount, puddles, mirror } satisfies WetOptions;
+  mat.userData.gtaWetOpts = {
+    amount, puddles, mirror, dampRoughness, puddleRoughness,
+    filmMirror, filmNormalFlatten, puddleNormalFlatten,
+  } satisfies WetOptions;
   return mat;
 }
 
@@ -1272,7 +1317,10 @@ class MaterialLibrary {
         metalness: 0,
         envMapIntensity: 1.1,
       });
-      return applyWetGround(m, { amount: 0.7, puddles: false, mirror: 0.45 });
+      return applyWetGround(m, {
+        amount: 0.55, puddles: false, mirror: 0.16,
+        dampRoughness: 0.62, filmMirror: 1, filmNormalFlatten: 0.18,
+      });
     }
 
     if (id === 'foliageAutumn') {
@@ -1313,11 +1361,25 @@ class MaterialLibrary {
           envMapIntensity: 1.15,
           normalScale: new THREE.Vector2(0.8, 0.8),
         });
-        return applyWetGround(m, { amount: id === 'asphaltWet' ? 1 : 0.55, puddles: true, mirror: 1 });
+        return applyWetGround(m, id === 'asphaltWet'
+          ? {
+            amount: 1, puddles: true, mirror: 0.86,
+            dampRoughness: 0.48, puddleRoughness: 0.06,
+            filmMirror: 0.24, filmNormalFlatten: 0.38, puddleNormalFlatten: 0.97,
+          }
+          : {
+            amount: 0.48, puddles: true, mirror: 0.55,
+            dampRoughness: 0.58, puddleRoughness: 0.09,
+            filmMirror: 0.18, filmNormalFlatten: 0.28, puddleNormalFlatten: 0.94,
+          });
       }
       case 'kerbConcrete': {
-        const m = new THREE.MeshStandardMaterial({ ...base, envMapIntensity: 1.25 });
-        return applyWetGround(m, { amount: 0.8, puddles: false, mirror: 0.55 });
+        const m = new THREE.MeshStandardMaterial({ ...base, envMapIntensity: 0.85 });
+        return applyWetGround(m, {
+          amount: 0.5, puddles: false, mirror: 0.12,
+          dampRoughness: 0.80, puddleRoughness: 0.16,
+          filmMirror: 1, filmNormalFlatten: 0.18, puddleNormalFlatten: 0.55,
+        });
       }
       case 'pavingStone': {
         const m = new THREE.MeshStandardMaterial({
@@ -1325,7 +1387,11 @@ class MaterialLibrary {
           envMapIntensity: 1.3,
           normalScale: new THREE.Vector2(1.1, 1.1),
         });
-        return applyWetGround(m, { amount: 0.95, puddles: true, mirror: 0.9 });
+        return applyWetGround(m, {
+          amount: 0.8, puddles: true, mirror: 0.62,
+          dampRoughness: 0.68, puddleRoughness: 0.10,
+          filmMirror: 0.16, filmNormalFlatten: 0.28, puddleNormalFlatten: 0.92,
+        });
       }
       case 'travertine':
         return new THREE.MeshStandardMaterial({ ...base, envMapIntensity: 1.5 });

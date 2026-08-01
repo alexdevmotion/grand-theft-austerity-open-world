@@ -6,10 +6,10 @@
  * code means the acts can be reordered, retimed and rewritten without touching
  * the runtime, and the runtime can be tested without the acts.
  *
- * Everything spoken is Romanian and subtitled. `voice` names a curated
- * *Ce Ne Enervează* context from `src/audio/clipContexts.ts`; the mission
- * system emits it as `audio:oneShot { id: 'voice:<context>' }` for the audio
- * agent to route.
+ * Everything spoken is Romanian and subtitled. Each line explicitly declares
+ * whether it belongs when an objective begins or after its interaction is
+ * completed, so characters answer the player's actions instead of talking
+ * over them.
  */
 
 import type { MissionDef, Vec3Lite } from '../gameplay/missionState';
@@ -42,6 +42,7 @@ const ACT1: MissionDef = {
       trigger: { kind: 'interact', at: at(PLACES.buildersForecourt), label: 'Vorbește cu constructorii', radius: 3.6 },
       onFoot: true,
       xp: 40,
+      sayAt: 'complete',
       say: [
         { speaker: 'Constructor', text: 'Ilie! Au sigilat clădirea. Ordin de evacuare, semnat azi-dimineață.', delayMs: 200, ms: 4200 },
         { speaker: 'Ilie', text: 'La naiba, iar o luăm de la capăt.', delayMs: 4400, ms: 3600 },
@@ -57,6 +58,7 @@ const ACT1: MissionDef = {
       stars: 1,
       timeLimit: 150,
       xp: 60,
+      sayAt: 'complete',
       say: [
         { speaker: 'Ilie', text: 'Un rack, patruzeci de kilograme și toată munca noastră pe el.', delayMs: 300, ms: 4000 },
       ],
@@ -68,6 +70,7 @@ const ACT1: MissionDef = {
       trigger: { kind: 'board', at: at(PLACES.daciaSlot), radius: 26 },
       timeLimit: 120,
       xp: 60,
+      sayAt: 'enter',
       say: [
         { speaker: 'Radio', text: 'Ministerul De-Accelerării Naționale anunță o operațiune de ordine în zona Casa Constructorilor.', delayMs: 400, ms: 5200 },
       ],
@@ -80,7 +83,7 @@ const ACT1: MissionDef = {
       inVehicle: true,
       timeLimit: 180,
       xp: 80,
-      voice: 'carFirstStart',
+      sayAt: 'enter',
       say: [
         { speaker: 'Ilie', text: 'Tușește, dar merge. Ca toată țara.', delayMs: 900, ms: 3600 },
       ],
@@ -110,6 +113,7 @@ const ACT2: MissionDef = {
       trigger: { kind: 'reach', at: at(PLACES.recorderDrop), radius: 26 },
       timeLimit: 300,
       xp: 60,
+      sayAt: 'enter',
       say: [
         { speaker: 'Recorder', text: 'Sunt în piață. Am filmat tot ce au făcut la sigilare. Vino singur.', delayMs: 300, ms: 4600 },
       ],
@@ -121,8 +125,8 @@ const ACT2: MissionDef = {
       trigger: { kind: 'interact', at: at(PLACES.recorderDrop), label: 'Vorbește cu Alex Need-Aid', radius: 3.6 },
       onFoot: true,
       stars: 2,
-      voice: 'recorder',
       xp: 90,
+      sayAt: 'complete',
       say: [
         { speaker: 'Alex Need-Aid', text: 'Patru ore de material brut. Semnături, ordine, numele tuturor.', delayMs: 300, ms: 4400 },
         { speaker: 'Alex Need-Aid', text: 'Dacă difuzezi asta, nu mai ai unde să te întorci. Știi, da?', delayMs: 4700, ms: 4200 },
@@ -144,8 +148,8 @@ const ACT2: MissionDef = {
       trigger: { kind: 'interact', at: at(PLACES.nicusorCourtyard), label: 'Vorbește cu Nicușor LAN', radius: 3.6 },
       onFoot: true,
       stars: 3,
-      voice: 'nicusor',
       xp: 90,
+      sayAt: 'complete',
       say: [
         { speaker: 'Nicușor LAN', text: 'Fibra intră pe sub piață. Turnul are un singur router și parola e din 2011.', delayMs: 300, ms: 4800 },
         { speaker: 'Nicușor LAN', text: 'Ți-am scris ruta. Nu intra pe bulevard, au filtru la kilometrul doi.', delayMs: 5100, ms: 4800 },
@@ -158,7 +162,10 @@ const ACT2: MissionDef = {
       trigger: { kind: 'escape' },
       timeLimit: 240,
       xp: 120,
-      voice: 'escaped',
+      sayAt: 'enter',
+      say: [
+        { speaker: 'Nicușor LAN', text: 'Ai Ministerul în coadă. Rupe contactul și sună-mă când ai zero stele.', delayMs: 300, ms: 4400 },
+      ],
     },
   ],
 };
@@ -187,6 +194,7 @@ const ACT3: MissionDef = {
       stars: 2,
       timeLimit: 360,
       xp: 90,
+      sayAt: 'enter',
       say: [
         { speaker: 'Georgescu', text: 'Constructorii independenți destabilizează națiunea. Statul construiește singur.', delayMs: 500, ms: 5200 },
         { speaker: 'Ilie', text: 'Omul ăsta n-a pus o cărămidă în viața lui.', delayMs: 5600, ms: 3800 },
@@ -199,8 +207,8 @@ const ACT3: MissionDef = {
       trigger: { kind: 'interact', at: at(PLACES.broadcastSite), label: 'Preia emisia națională', radius: 4.2 },
       onFoot: true,
       hijack: true,
-      voice: 'georgescu',
       xp: 200,
+      sayAt: 'complete',
       say: [
         { speaker: 'Nicușor LAN', text: 'Ești pe fibră. Ai treizeci de secunde de tăcere și pe urmă ești tu în direct.', delayMs: 300, ms: 4800 },
       ],
@@ -213,7 +221,7 @@ const ACT3: MissionDef = {
       stars: 4,
       timeLimit: 150,
       xp: 220,
-      voice: 'broadcastWin',
+      sayAt: 'enter',
       say: [
         { speaker: 'Ilie', text: 'Bună seara. Nu suntem instabilitate. Suntem întreținerea.', delayMs: 600, ms: 5200 },
         { speaker: 'Radio', text: 'Toate ecranele orașului au trecut pe altceva. Nimeni nu știe pe ce.', delayMs: 6200, ms: 5000 },
@@ -246,7 +254,7 @@ const ACT4: MissionDef = {
       stars: 5,
       timeLimit: 300,
       xp: 220,
-      voice: 'starsMax',
+      sayAt: 'enter',
       say: [
         { speaker: 'Radio', text: 'Instabilitate politică maximă. Toate unitățile, pe bulevardul central.', delayMs: 400, ms: 5000 },
       ],
@@ -259,6 +267,7 @@ const ACT4: MissionDef = {
       onFoot: true,
       timeLimit: 180,
       xp: 160,
+      sayAt: 'complete',
       say: [
         { speaker: 'Ilie', text: 'Bare de oțel și o hârtie A4. Ghici care ține.', delayMs: 300, ms: 4000 },
       ],
@@ -271,6 +280,7 @@ const ACT4: MissionDef = {
       onFoot: true,
       timeLimit: 180,
       xp: 160,
+      sayAt: 'complete',
       say: [
         { speaker: 'Ilie', text: 'Aceeași ușă. De data asta o deschid eu.', delayMs: 400, ms: 4000 },
       ],
@@ -282,6 +292,7 @@ const ACT4: MissionDef = {
       trigger: { kind: 'interact', at: at(LOBBY_RECEPTION), label: 'Eliberează Casa Constructorilor', radius: 4.6 },
       onFoot: true,
       xp: 400,
+      sayAt: 'complete',
       say: [
         { speaker: 'Ilie', text: 'Aprindeți luminile. Deschideți ușile. Chemați pe toată lumea.', delayMs: 500, ms: 4600 },
         { speaker: 'Constructor', text: 'S-a întors! Puneți muzica!', delayMs: 5200, ms: 3800 },

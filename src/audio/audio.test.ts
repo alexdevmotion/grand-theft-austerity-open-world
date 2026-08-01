@@ -13,6 +13,7 @@ import { describe, expect, test } from 'bun:test';
 import * as THREE from 'three';
 import { EventBus } from '../core/events';
 import { Rng } from '../core/rng';
+import { ACTIVITIES } from '../content/activities';
 import {
   additive, applyEnvelope, biquad, decayTimeTo, envelopeAt, goertzel,
   peak, rms, spectralCentroid, dbToGain, gainToDb,
@@ -36,6 +37,7 @@ import {
 import {
   buildPools,
   VoiceDirector,
+  activityDialogue,
   streetContextForSource,
   type DirectorHooks,
   type VoiceAudioBuffer,
@@ -914,6 +916,82 @@ describe('voice attribution telemetry', () => {
     expect(subtitles).toHaveLength(2);
     expect(subtitles[1].speaker).toBe('DINTR-UN MAGAZIN');
     expect(subtitles[1].text).toBe(director.nowPlaying);
+  });
+
+  test('authored character dialogue preempts ambient speech and reserves its subtitle', () => {
+    const context = new FakeContext();
+    const buffer = new FakeBuffer(2);
+    const hooks: DirectorHooks = {
+      cached: () => buffer,
+      load: async () => buffer,
+    };
+    const events = new EventBus();
+    const destination = new FakeNode();
+    const director = new VoiceDirector(
+      context,
+      hooks,
+      events,
+      destination,
+      'narrative-reservation-regression',
+    );
+
+    // Ambient audio may already be speaking when the player presses E.
+    expect(director.requestStreet(destination, 'kiosk', 'RADIO DE CHIOȘC')).toBe(true);
+    const ambient = context.sources[0];
+    expect(ambient.startedAt).toBe(0);
+
+    // This is the public seam MissionSystem and side activities use. The
+    // authored line must own both ears and subtitle space for its duration.
+    events.emit('ui:subtitle', {
+      speaker: 'Alex Need-Aid',
+      text: 'Am filmat ordinul și semnăturile. Stickul e al tău.',
+      ms: 4200,
+    });
+    expect(ambient.stoppedAt).toBe(0);
+    expect(director.speaking).toBe(false);
+    expect(director.nowPlaying).toBe('');
+    expect(director.requestStreet(destination, 'doorway', 'DINTR-UN MAGAZIN')).toBe(false);
+    expect(director.requestBucket('activityStart', 2.5)).toBe(false);
+    expect(director.stats().narrativeReserved).toBe(true);
+
+    context.advance(4.21);
+    director.update(0.1);
+    expect(director.stats().narrativeReserved).toBe(false);
+    expect(director.requestStreet(destination, 'doorway', 'DINTR-UN MAGAZIN')).toBe(true);
+  });
+});
+
+describe('contextual sidequest dialogue', () => {
+  test('every sidequest has relevant start, success and failure speech', () => {
+    const subjectById: Record<string, RegExp> = {
+      curier_server: /server|rack/i,
+      curier_cafea: /caf/i,
+      curier_dovezi: /stick|dovez/i,
+      cursa_magheru: /Magheru/i,
+      cursa_unirii: /Unirii/i,
+      evadare_centru: /centru/i,
+      evadare_guvern: /Palat|guvern/i,
+      foto_victoriei: /Victoriei/i,
+      foto_parlament: /Parlament/i,
+      foto_casa: /Cas(?:a|ei) Constructorilor/i,
+    };
+
+    for (const def of ACTIVITIES) {
+      const start = activityDialogue(def.id, 'start');
+      const success = activityDialogue(def.id, 'success');
+      const failure = activityDialogue(def.id, 'failure');
+      expect(start, `${def.id} start`).not.toBeNull();
+      expect(success, `${def.id} success`).not.toBeNull();
+      expect(failure, `${def.id} failure`).not.toBeNull();
+      for (const line of [start!, success!, failure!]) {
+        expect(line.text, `${def.id} subject`).toMatch(subjectById[def.id]);
+        expect(line.speaker.length).toBeGreaterThan(2);
+        expect(line.text.length).toBeGreaterThan(18);
+        expect(line.ms).toBeGreaterThanOrEqual(2800);
+        expect(line.ms).toBeLessThanOrEqual(5200);
+      }
+    }
+    expect(activityDialogue('not-a-sidequest', 'start')).toBeNull();
   });
 });
 

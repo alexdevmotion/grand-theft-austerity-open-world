@@ -4,6 +4,8 @@ import type { Vector3 } from 'three';
 
 export interface GameEvents {
   /** Mission / story spine. */
+  /** The title curtain has cleared and the player can see/control the world. */
+  'game:started': { mode: 'new' | 'continue' };
   'mission:advance': { id: string };
   'mission:complete': { id: string };
   'mission:failed': { id: string; reason: string };

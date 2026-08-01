@@ -42,12 +42,26 @@ interface PublishedTrack {
   az: number;
   bx: number;
   bz: number;
+  ux: number;
+  uz: number;
 }
 
-/** Reconstruct the two track centrelines the permanent-way builder renders. */
-function publishedTracks(lines: ReadonlyArray<ReadonlyArray<THREE.Vector3>>): PublishedTrack[] {
+/**
+ * Reconstruct the two physical track centrelines emitted by `roads.ts`.
+ *
+ * These literals are deliberately independent of `TrafficGraph`: importing its
+ * lane offset here made the old probe pass even when traffic and rendered steel
+ * disagreed. Both permanent-way builders use a 1.2 m central gutter around the
+ * 1.435 m standard gauge.
+ */
+function publishedTracks(
+  lines: ReadonlyArray<ReadonlyArray<THREE.Vector3>>,
+): PublishedTrack[] {
   const out: PublishedTrack[] = [];
-  for (const line of lines) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex];
+    const trackOffset = 1.435 / 2 + 1.2;
+    const runs: PublishedTrack[] = [];
     for (let i = 0; i + 1 < line.length; i++) {
       const a = line[i];
       const b = line[i + 1];
@@ -55,16 +69,36 @@ function publishedTracks(lines: ReadonlyArray<ReadonlyArray<THREE.Vector3>>): Pu
       const dz = b.z - a.z;
       const length = Math.hypot(dx, dz);
       if (length < 1) continue;
-      const rx = dz / length;
-      const rz = -dx / length;
+      runs.push({ ax: a.x, az: a.z, bx: b.x, bz: b.z, ux: dx / length, uz: dz / length });
+    }
+    for (const run of runs) {
+      const rx = run.uz;
+      const rz = -run.ux;
       for (const side of [-1, 1]) {
-        const offset = side * TRAM_OFFSET;
+        const offset = side * trackOffset;
         out.push({
-          ax: a.x + rx * offset,
-          az: a.z + rz * offset,
-          bx: b.x + rx * offset,
-          bz: b.z + rz * offset,
+          ax: run.ax + rx * offset,
+          az: run.az + rz * offset,
+          bx: run.bx + rx * offset,
+          bz: run.bz + rz * offset,
+          ux: run.ux,
+          uz: run.uz,
         });
+      }
+    }
+    for (let i = 0; i + 1 < runs.length; i++) {
+      const a = runs[i];
+      const b = runs[i + 1];
+      for (const side of [-1, 1]) {
+        const ax = a.bx + a.uz * side * trackOffset;
+        const az = a.bz - a.ux * side * trackOffset;
+        const bx = b.ax + b.uz * side * trackOffset;
+        const bz = b.az - b.ux * side * trackOffset;
+        const dx = bx - ax;
+        const dz = bz - az;
+        const length = Math.hypot(dx, dz);
+        if (length < 0.02) continue;
+        out.push({ ax, az, bx, bz, ux: dx / length, uz: dz / length });
       }
     }
   }
@@ -81,6 +115,44 @@ function distanceToPublishedTrack(x: number, z: number, tracks: PublishedTrack[]
     best = Math.min(best, Math.hypot(x - track.ax - dx * t, z - track.az - dz * t));
   }
   return best;
+}
+
+function nearestPublishedTrack(
+  x: number,
+  z: number,
+  tracks: PublishedTrack[],
+): { distance: number; tangentDot(ux: number, uz: number): number } {
+  let bestDistance = Infinity;
+  for (const track of tracks) {
+    const dx = track.bx - track.ax;
+    const dz = track.bz - track.az;
+    const d2 = dx * dx + dz * dz;
+    const t = Math.max(0, Math.min(1, ((x - track.ax) * dx + (z - track.az) * dz) / d2));
+    const distance = Math.hypot(x - track.ax - dx * t, z - track.az - dz * t);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+    }
+  }
+  return {
+    distance: bestDistance,
+    // At crossings and shared bend endpoints the geometrically nearest piece
+    // may not be the rail this path follows. Accept any physical piece inside
+    // the same 20 cm positional tolerance used by the independent assertion.
+    tangentDot: (ux, uz) => {
+      let bestDot = 0;
+      for (const track of tracks) {
+        const dx = track.bx - track.ax;
+        const dz = track.bz - track.az;
+        const d2 = dx * dx + dz * dz;
+        const t = Math.max(0, Math.min(1, ((x - track.ax) * dx + (z - track.az) * dz) / d2));
+        const distance = Math.hypot(x - track.ax - dx * t, z - track.az - dz * t);
+        if (distance <= 0.2 + 1e-4) {
+          bestDot = Math.max(bestDot, Math.abs(ux * track.ux + uz * track.uz));
+        }
+      }
+      return bestDot;
+    },
+  };
 }
 
 describe('explicit tram routing', () => {
@@ -203,9 +275,11 @@ describe('explicit tram routing', () => {
     const bareJoins: string[] = [];
     const p = new THREE.Vector3();
     const q = new THREE.Vector3();
-    const corner = new THREE.Vector3();
+    const tangent = new THREE.Vector3();
     let longestJoin = 0;
     let furthestJoinFromTrack = 0;
+    let furthestLaneFromTrack = 0;
+    let worstLaneTangent = 1;
     const visibleTracks = publishedTracks(built.tramLines);
     const nearCasa = graph.edgesNear(-46, 20, 230, []);
     const casaTramSpawns = nearCasa.filter((index) => {
@@ -232,11 +306,15 @@ describe('explicit tram routing', () => {
         expect(edge.ux * next.ux + edge.uz * next.uz).toBeGreaterThanOrEqual(0.7);
         graph.laneExit(edge, TRAM_LANE, p);
         graph.laneEntry(next, TRAM_LANE, q);
-        graph.cornerPoint(edge, TRAM_LANE, next, TRAM_LANE, corner);
         longestJoin = Math.max(longestJoin, p.distanceTo(q));
         let bareJoin = false;
         let joinTrackDistance = 0;
-        for (const [a, b] of [[p, corner], [corner, q]] as const) {
+        const join = graph.laneJoinPath(edge, TRAM_LANE, next, TRAM_LANE);
+        expect(join?.length).toBeGreaterThan(1);
+        const joinPoints = join ?? [];
+        for (let joinIndex = 0; joinIndex + 1 < joinPoints.length; joinIndex++) {
+          const a = joinPoints[joinIndex];
+          const b = joinPoints[joinIndex + 1];
           const dx = b.x - a.x;
           const dz = b.z - a.z;
           const length = Math.hypot(dx, dz);
@@ -245,8 +323,8 @@ describe('explicit tram routing', () => {
           const rz = length > 0 ? -dx / length : 0;
           for (let step = 0; step <= steps; step++) {
             const t = step / steps;
-            const x = a.x + (b.x - a.x) * t;
-            const z = a.z + (b.z - a.z) * t;
+            const x = a.x + dx * t;
+            const z = a.z + dz * t;
             if (built.spatial.isBlocked(x, z)) {
               blockedJoins.push(`${edge.index}->${next.index}@${t}`);
             }
@@ -268,10 +346,28 @@ describe('explicit tram routing', () => {
           bareJoins.push(`${edge.index}->${next.index}:${joinTrackDistance.toFixed(1)}m`);
         }
       }
-      for (const t of [0.2, 0.5, 0.8]) {
-        graph.lanePoint(edge, TRAM_LANE, t, p);
-        if (built.spatial.isBlocked(p.x, p.z)) {
-          blocked.push(`${edge.from}->${edge.to}@${t}`);
+      const lanePath = graph.lanePath(edge, TRAM_LANE);
+      expect(lanePath?.length).toBeGreaterThan(1);
+      const lanePoints = lanePath ?? [];
+      for (let laneIndex = 0; laneIndex + 1 < lanePoints.length; laneIndex++) {
+        const a = lanePoints[laneIndex];
+        const b = lanePoints[laneIndex + 1];
+        const dx = b.x - a.x;
+        const dz = b.z - a.z;
+        const length = Math.hypot(dx, dz);
+        if (length < 1e-6) continue;
+        const steps = Math.max(1, Math.ceil(length / 0.5));
+        tangent.set(dx / length, 0, dz / length);
+        for (let step = 0; step <= steps; step++) {
+          const t = step / steps;
+          p.set(a.x + dx * t, 0, a.z + dz * t);
+          const physical = nearestPublishedTrack(p.x, p.z, visibleTracks);
+          furthestLaneFromTrack = Math.max(furthestLaneFromTrack, physical.distance);
+          const tangentDot = physical.tangentDot(tangent.x, tangent.z);
+          worstLaneTangent = Math.min(worstLaneTangent, tangentDot);
+          if (built.spatial.isBlocked(p.x, p.z)) {
+            blocked.push(`${edge.from}->${edge.to}:${laneIndex}@${t}`);
+          }
         }
       }
     }
@@ -279,12 +375,17 @@ describe('explicit tram routing', () => {
     expect(blockedJoins).toEqual([]);
     expect(bareJoins).toEqual([]);
     expect(longestJoin).toBeLessThan(60);
+    expect(furthestLaneFromTrack).toBeLessThanOrEqual(0.2);
+    expect(furthestJoinFromTrack).toBeLessThanOrEqual(0.2);
+    expect(worstLaneTangent).toBeGreaterThanOrEqual(Math.cos(THREE.MathUtils.degToRad(5)));
 
     console.info(
       `[tram-test] ${built.tramLines.length} rendered lines -> ${rails.length} directed rail edges, ` +
       `${continuing.length} with continuations; ${plainRank2.length} rank-2 road edges rejected; ` +
       `${casaTramSpawns.length} safe tram spawn edges near Casa; longest join ${longestJoin.toFixed(1)} m; ` +
+      `max lane error ${furthestLaneFromTrack.toFixed(2)} m; ` +
+      `worst tangent ${THREE.MathUtils.radToDeg(Math.acos(worstLaneTangent)).toFixed(1)} deg; ` +
       `max join-to-track error ${furthestJoinFromTrack.toFixed(2)} m`,
     );
-  });
+  }, 30_000);
 });

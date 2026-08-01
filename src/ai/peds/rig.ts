@@ -44,6 +44,8 @@ export interface PedAppearance {
   vest: THREE.Color | null;
   /** 0 none, 1 cap, 2 hard hat, 3 beanie, 4 long hair. */
   headwear: number;
+  /** Stable tile in the shared face atlas; preserves identity without draws. */
+  faceVariant: number;
   hatColor: THREE.Color;
   /** 0 none, 1 shoulder bag, 2 backpack, 3 shopping bag. */
   bag: number;
@@ -500,6 +502,27 @@ export interface CrowdRenderStats {
 
 /** Size of the shared crowd face texture, in pixels. */
 export const CROWD_FACE_TEX = 128;
+/** Eight distinct faces packed into one 4 x 2 atlas and one head draw call. */
+export const CROWD_FACE_VARIANTS = 8;
+const CROWD_FACE_COLS = 4;
+const CROWD_FACE_ROWS = 2;
+
+/** Stable, non-negative atlas tile for a procedural identity seed. */
+export function crowdFaceVariant(seed: number): number {
+  const whole = Number.isFinite(seed) ? Math.trunc(seed) : 0;
+  return ((whole % CROWD_FACE_VARIANTS) + CROWD_FACE_VARIANTS) % CROWD_FACE_VARIANTS;
+}
+
+const CROWD_FACES = [
+  { ...CROWD_FACE, age: 0.20, jaw: 0.32, eyeSpacing: 0.28, eyeSize: 0.66, noseWidth: 0.30, mouthWidth: 0.58, browHeight: 0.58 },
+  { ...CROWD_FACE, age: 0.48, jaw: 0.82, eyeSpacing: 0.62, eyeSize: 0.36, noseWidth: 0.76, mouthWidth: 0.34, browThick: 0.82, stubble: 0.20 },
+  { ...CROWD_FACE, age: 0.72, jaw: 0.58, eyeSpacing: 0.42, eyeSize: 0.42, noseLength: 0.82, mouthWidth: 0.66, tired: 0.72, stubble: 0.46 },
+  { ...CROWD_FACE, age: 0.34, jaw: 0.68, eyeSpacing: 0.74, eyeSize: 0.52, noseWidth: 0.44, lipFull: 0.26, browThick: 0.70 },
+  { ...CROWD_FACE, age: 0.18, jaw: 0.22, eyeSpacing: 0.36, eyeSize: 0.82, noseWidth: 0.24, lipFull: 0.66, browHeight: 0.68 },
+  { ...CROWD_FACE, age: 0.42, jaw: 0.38, eyeSpacing: 0.68, eyeSize: 0.58, noseLength: 0.42, mouthWidth: 0.72, lipFull: 0.58, makeup: 0.28 },
+  { ...CROWD_FACE, age: 0.68, jaw: 0.48, eyeSpacing: 0.46, eyeSize: 0.44, noseWidth: 0.68, mouthWidth: 0.46, tired: 0.64 },
+  { ...CROWD_FACE, age: 0.30, jaw: 0.28, eyeSpacing: 0.58, eyeSize: 0.70, noseLength: 0.66, mouthWidth: 0.38, lipFull: 0.72, freckles: 0.35 },
+] as const;
 
 /**
  * THE IMPOSTER HEAD, AND WHY IT HAS UVs.
@@ -542,8 +565,10 @@ export function buildImposterHeadGeometry(): THREE.BufferGeometry {
 }
 
 /**
- * The one face every imposter wears, painted by the same `paintFace` the
- * skinned tier uses so the two tiers cannot drift apart.
+ * Eight faces for the imposter tier, painted by the same `paintFace` the
+ * skinned tier uses so the two tiers cannot drift apart. They share one atlas
+ * and are selected by an instanced scalar in the head shader: identity costs
+ * neither a material nor another draw call.
  *
  * It is painted on WHITE and then normalised so the plain cheek comes out at
  * 1.0, because the head instances carry the pedestrian's skin tone in
@@ -555,29 +580,37 @@ export function buildImposterHeadGeometry(): THREE.BufferGeometry {
 export function buildCrowdFaceTexture(): THREE.CanvasTexture {
   const S = CROWD_FACE_TEX;
   const c = document.createElement('canvas');
-  c.width = S;
-  c.height = S;
+  c.width = S * CROWD_FACE_COLS;
+  c.height = S * CROWD_FACE_ROWS;
   const g = c.getContext('2d')!;
-  paintFace(g, 0, 0, S, CROWD_FACE, 0xffffff, 0x8a7a6a, new Rng('crowd-face'));
+  for (let tile = 0; tile < CROWD_FACE_VARIANTS; tile++) {
+    const x0 = (tile % CROWD_FACE_COLS) * S;
+    // CanvasTexture flips source rows during upload. Paint logical row zero at
+    // the bottom so shader tile zero still resolves to variant zero on screen.
+    const y0 = (CROWD_FACE_ROWS - 1 - Math.floor(tile / CROWD_FACE_COLS)) * S;
+    paintFace(g, x0, y0, S, CROWD_FACES[tile], 0xffffff, 0x8a7a6a, new Rng(`crowd-face-${tile}`));
 
-  // Normalise against a patch of plain cheek: off the nose, below the eye,
-  // inside the +-55 degree front of the face and clear of every feature.
-  const px = Math.round(S * 0.66);
-  const py = Math.round(S * 0.60);
-  const ref = g.getImageData(px, py, Math.max(2, Math.round(S * 0.05)), Math.max(2, Math.round(S * 0.05))).data;
-  let r = 0, gr = 0, b = 0;
-  for (let i = 0; i < ref.length; i += 4) { r += ref[i]; gr += ref[i + 1]; b += ref[i + 2]; }
-  const n = ref.length / 4;
-  const gain = [255 / Math.max(1, r / n), 255 / Math.max(1, gr / n), 255 / Math.max(1, b / n)];
+    // Normalise each face independently against a patch of plain cheek: off
+    // the nose, below the eye, inside the front and clear of every feature.
+    const px = x0 + Math.round(S * 0.66);
+    const py = y0 + Math.round(S * 0.60);
+    const ref = g.getImageData(
+      px, py, Math.max(2, Math.round(S * 0.05)), Math.max(2, Math.round(S * 0.05)),
+    ).data;
+    let r = 0, gr = 0, b = 0;
+    for (let i = 0; i < ref.length; i += 4) { r += ref[i]; gr += ref[i + 1]; b += ref[i + 2]; }
+    const n = ref.length / 4;
+    const gain = [255 / Math.max(1, r / n), 255 / Math.max(1, gr / n), 255 / Math.max(1, b / n)];
 
-  const img = g.getImageData(0, 0, S, S);
-  const d = img.data;
-  for (let i = 0; i < d.length; i += 4) {
-    d[i] = Math.min(255, d[i] * gain[0]);
-    d[i + 1] = Math.min(255, d[i + 1] * gain[1]);
-    d[i + 2] = Math.min(255, d[i + 2] * gain[2]);
+    const img = g.getImageData(x0, y0, S, S);
+    const d = img.data;
+    for (let i = 0; i < d.length; i += 4) {
+      d[i] = Math.min(255, d[i] * gain[0]);
+      d[i + 1] = Math.min(255, d[i + 1] * gain[1]);
+      d[i + 2] = Math.min(255, d[i + 2] * gain[2]);
+    }
+    g.putImageData(img, x0, y0);
   }
-  g.putImageData(img, 0, 0);
 
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -590,6 +623,30 @@ export function buildCrowdFaceTexture(): THREE.CanvasTexture {
   tex.wrapT = THREE.ClampToEdgeWrapping;
   tex.anisotropy = 4;
   return tex;
+}
+
+/** Add per-instance atlas selection while leaving Three's map decoding intact. */
+function configureCrowdFaceMaterial(material: THREE.MeshStandardMaterial): void {
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        '#include <common>\nattribute float crowdFaceVariant;',
+      )
+      .replace(
+        '#include <uv_vertex>',
+        `#include <uv_vertex>
+#ifdef USE_MAP
+  float crowdFaceTile = mod(crowdFaceVariant, ${CROWD_FACE_VARIANTS.toFixed(1)});
+  vec2 crowdFaceUv = (clamp(vMapUv, 0.0, 1.0) * ${(CROWD_FACE_TEX - 1).toFixed(1)} + 0.5) / ${CROWD_FACE_TEX.toFixed(1)};
+  vMapUv = vec2(
+    (crowdFaceUv.x + mod(crowdFaceTile, ${CROWD_FACE_COLS.toFixed(1)})) / ${CROWD_FACE_COLS.toFixed(1)},
+    (crowdFaceUv.y + floor(crowdFaceTile / ${CROWD_FACE_COLS.toFixed(1)})) / ${CROWD_FACE_ROWS.toFixed(1)}
+  );
+#endif`,
+      );
+  };
+  material.customProgramCacheKey = () => 'gta-crowd-face-atlas-v1';
 }
 
 export class CrowdRenderer {
@@ -625,10 +682,13 @@ export class CrowdRenderer {
 
     const capsule = new THREE.CapsuleGeometry(0.5, 1.0, 2, 6);
     const box = new THREE.BoxGeometry(1, 1, 1);
-    const head = buildImposterHeadGeometry();
+    // Near/far need separate geometry objects because a custom instanced
+    // attribute is stored on the geometry and each pool has its own indices.
+    const headNearGeo = buildImposterHeadGeometry();
+    const headFarGeo = headNearGeo.clone();
     const blob = new THREE.IcosahedronGeometry(0.5, 1);
     const glowGeo = new THREE.BoxGeometry(1, 1, 1);
-    this.geos.push(capsule, box, head, blob, glowGeo);
+    this.geos.push(capsule, box, headNearGeo, headFarGeo, blob, glowGeo);
 
     const skinMat = () =>
       new THREE.MeshStandardMaterial({
@@ -648,9 +708,11 @@ export class CrowdRenderer {
     this.faceTex = buildCrowdFaceTexture();
     const faceNear = skinMat();
     faceNear.map = this.faceTex;
+    configureCrowdFaceMaterial(faceNear);
     const faceFar = skinMat();
     faceFar.map = this.faceTex;
     faceFar.envMapIntensity = 1.05;
+    configureCrowdFaceMaterial(faceFar);
     this.mats.push(faceNear, faceFar);
 
     const glowMat = new THREE.MeshBasicMaterial({ toneMapped: false });
@@ -665,17 +727,18 @@ export class CrowdRenderer {
     // population inside 42 m. A cap of `min(maxPeds, 44)` here drops the
     // overflow silently, which renders as headless people.
     const headCap = maxPeds;
-    // The same untextured pool carries one crown/hair shell per imposter and
-    // one head per dog. Dog walkers can therefore need two slots each.
-    const blobCap = maxPeds * 2;
+    // The same untextured pool carries one crown/hair shell and two palms per
+    // imposter, plus one head per dog. Keep the whole anatomical silhouette in
+    // a shared draw call instead of spending a material/mesh on hands.
+    const blobCap = maxPeds * 4;
 
     this.capsNear = this.pool(capsule, bodyNear, nearCap, castShadows, 'peds-caps-near');
     this.boxNear = this.pool(box, bodyNear, Math.ceil(nearCap * 0.55), castShadows, 'peds-box-near');
-    this.headNear = this.pool(head, faceNear, headCap, castShadows, 'peds-head-near');
+    this.headNear = this.facePool(headNearGeo, faceNear, headCap, castShadows, 'peds-head-near');
     this.blobNear = this.pool(blob, bodyNear, blobCap, castShadows, 'peds-blob-near');
     this.capsFar = this.pool(capsule, bodyFar, farCap, false, 'peds-caps-far');
     this.boxFar = this.pool(box, bodyFar, Math.ceil(farCap * 0.4), false, 'peds-box-far');
-    this.headFar = this.pool(head, faceFar, headCap, false, 'peds-head-far');
+    this.headFar = this.facePool(headFarGeo, faceFar, headCap, false, 'peds-head-far');
     this.blobFar = this.pool(blob, bodyFar, blobCap, false, 'peds-blob-far');
     this.glow = this.pool(glowGeo, glowMat, maxPeds * 2, false, 'peds-glow');
   }
@@ -701,6 +764,20 @@ export class CrowdRenderer {
     return { mesh, n: 0, cap: Math.max(1, cap) };
   }
 
+  private facePool(
+    geo: THREE.BufferGeometry,
+    mat: THREE.Material,
+    cap: number,
+    cast: boolean,
+    name: string,
+  ): Pool {
+    const p = this.pool(geo, mat, cap, cast, name);
+    const variants = new THREE.InstancedBufferAttribute(new Float32Array(p.cap), 1);
+    variants.setUsage(THREE.DynamicDrawUsage);
+    geo.setAttribute('crowdFaceVariant', variants);
+    return p;
+  }
+
   setShadows(on: boolean): void {
     this.capsNear.mesh.castShadow = on;
     this.boxNear.mesh.castShadow = on;
@@ -722,11 +799,15 @@ export class CrowdRenderer {
     this.stats.instances = 0;
   }
 
-  private push(p: Pool, color: THREE.Color): void {
+  private push(p: Pool, color: THREE.Color, faceVariant?: number): void {
     if (p.n >= p.cap) return;
     p.mesh.setMatrixAt(p.n, _m);
     const c = p.mesh.instanceColor!;
     c.setXYZ(p.n, color.r, color.g, color.b);
+    if (faceVariant !== undefined) {
+      const variants = p.mesh.geometry.getAttribute('crowdFaceVariant') as THREE.InstancedBufferAttribute;
+      variants.setX(p.n, crowdFaceVariant(faceVariant));
+    }
     p.n++;
     this.stats.instances++;
   }
@@ -787,10 +868,16 @@ export class CrowdRenderer {
   }
 
   /** The face-mapped head. `q` must carry the head's yaw — the face is on +Z. */
-  private sphere(centre: THREE.Vector3, q: THREE.Quaternion, d: number, color: THREE.Color): void {
+  private sphere(
+    centre: THREE.Vector3,
+    q: THREE.Quaternion,
+    d: number,
+    color: THREE.Color,
+    faceVariant: number,
+  ): void {
     _scale.set(d, d * 1.16, d * 0.98);
     _m.compose(centre, q, _scale);
-    this.push(this.near ? this.headNear : this.headFar, color);
+    this.push(this.near ? this.headNear : this.headFar, color, faceVariant);
   }
 
   /** An untextured rounded part: crown shells use a flatter y ratio than heads. */
@@ -804,6 +891,39 @@ export class CrowdRenderer {
     _scale.set(d, d * yRatio, d * 0.98);
     _m.compose(centre, q, _scale);
     this.push(this.near ? this.blobNear : this.blobFar, color);
+  }
+
+  /** A rounded, oriented anatomical part using the shared untextured pool. */
+  private ellipsoid(
+    centre: THREE.Vector3,
+    q: THREE.Quaternion,
+    width: number,
+    length: number,
+    depth: number,
+    color: THREE.Color,
+  ): void {
+    _scale.set(width, length, depth);
+    _m.compose(centre, q, _scale);
+    this.push(this.near ? this.blobNear : this.blobFar, color);
+  }
+
+  /** Extend a terminal forearm into a flattened palm without allocating. */
+  private palm(elbow: number, wrist: number, armR: number, color: THREE.Color): void {
+    this.toWorld(elbow, _a);
+    this.toWorld(wrist, _b);
+    _dir.subVectors(_b, _a);
+    if (_dir.lengthSq() < 1e-8) _dir.set(0, -1, 0);
+    else _dir.normalize();
+    _q.setFromUnitVectors(UP, _dir);
+    _mid.copy(_b).addScaledVector(_dir, armR * 0.52);
+    this.ellipsoid(
+      _mid,
+      _q,
+      armR * 1.62,
+      armR * 2.20,
+      armR * 0.92,
+      color,
+    );
   }
 
   private emissive(centre: THREE.Vector3, q: THREE.Quaternion, s: number, color: THREE.Color): void {
@@ -886,6 +1006,16 @@ export class CrowdRenderer {
       this.toWorld(J_ELB_R, _a);
       this.toWorld(J_WRI_R, _b);
       this.limb(_a, _b, armR * 0.86, forearm);
+
+      if (lod < 1) {
+        // The cheap tier used to end at each wrist. At the distances where an
+        // overflow imposter can stand beside the player, those two round-ended
+        // forearms read as amputated mannequin arms. A small flattened palm,
+        // aligned to the terminal forearm, restores the human silhouette while
+        // staying inside the existing instanced draw call.
+        this.palm(J_ELB_L, J_WRI_L, armR, app.skin);
+        this.palm(J_ELB_R, J_WRI_R, armR, app.skin);
+      }
     } else {
       this.toWorld(J_SHO_L, _a);
       this.toWorld(J_WRI_L, _b);
@@ -924,7 +1054,7 @@ export class CrowdRenderer {
     if (lod < 1) this.limb(_a, _b, d.headR * 0.56, app.skin);
     _e.set(s.tiltPitch + s.headPitch * 0.6, s.yaw + s.headYaw, s.tiltRoll, 'YXZ');
     _q.setFromEuler(_e);
-    this.sphere(_b, _q, d.headR * 2.02, app.skin);
+    this.sphere(_b, _q, d.headR * 2.02, app.skin, app.faceVariant);
 
     // Hair / headwear sits as a shell on the crown.
     if (app.headwear > 0 && lod < 2) {
@@ -1115,6 +1245,8 @@ export class CrowdRenderer {
       p.mesh.visible = p.n > 0;
       p.mesh.instanceMatrix.needsUpdate = true;
       if (p.mesh.instanceColor) p.mesh.instanceColor.needsUpdate = true;
+      const variants = p.mesh.geometry.getAttribute('crowdFaceVariant');
+      if (variants) variants.needsUpdate = true;
       const idx = p.mesh.geometry.index;
       const perInstance = idx ? idx.count / 3 : p.mesh.geometry.attributes.position.count / 3;
       tris += perInstance * p.n;

@@ -119,8 +119,12 @@ export const Atmosphere = {
   fogColorNear: Palette.skyMidBand,
   fogColorFar: Palette.skyLowBand,
   fogDensity: 0.00085,
-  /** Wet-street reflectivity 0..1 — the reference is fully rain-slicked. */
-  wetness: 0.85,
+  /**
+   * Residual clear-weather moisture, 0..1. Clear sunset streets keep a faint
+   * sheen without turning paving into a mirror; rain/storm presets raise this
+   * to 1 so their localized puddle masks can still produce strong reflections.
+   */
+  wetness: 0.12,
 } as const;
 
 /** World scale constants shared by every system. */

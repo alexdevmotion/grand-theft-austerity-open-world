@@ -61,8 +61,10 @@ export interface ObjectiveDef {
   /** Must be on foot / must be driving for the trigger to count. */
   onFoot?: boolean;
   inVehicle?: boolean;
-  /** Subtitled dialogue fired when the objective begins. */
+  /** Authored, subtitled dialogue attached to this story beat. */
   say?: Say[];
+  /** Whether `say` belongs to objective arrival or successful interaction. */
+  sayAt?: 'enter' | 'complete';
   /**
    * A *Ce Ne Enervează* context to route to the audio agent, emitted as
    * `audio:oneShot { id: 'voice:<context>' }`. See src/audio/clipContexts.ts.

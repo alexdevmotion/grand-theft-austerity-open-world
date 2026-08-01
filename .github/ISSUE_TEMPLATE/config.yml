@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Play the current build
+    url: https://gtausterity.vercel.app
+    about: Check whether the issue is present in the latest deployed version.

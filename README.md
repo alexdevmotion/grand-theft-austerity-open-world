@@ -52,6 +52,16 @@ That is the same premise and campaign spine as the [five-to-eight-minute hackath
 
 Watch the [higher-quality MP4 capture](docs/media/bucharest-run.mp4).
 
+### Handbrake slide
+
+Take the battered yellow-and-purple hero Dacia 1300 down a sunset boulevard, then hold **Space** to pull the handbrake and slide through the junction.
+
+<p align="center">
+  <img src="docs/media/bucharest-handbrake-slide.gif" alt="Gameplay: the hero Dacia 1300 driving and handbrake-sliding through a Bucharest junction at sunset" width="800">
+</p>
+
+Watch the [higher-quality MP4 capture](docs/media/bucharest-handbrake-slide.mp4).
+
 ## Run locally
 
 Requires [Bun](https://bun.sh/) and a WebGL2-capable browser.

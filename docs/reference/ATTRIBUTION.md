@@ -6,22 +6,27 @@ shipped as game textures and are not redistributed as part of any build.
 
 ## Wikimedia Commons
 
-Each file below was retrieved from Wikimedia Commons and remains under its
-original licence and attribution. Before any public release of this project,
-re-check each file's current licence page and either remove the file or comply
-with its terms.
+The licence and attribution for each studio-reference file were rechecked on
+1 August 2026. The photographs are not shipped in the game build and have not
+been edited except where the table says a local reference copy was resized.
 
-| File | Commons source page |
-| --- | --- |
-| `likeness/bolojan.jpg` | `File:Ilie Bolojan (16 April 2026) (cropped).jpg` |
-| `likeness/nicusor-dan.jpg` | `File:Nicusor Dan in 2026.jpg` |
-| `world/dacia-1300.jpg` | `File:Dacia 1300 (cropped).JPG` |
-| `world/parliament.jpg` | `File:Bucharest - Palace of the Parliament (2024) (2).jpg` |
-| `world/unirii-boulevard.jpg` | `File:Bucharest Bucuresti Romania.JPG` |
-| `world/lipscani-oldtown.jpg` | `File:Strada Lipscani 18-20 București (2023) - img 04.jpg` |
-| `world/university-square.jpg` | `File:Bucharest University Square (cropped).jpg` |
+| Local file | Creator / source | Licence |
+| --- | --- | --- |
+| `likeness/bolojan.jpg` | [gov.ro / Romanian Government](https://commons.wikimedia.org/wiki/File:Ilie_Bolojan_(16_April_2026)_(cropped).jpg) | Attribution required by gov.ro |
+| `likeness/nicusor-dan.jpg` | [U.S. Embassy Romania](https://commons.wikimedia.org/wiki/File:Nicusor_Dan_in_2026.jpg) | Public Domain Mark |
+| `world/calea-victoriei.jpg` | [Mihai Petre / Stratoreaper](https://commons.wikimedia.org/wiki/File:Hotel_Continental_-_Calea_Victoriei.jpg) | [CC BY-SA 3.0 RO](https://creativecommons.org/licenses/by-sa/3.0/ro/deed.en) |
+| `world/dacia-1300.jpg` | [dacia24.de](https://commons.wikimedia.org/wiki/File:Dacia_1300_(cropped).JPG) | [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/) |
+| `world/lipscani-oldtown.jpg` | [Chainwit.](https://commons.wikimedia.org/wiki/File:Strada_Lipscani_18-20_Bucure%C8%99ti_(2023)_-_img_04.jpg) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
+| `world/magheru-boulevard.jpg` | [Mihai Petre / Stratoreaper](https://commons.wikimedia.org/wiki/File:Bd._Magheru_1.jpg) | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) |
+| `world/parliament.jpg` | [Jorge Franganillo](https://en.wikivoyage.org/wiki/File:Bucharest_-_Palace_of_the_Parliament_(2024)_(2).jpg), resized reference copy | [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/) |
+| `world/piata-unirii.jpg` | [bogdan / psiho.child](https://commons.wikimedia.org/wiki/File:Piata_Unirii_-_Bucuresti.jpg) | [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/) |
+| `world/unirii-boulevard.jpg` | [Crislia](https://commons.wikimedia.org/wiki/File:Bucharest_Bucuresti_Romania.JPG) | [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) |
+| `world/university-square.jpg` | [Madalin Pentelie](https://commons.wikimedia.org/wiki/File:Bucharest_University_Square_(cropped).jpg) | [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) |
 
-Resolve any of these at `https://commons.wikimedia.org/wiki/<page>`.
+The Palace of Parliament image is retained only as a non-commercial studio
+reference. Its former Commons page was removed because Romania does not provide
+the same freedom-of-panorama treatment as many other countries; the linked
+Wikivoyage file page preserves the photographer and CC BY 2.0 attribution.
 
 ## Concept owner's own material
 

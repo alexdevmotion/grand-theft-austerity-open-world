@@ -1,3 +1,0 @@
-Final command: `GTA_BROWSER_SLOTS=1 tools/gta-browser checker close --all`
-Result: `✓ Closed session: gta`
-The sole checker session was closed once at the end of the recheck.

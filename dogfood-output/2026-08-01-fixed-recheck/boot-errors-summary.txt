@@ -1,1 +1,0 @@
-`checker errors` output was empty after fresh boot; no page errors were captured.

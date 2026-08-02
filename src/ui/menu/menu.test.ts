@@ -32,7 +32,7 @@ import {
   SENS_MAX,
   SENS_MIN,
 } from './settings';
-import { frontEndGate, sensPct, worldHandoffPolicy } from './frontEnd';
+import { frontEndGate, launchProgress, sensPct, worldHandoffPolicy } from './frontEnd';
 
 /* ---- boot gate ---------------------------------------------------- */
 
@@ -54,6 +54,13 @@ test('players get the front-end, and can still turn it off', () => {
 test('the fading curtain can render the world but cannot start gameplay early', () => {
   expect(worldHandoffPolicy('under-curtain')).toEqual({ paused: false, inputEnabled: false });
   expect(worldHandoffPolicy('interactive')).toEqual({ paused: false, inputEnabled: true });
+});
+
+test('start progress is clamped and never moves backwards when milestones race', () => {
+  expect(launchProgress(10, 32)).toBe(32);
+  expect(launchProgress(78, 32)).toBe(78);
+  expect(launchProgress(92, 120)).toBe(100);
+  expect(launchProgress(-10, 8.6)).toBe(9);
 });
 
 /* ---- loading panels ----------------------------------------------- */

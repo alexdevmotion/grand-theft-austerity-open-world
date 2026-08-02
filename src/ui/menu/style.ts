@@ -703,7 +703,62 @@ export const FRONT_END_CSS = `
   opacity: 0;
   background: radial-gradient(circle at 30% 62%, rgb(255 89 150 / 55%), rgb(20 5 32 / 92%) 45%, #05030a 78%);
 }
+.gta-fe .fe-launch {
+  position: absolute;
+  left: var(--fe-pad);
+  right: var(--fe-pad);
+  bottom: clamp(34px, 7vh, 82px);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px 24px;
+  opacity: 0;
+  transform: translateY(16px);
+}
+.gta-fe .fe-launch-kicker {
+  grid-column: 1 / -1;
+  color: var(--fe-gold);
+  font-size: clamp(10px, .78vw, 13px);
+  font-weight: 900;
+  letter-spacing: .34em;
+}
+.gta-fe .fe-launch-status {
+  color: rgb(255 255 255 / 92%);
+  font-size: clamp(13px, 1.15vw, 19px);
+  font-weight: 900;
+  letter-spacing: .16em;
+}
+.gta-fe .fe-launch-progress {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 4ch;
+  align-items: center;
+  gap: 18px;
+}
+.gta-fe .fe-launch-bar {
+  position: relative;
+  height: 8px;
+  overflow: hidden;
+  background: rgb(255 255 255 / 18%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 10%);
+}
+.gta-fe .fe-launch-bar i {
+  position: absolute;
+  inset: 0;
+  transform: scaleX(0);
+  transform-origin: left center;
+  background: linear-gradient(90deg, var(--fe-pink), var(--fe-gold));
+  transition: transform .42s cubic-bezier(.16, 1, .3, 1);
+}
+.gta-fe .fe-launch-pct {
+  color: var(--fe-gold);
+  font-size: clamp(14px, 1.25vw, 21px);
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
 .gta-fe.is-starting .fe-curtain { animation: fe-curtain 1.15s ease-in both; }
+.gta-fe.is-starting .fe-launch { animation: fe-launch-in .55s .35s cubic-bezier(.16, 1, .3, 1) both; }
 .gta-fe.is-starting .fe-lockup { animation: fe-punch .9s ease-out both; }
 .gta-fe.is-starting .fe-menu,
 .gta-fe.is-starting .fe-hint,
@@ -812,6 +867,10 @@ export const FRONT_END_CSS = `
   22% { opacity: .55; }
   100% { opacity: 1; }
 }
+@keyframes fe-launch-in {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: none; }
+}
 @keyframes fe-punch {
   0% { transform: rotate(-1.5deg) scale(1); }
   18% { transform: rotate(-1.5deg) scale(1.045); }
@@ -828,6 +887,8 @@ export const FRONT_END_CSS = `
   .gta-fe .fe-load-copy { width: 86vw; }
   .gta-fe .fe-load-foot { grid-template-columns: 1fr auto; }
   .gta-fe .fe-load-status { grid-column: 1 / -1; }
+  .gta-fe .fe-launch { bottom: clamp(28px, 6vh, 54px); }
+  .gta-fe .fe-launch-status { letter-spacing: .1em; }
 }
 @media (max-height: 620px) {
   .gta-fe .fe-lockup { top: 15vh; }
@@ -842,5 +903,6 @@ export const FRONT_END_CSS = `
   .gta-fe .fe-on .fe-art,
   .gta-fe .fe-on .fe-artwrap,
   .gta-fe .fe-bar b { animation: none; }
+  .gta-fe.is-starting .fe-launch { animation-duration: .01ms; animation-delay: 0s; }
 }
 `;

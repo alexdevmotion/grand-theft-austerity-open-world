@@ -112,6 +112,7 @@ export class FrontEnd {
   private playSeconds = 0;
   private saveTimer = 0;
   private starting = false;
+  private launchPct = 0;
   /** Verification only: hold the current phase instead of advancing. */
   private frozen = false;
 
@@ -131,6 +132,9 @@ export class FrontEnd {
     pageCrumb: HTMLElement;
     pageBody: HTMLElement;
     pageFoot: HTMLElement;
+    launchStatus: HTMLElement;
+    launchBar: HTMLElement;
+    launchPct: HTMLElement;
   };
 
   private disposers: Array<() => void> = [];
@@ -167,6 +171,9 @@ export class FrontEnd {
       pageCrumb: q('.fe-page-crumb'),
       pageBody: q('.fe-page-body'),
       pageFoot: q('.fe-page-foot'),
+      launchStatus: q('.fe-launch-status'),
+      launchBar: q('.fe-launch-bar i'),
+      launchPct: q('.fe-launch-pct'),
     };
 
     this.session = loadSession();
@@ -768,21 +775,26 @@ export class FrontEnd {
   private startGame(mode: 'new' | 'continue'): void {
     if (this.starting) return;
     this.starting = true;
+    this.setLaunchProgress(10, mode === 'continue' ? 'SE DESCHIDE DOSARUL SALVAT' : 'SE PREGĂTEȘTE UN DOSAR NOU');
 
     // Still inside the gesture that triggered this — the only moment the
     // browser will let an AudioContext start.
-    void this.settings?.unlockAudio();
+    void Promise.resolve(this.settings?.unlockAudio()).then(() => {
+      this.setLaunchProgress(32, 'SE DESCHIDE RADIOUL');
+    });
 
     this.root.classList.add('is-starting');
 
     const resumeAt = window.setTimeout(() => this.enterWorld(mode), 1150);
+    const readyAt = window.setTimeout(() => this.setLaunchProgress(100, 'GATA — BUCUREȘTI ONLINE'), 1900);
     const fadeAt = window.setTimeout(() => {
       this.root.style.transition = 'opacity .55s ease';
       this.root.style.opacity = '0';
-    }, 1550);
-    const goneAt = window.setTimeout(() => this.finish(mode), 2150);
+    }, 2050);
+    const goneAt = window.setTimeout(() => this.finish(mode), 2500);
     this.disposers.push(() => {
       clearTimeout(resumeAt);
+      clearTimeout(readyAt);
       clearTimeout(fadeAt);
       clearTimeout(goneAt);
     });
@@ -791,6 +803,7 @@ export class FrontEnd {
   private enterWorld(mode: 'new' | 'continue'): void {
     const ctx = this.ctx;
     if (!ctx) return;
+    this.setLaunchProgress(58, 'SE PORNEȘTE BUCUREȘTIUL');
     const handoff = worldHandoffPolicy('under-curtain');
     ctx.time.paused = handoff.paused;
     ctx.input.enabled = handoff.inputEnabled;
@@ -815,9 +828,16 @@ export class FrontEnd {
       this.session = emptySession();
     }
 
+    this.setLaunchProgress(78, mode === 'continue' ? 'SE RESTABILEȘTE POZIȚIA' : 'SE AȘAZĂ MISIUNEA');
+    // Two frames prove the renderer has presented the resumed world rather
+    // than merely accepting the state change on the main thread.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => this.setLaunchProgress(92, 'ULTIMELE VERIFICĂRI'));
+    });
   }
 
   private finish(mode: 'new' | 'continue'): void {
+    this.setLaunchProgress(100, 'GATA — BUCUREȘTI ONLINE');
     this.phase = 'ingame';
     cancelAnimationFrame(this.raf);
     this.raf = 0;
@@ -839,6 +859,16 @@ export class FrontEnd {
     ctx?.tryGet(Services.Hud)?.toast('Clic pentru a prinde mouse-ul', 'info', 4000);
   }
 
+  private setLaunchProgress(pct: number, status: string): void {
+    const next = launchProgress(this.launchPct, pct);
+    if (next === this.launchPct && pct < this.launchPct) return;
+    this.launchPct = next;
+    this.els.launchBar.style.transform = `scaleX(${(next / 100).toFixed(3)})`;
+    this.els.launchPct.textContent = `${next}%`;
+    this.els.launchStatus.textContent = status;
+    this.els.launchBar.parentElement?.setAttribute('aria-valuenow', String(next));
+  }
+
   /* ---------------------------------------------------------------- */
   /* Debug hook                                                       */
   /* ---------------------------------------------------------------- */
@@ -853,6 +883,7 @@ export class FrontEnd {
         progress: Math.round(this.shownPct),
         panel: this.panelIndex,
         complete: this.loadComplete,
+        launchProgress: this.launchPct,
         canContinue: this.canContinue(),
       }),
       /** Jump the sting/loading wait — for screenshots, not for players. */
@@ -988,7 +1019,16 @@ export class FrontEnd {
   </div>
 </section>
 
-<div class="fe-curtain"></div>`;
+<div class="fe-curtain">
+  <div class="fe-launch" role="status" aria-live="polite">
+    <p class="fe-launch-kicker">STARTING GAME</p>
+    <p class="fe-launch-status">SE PREGĂTEȘTE DOSARUL</p>
+    <div class="fe-launch-progress">
+      <span class="fe-launch-bar" role="progressbar" aria-label="Progres pornire joc" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></span>
+      <span class="fe-launch-pct">0%</span>
+    </div>
+  </div>
+</div>`;
   }
 }
 
@@ -1010,6 +1050,11 @@ export function worldHandoffPolicy(phase: WorldHandoffPhase): {
   inputEnabled: boolean;
 } {
   return { paused: false, inputEnabled: phase === 'interactive' };
+}
+
+/** Launch milestones may resolve out of order (notably AudioContext unlock). */
+export function launchProgress(previous: number, next: number): number {
+  return Math.max(clamp(previous, 0, 100), clamp(Math.round(next), 0, 100));
 }
 
 /**

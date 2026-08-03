@@ -4,8 +4,12 @@ import type { Vector3 } from 'three';
 
 export interface GameEvents {
   /** Mission / story spine. */
-  /** The title curtain has cleared and the player can see/control the world. */
-  'game:started': { mode: 'new' | 'continue' };
+  /**
+   * The title curtain has cleared and the player can see/control the world.
+   * `firstRun` is true only for a new game with nothing to continue — the
+   * walkthrough listens for exactly that.
+   */
+  'game:started': { mode: 'new' | 'continue'; firstRun?: boolean };
   'mission:advance': { id: string };
   'mission:complete': { id: string };
   'mission:failed': { id: string; reason: string };

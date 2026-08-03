@@ -47,13 +47,10 @@ import {
   PANEL_SECONDS,
   CREDITS,
   GROUP_ORDER_NOTE,
-  FIRST_RUN_DISMISS,
-  FIRST_RUN_HINTS,
-  FIRST_RUN_KICKER,
-  FIRST_RUN_SECONDS,
-  FIRST_RUN_TITLE,
+  LAUNCH_HINTS,
+  LAUNCH_HINTS_TITLE,
   panelAt,
-  showsFirstRunCard,
+  showsWalkthrough,
   stepSelection,
   type MenuId,
 } from './panels';
@@ -128,7 +125,6 @@ export class FrontEnd {
   private launchPct = 0;
   /** Latched at START, before the save slot is cleared. */
   private firstRun = false;
-  private firstRunEl: HTMLElement | null = null;
   /** Verification only: hold the current phase instead of advancing. */
   private frozen = false;
 
@@ -140,7 +136,6 @@ export class FrontEnd {
     loadChip: HTMLElement;
     loadHead: HTMLElement;
     loadBody: HTMLElement;
-    loadKeys: HTMLElement;
     status: HTMLElement;
     bar: HTMLElement;
     pct: HTMLElement;
@@ -152,10 +147,10 @@ export class FrontEnd {
     launchStatus: HTMLElement;
     launchBar: HTMLElement;
     launchPct: HTMLElement;
+    launchKeys: HTMLElement;
   };
 
   private disposers: Array<() => void> = [];
-  private firstRunDisposers: Array<() => void> = [];
 
   /* ---------------------------------------------------------------- */
   /* Mounting                                                         */
@@ -181,7 +176,6 @@ export class FrontEnd {
       loadChip: q('.fe-load-chip'),
       loadHead: q('.fe-load-head'),
       loadBody: q('.fe-load-body'),
-      loadKeys: q('.fe-load-keys'),
       status: q('.fe-load-status'),
       bar: q('.fe-bar i'),
       pct: q('.fe-load-pct'),
@@ -193,6 +187,7 @@ export class FrontEnd {
       launchStatus: q('.fe-launch-status'),
       launchBar: q('.fe-launch-bar i'),
       launchPct: q('.fe-launch-pct'),
+      launchKeys: q('.fe-launch-keys'),
     };
 
     this.session = loadSession();
@@ -397,7 +392,6 @@ export class FrontEnd {
     this.els.loadChip.textContent = `${p.index} / 0${LOAD_PANELS.length} — ${p.act}`;
     this.els.loadHead.innerHTML = p.headline;
     this.els.loadBody.textContent = p.body;
-    this.els.loadKeys.innerHTML = hintChips(hintRows(p.hints));
     // Restart the crossfade: reflow between remove and add or the class never
     // re-triggers the animation.
     this.els.loadCopy.classList.remove('fe-swap');
@@ -797,7 +791,8 @@ export class FrontEnd {
     this.starting = true;
     // Decide now: `enterWorld` clears the slot on a new game, so by the time the
     // curtain lifts `canContinue()` can no longer tell a first run apart.
-    this.firstRun = showsFirstRunCard(mode, this.canContinue());
+    this.firstRun = showsWalkthrough(mode, this.canContinue());
+    this.paintLaunchKeys();
     this.setLaunchProgress(10, mode === 'continue' ? 'SE DESCHIDE DOSARUL SALVAT' : 'SE PREGĂTEȘTE UN DOSAR NOU');
 
     // Still inside the gesture that triggered this — the only moment the
@@ -878,67 +873,26 @@ export class FrontEnd {
     // Presentation that explains the opening belongs AFTER the curtain. A
     // card emitted from enterWorld() sits hidden beneath the remaining one
     // second of menu fade, which is precisely how the old start lost its story.
-    ctx?.events.emit('game:started', { mode });
+    // `firstRun` travels with the event: the walkthrough system in
+    // `src/ui/walkthrough.ts` owns the in-world coaching, and only the
+    // front-end knows whether this player has ever played.
+    ctx?.events.emit('game:started', { mode, firstRun: this.firstRun });
     ctx?.tryGet(Services.Hud)?.toast('Clic pentru a prinde mouse-ul', 'info', 4000);
-    if (this.firstRun) this.showFirstRunCard();
   }
 
   /**
-   * The controls, once, for a player who has never played. Deliberately
-   * `pointer-events: none`: the very next thing the player must do is click to
-   * take the pointer lock, and a card that eats that click would teach the
-   * controls and then withhold them. The same click dismisses it.
+   * The keys, on the STARTING GAME curtain. This is the two seconds every
+   * player stares at on their way into the world — a better place for a control
+   * list than the boot panels, which are story, or a menu page nobody opens.
    */
-  private showFirstRunCard(): void {
-    if (this.firstRunEl) return;
-    const rows = hintRows(FIRST_RUN_HINTS);
-    if (!rows.length) return;
-
-    const el = document.createElement('aside');
-    el.className = 'gta-firstrun';
-    el.setAttribute('role', 'status');
-    el.setAttribute('aria-live', 'polite');
-    el.innerHTML = `<p class="fr-kicker">${escapeHtml(FIRST_RUN_KICKER)}</p>
-      <h4 class="fr-title">${escapeHtml(FIRST_RUN_TITLE)}</h4>
-      <div class="fr-keys">${hintChips(rows)}</div>
-      <p class="fr-foot">${escapeHtml(FIRST_RUN_DISMISS)}</p>`;
-    document.body.appendChild(el);
-    this.firstRunEl = el;
-
-    const hide = (): void => this.hideFirstRunCard();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.isTrusted) hide();
-    };
-    const onDown = (e: MouseEvent) => {
-      if (e.isTrusted) hide();
-    };
-    // A frame's grace, or the click that started the game dismisses it instantly.
-    const armAt = window.setTimeout(() => {
-      window.addEventListener('keydown', onKey);
-      window.addEventListener('mousedown', onDown);
-    }, 350);
-    const autoAt = window.setTimeout(hide, FIRST_RUN_SECONDS * 1000);
-
-    this.firstRunDisposers.push(() => {
-      clearTimeout(armAt);
-      clearTimeout(autoAt);
-      window.removeEventListener('keydown', onKey);
-      window.removeEventListener('mousedown', onDown);
-    });
-  }
-
-  private hideFirstRunCard(): void {
-    for (const d of this.firstRunDisposers) d();
-    this.firstRunDisposers.length = 0;
-    const el = this.firstRunEl;
-    if (!el) return;
-    this.firstRunEl = null;
-    el.classList.add('is-gone');
-    const goneAt = window.setTimeout(() => el.remove(), 600);
-    this.disposers.push(() => {
-      clearTimeout(goneAt);
-      el.remove();
-    });
+  private paintLaunchKeys(): void {
+    const rows = hintRows(LAUNCH_HINTS);
+    if (!rows.length) {
+      this.els.launchKeys.innerHTML = '';
+      return;
+    }
+    this.els.launchKeys.innerHTML =
+      `<p class="fe-launch-keys-t">${LAUNCH_HINTS_TITLE}</p><div class="fe-launch-keys-g">${hintChips(rows)}</div>`;
   }
 
   private setLaunchProgress(pct: number, status: string): void {
@@ -967,10 +921,8 @@ export class FrontEnd {
         complete: this.loadComplete,
         launchProgress: this.launchPct,
         canContinue: this.canContinue(),
-        firstRunCard: this.firstRunEl !== null,
+        firstRun: this.firstRun,
       }),
-      /** Put the first-run controls card up so it can be captured. */
-      firstRun: () => this.showFirstRunCard(),
       /** Jump the sting/loading wait — for screenshots, not for players. */
       skip: () => {
         if (this.phase === 'sting') this.skipSting();
@@ -1016,7 +968,6 @@ export class FrontEnd {
 
   dispose(): void {
     cancelAnimationFrame(this.raf);
-    this.hideFirstRunCard();
     for (const d of this.disposers) d();
     this.disposers.length = 0;
     this.root?.remove();
@@ -1063,7 +1014,6 @@ export class FrontEnd {
     <p class="fe-load-body"></p>
   </div>
   <div class="fe-load-foot">
-    <p class="fe-load-keys" aria-label="Comenzi"></p>
     <span class="fe-load-status"></span>
     <span class="fe-bar"><i></i><b></b><u style="left:25%"></u><u style="left:50%"></u><u style="left:75%"></u></span>
     <span class="fe-load-pct">0%</span>
@@ -1114,6 +1064,7 @@ export class FrontEnd {
       <span class="fe-launch-bar" role="progressbar" aria-label="Progres pornire joc" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></span>
       <span class="fe-launch-pct">0%</span>
     </div>
+    <div class="fe-launch-keys" aria-label="Comenzi"></div>
   </div>
 </div>`;
   }

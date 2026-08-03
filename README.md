@@ -79,6 +79,8 @@ Open `http://localhost:5273`.
 
 The in-game Controls page is the source of truth. The essentials are `WASD` to move or drive, mouse to look, `Shift` to sprint, `E`/`F` to interact or enter a vehicle, `M` for the map, `P` for photo mode and `Esc` for pause.
 
+A first-time player does not have to look them up: the keys are printed on the STARTING GAME curtain after START, a step-by-step guide coaches the first two minutes in the world, and standing next to a car or a pedestrian shows the key for what you could do there. All of it is resolved from the real input tables in `src/core/keyHints.ts`, so a rebind moves every prompt with it.
+
 Before sending a change:
 
 ```sh

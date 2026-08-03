@@ -51,6 +51,7 @@ import { WeatherSystem } from './world/weather';
 import { DebugSystem } from './core/debug';
 import { MenuSystem } from './ui/menu/menuSystem';
 import { MinimapSystem } from './ui/map/minimapSystem';
+import { WalkthroughSystem } from './ui/walkthrough';
 import { InteriorSystem } from './world/interiors/interiorSystem';
 import { Services } from './core/services';
 import { loadStoredQuality } from './ui/menu/settings';
@@ -128,6 +129,7 @@ export async function createGame(
     .add(new AudioSystem(), PAUSED)       // 410
     .add(new HudSystem())                 // 420
     .add(new MinimapSystem(), PAUSED)     // 425
+    .add(new WalkthroughSystem())         // 430  first-run guide, new games only
     .add(new PauseMenu())                 // 440
     .add(postfx, PAUSED);                 // 900
 

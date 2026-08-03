@@ -30,7 +30,16 @@
 import * as THREE from 'three';
 import type { GameContext, System } from '../core/engine';
 import { CG, probeGroups, type PhysicsWorld } from '../physics/physics';
+import type { PlayerService, VehicleClass } from '../core/services';
 import { Services, type InteractableKind, type InteractableSpec, type InteractionService } from '../core/services';
+import { hintKeys } from '../core/keyHints';
+import {
+  EXIT_PROMPT_SPEED,
+  PERSON_PROMPT_RANGE,
+  VEHICLE_PROMPT_RANGE,
+  contextPrompt,
+  type ContextPromptView,
+} from './contextPrompt';
 
 export type { InteractableKind, InteractableSpec } from '../core/services';
 
@@ -67,6 +76,9 @@ const KIND_COLOR: Record<InteractableKind, number> = {
  */
 const claim = { active: false, frame: -1 };
 
+/** How long the keycap lingers after the thing that justified it goes away. */
+const PROMPT_HOLD_SECONDS = 0.4;
+
 /** True when the interaction system owns this frame's `interact` press. */
 export function interactionClaimed(): boolean {
   return claim.active;
@@ -94,6 +106,10 @@ export class InteractionSystem implements System, InteractionService {
   private focus: Interactable | null = null;
   private promptEl: HTMLDivElement | null = null;
   private lastPromptId = '';
+  /** What is on the prompt right now — a registry focus or a world offer. */
+  private context: ContextPromptView | null = null;
+  /** Seconds with nothing to offer, so the prompt does not strobe in a crowd. */
+  private emptyFor = 0;
 
   /** Shared marker geometry — one ring, one diamond, one beam for everything. */
   private ringGeo!: THREE.RingGeometry;
@@ -200,6 +216,11 @@ export class InteractionSystem implements System, InteractionService {
     return this.focus ? this.focus.id : '';
   }
 
+  /** The keycap prompt on screen right now, registry or world. Debug/tests. */
+  get promptLabel(): string {
+    return this.context ? this.context.label : '';
+  }
+
   /** Fire an interactable directly — used by the debug harness and by tests. */
   trigger(id: string): boolean {
     const it = this.byId.get(id);
@@ -214,9 +235,17 @@ export class InteractionSystem implements System, InteractionService {
 
   update(dt: number, ctx: GameContext): void {
     const player = ctx.tryGet(Services.Player);
-    if (!player || this.list.length === 0) {
+    if (!player) {
       this.setFocus(null);
       claim.active = false;
+      this.offerPrompt(null, dt);
+      return;
+    }
+    if (this.list.length === 0) {
+      // No registry entries, but a parked Dacia is still worth a keycap.
+      this.setFocus(null);
+      claim.active = false;
+      this.offerPrompt(this.readContext(ctx, player), dt);
       return;
     }
 
@@ -265,6 +294,15 @@ export class InteractionSystem implements System, InteractionService {
     claim.active = best !== null;
     claim.frame = ctx.time.frame;
 
+    // A registered interactable owns both the prompt and the press; the world's
+    // own offers only speak when the registry is quiet.
+    this.offerPrompt(
+      best
+        ? { id: `it:${best.id}`, keys: hintKeys('interact'), label: best.label, color: best.color }
+        : this.readContext(ctx, player),
+      dt,
+    );
+
     if (best && ctx.input.actionPressed('interact')) this.fire(best);
 
     this.animateMarkers(dt, ctx, pos);
@@ -293,18 +331,86 @@ export class InteractionSystem implements System, InteractionService {
 
   private setFocus(it: Interactable | null): void {
     this.focus = it;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* What the world offers where you stand                             */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * The car you could get into, the car you could step out of, the person in
+   * front of you. Measured here, decided in `contextPrompt()`.
+   */
+  private readContext(ctx: GameContext, player: PlayerService): ContextPromptView | null {
+    const onFoot = player.isOnFoot;
+    const seated = player.inVehicle;
+
+    let nearVehicle: VehicleClass | null = null;
+    if (onFoot) {
+      const v = ctx.tryGet(Services.Vehicles)?.nearestEnterable(player.position, VEHICLE_PROMPT_RANGE);
+      if (v && !v.isWrecked) nearVehicle = v.kind;
+    }
+
+    return contextPrompt({
+      nearVehicle,
+      seatedStopped: !!seated && Math.abs(seated.speed) < EXIT_PROMPT_SPEED,
+      nearPerson: onFoot && nearVehicle === null && this.personInReach(ctx, player),
+    });
+  }
+
+  /** A living ped within arm's reach and roughly in front of the camera. */
+  private personInReach(ctx: GameContext, player: PlayerService): boolean {
+    const peds = ctx.tryGet(Services.Peds);
+    if (!peds) return false;
+    ctx.camera.getWorldDirection(_fwd);
+    const pos = player.position;
+    const r2 = PERSON_PROMPT_RANGE * PERSON_PROMPT_RANGE;
+    for (const ped of peds.all) {
+      if (!ped.isAlive) continue;
+      const dx = ped.position.x - pos.x;
+      const dz = ped.position.z - pos.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 > r2 || d2 < 1e-4) continue;
+      if (Math.abs(ped.position.y - pos.y) > 2.5) continue;
+      const inv = 1 / Math.sqrt(d2);
+      if (dx * inv * _fwd.x + dz * inv * _fwd.z > 0.35) return true;
+    }
+    return false;
+  }
+
+  /**
+   * The one prompt widget, shared by the registry and the world.
+   *
+   * Losing the offer does NOT hide it immediately. Walking through a crowd, a
+   * ped drifts in and out of the melee arc several times a second, and a prompt
+   * that strobed with it read as a bug. A new offer still takes over at once —
+   * only the disappearance waits.
+   */
+  private offerPrompt(view: ContextPromptView | null, dt: number): void {
+    this.context = view;
+    if (!view) {
+      this.emptyFor += dt;
+      if (this.lastPromptId && this.emptyFor >= PROMPT_HOLD_SECONDS) this.paintPrompt(null);
+      return;
+    }
+    this.emptyFor = 0;
+    this.paintPrompt(view);
+  }
+
+  private paintPrompt(view: ContextPromptView | null): void {
     const el = this.promptEl;
     if (!el) return;
-    const id = it ? it.id : '';
+    const id = view ? view.id : '';
     if (id === this.lastPromptId) return;
     this.lastPromptId = id;
-    if (!it) {
+    if (!view) {
       el.style.opacity = '0';
       el.style.transform = 'translateX(-50%) translateY(6px)';
       return;
     }
-    el.innerHTML = `<kbd>E</kbd><span>${escapeHtml(it.label)}</span>`;
-    el.style.borderColor = `#${it.color.toString(16).padStart(6, '0')}`;
+    el.innerHTML =
+      `${view.keys.map((k) => `<kbd>${escapeHtml(k)}</kbd>`).join('')}<span>${escapeHtml(view.label)}</span>`;
+    el.style.borderColor = `#${view.color.toString(16).padStart(6, '0')}`;
     el.style.opacity = '1';
     el.style.transform = 'translateX(-50%) translateY(0)';
   }
@@ -412,6 +518,7 @@ export class InteractionSystem implements System, InteractionService {
     }
     this.matCache.clear();
     this.promptEl?.remove();
+    this.context = null;
     claim.active = false;
   }
 }

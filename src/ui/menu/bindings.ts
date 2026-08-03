@@ -15,7 +15,7 @@
  * `ActionName` fails `tsc` until it appears here. The list cannot drift.
  */
 
-import type { Input, ActionName } from '../../core/input';
+import { HANDBRAKE_KEY, MOVE_KEYS, keysForAction, type Input, type ActionName } from '../../core/input';
 
 export type BindGroup = 'foot' | 'vehicle' | 'system';
 
@@ -90,6 +90,7 @@ const KEY_GLYPHS: Record<string, string> = {
   Equal: '=',
   BracketLeft: '[',
   BracketRight: ']',
+  Mouse: 'MOUSE',
   Mouse0: 'CLIC ST.',
   Mouse1: 'CLIC MIJ.',
   Mouse2: 'CLIC DR.',
@@ -102,6 +103,83 @@ export function glyph(code: string): string {
 export interface BindingRow {
   label: string;
   keys: string[];
+}
+
+/* ------------------------------------------------------------------ */
+/* Teaching hints — the same bindings, without a live Input            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The controls page can afford to probe: by then `ctx.input` exists. The
+ * loading screen cannot — it is on screen while the systems are still being
+ * built — and the first-run card must not fire a storm of synthetic keys at a
+ * world that has just started ticking. So hints read the key tables
+ * `src/core/input.ts` now exports instead. Still one source of truth: rebind a
+ * key there and both the probe and this list move together.
+ */
+export type HintId =
+  | 'move'
+  | 'look'
+  | 'sprint'
+  | 'interact'
+  | 'punch'
+  | 'aim'
+  | 'drive'
+  | 'steer'
+  | 'handbrake'
+  | 'radioNext'
+  | 'map'
+  | 'pause'
+  | 'photoMode';
+
+export interface HintRow {
+  readonly id: HintId;
+  readonly label: string;
+  readonly keys: readonly string[];
+}
+
+/** First binding per direction — WASD, not WASD plus four arrows. */
+const primary = (codes: readonly string[]): string[] => (codes[0] ? [codes[0]] : []);
+
+const HINT_SOURCES: Record<HintId, { label: string; codes: () => string[] }> = {
+  move: {
+    label: 'Mergi',
+    codes: () => [
+      ...primary(MOVE_KEYS.forward),
+      ...primary(MOVE_KEYS.left),
+      ...primary(MOVE_KEYS.back),
+      ...primary(MOVE_KEYS.right),
+    ],
+  },
+  look: { label: 'Privește în jur', codes: () => ['Mouse'] },
+  sprint: { label: 'Fugi', codes: () => primary(keysForAction('sprint')) },
+  interact: { label: 'Urcă în mașină / interacționează', codes: () => keysForAction('interact') },
+  punch: { label: 'Lovește', codes: () => ['Mouse0'] },
+  aim: { label: 'Ochește', codes: () => ['Mouse2'] },
+  drive: {
+    label: 'Accelerează / frânează',
+    codes: () => [...primary(MOVE_KEYS.forward), ...primary(MOVE_KEYS.back)],
+  },
+  steer: {
+    label: 'Virează',
+    codes: () => [...primary(MOVE_KEYS.left), ...primary(MOVE_KEYS.right)],
+  },
+  handbrake: { label: 'Frână de mână', codes: () => [HANDBRAKE_KEY] },
+  radioNext: { label: 'Postul următor', codes: () => primary(keysForAction('radioNext')) },
+  map: { label: 'Hartă', codes: () => primary(keysForAction('map')) },
+  pause: { label: 'Pauză / meniu', codes: () => primary(keysForAction('pause')) },
+  photoMode: { label: 'Mod foto', codes: () => primary(keysForAction('photoMode')) },
+};
+
+/** `null` when nothing is bound to it any more — a hint is never invented. */
+export function hintRow(id: HintId): HintRow | null {
+  const src = HINT_SOURCES[id];
+  const keys = src.codes().map(glyph);
+  return keys.length ? { id, label: src.label, keys } : null;
+}
+
+export function hintRows(ids: readonly HintId[]): HintRow[] {
+  return ids.map(hintRow).filter((r): r is HintRow => r !== null);
 }
 
 export type BindingGroups = Record<BindGroup, BindingRow[]>;

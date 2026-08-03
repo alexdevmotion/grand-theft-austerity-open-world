@@ -11,9 +11,12 @@ import {
   MENU_ITEMS,
   PANEL_SECONDS,
   CREDITS,
+  FIRST_RUN_HINTS,
   panelAt,
+  showsFirstRunCard,
   stepSelection,
 } from './panels';
+import { hintRow, hintRows, type HintId } from './bindings';
 import {
   actNumber,
   describeSession,
@@ -85,6 +88,45 @@ test('panels advance once each and then hold on the last', () => {
   // A slow load must not rewind to act I and spoil act IV twice.
   expect(panelAt(PANEL_SECONDS * 40)).toBe(3);
   expect(panelAt(-5)).toBe(0);
+});
+
+/* ---- controls the player is taught -------------------------------- */
+
+test('every loading panel teaches some controls', () => {
+  for (const p of LOAD_PANELS) {
+    expect(p.hints.length).toBeGreaterThan(1);
+    // A hint that resolves to nothing would print an empty chip.
+    expect(hintRows(p.hints).length).toBe(p.hints.length);
+  }
+  // The keys a first-timer needs first are on the panel that shows first.
+  expect(LOAD_PANELS[0].hints).toContain('move');
+  expect(LOAD_PANELS[0].hints).toContain('interact');
+});
+
+test('hints read the real key tables rather than a hand-written list', () => {
+  expect(hintRow('move')?.keys).toEqual(['W', 'A', 'S', 'D']);
+  expect(hintRow('sprint')?.keys).toEqual(['SHIFT']);
+  expect(hintRow('interact')?.keys).toEqual(['E', 'F']);
+  expect(hintRow('handbrake')?.keys).toEqual(['SPAȚIU']);
+  expect(hintRow('map')?.keys).toEqual(['M']);
+  expect(hintRow('look')?.keys).toEqual(['MOUSE']);
+});
+
+test('the first-run card covers walking, driving and getting back to the menu', () => {
+  const rows = hintRows(FIRST_RUN_HINTS);
+  expect(rows.length).toBe(FIRST_RUN_HINTS.length);
+  const ids = rows.map((r) => r.id);
+  for (const id of ['move', 'look', 'interact', 'drive', 'pause'] as HintId[]) {
+    expect(ids).toContain(id);
+  }
+  for (const r of rows) expect(r.keys.length).toBeGreaterThan(0);
+});
+
+test('the first-run card is for players with nothing to continue', () => {
+  expect(showsFirstRunCard('new', false)).toBe(true);
+  expect(showsFirstRunCard('new', true)).toBe(false);
+  expect(showsFirstRunCard('continue', false)).toBe(false);
+  expect(showsFirstRunCard('continue', true)).toBe(false);
 });
 
 /* ---- menu row ----------------------------------------------------- */

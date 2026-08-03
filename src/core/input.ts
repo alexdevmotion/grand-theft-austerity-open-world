@@ -51,6 +51,26 @@ const KEY_ACTIONS: Record<string, ActionName> = {
   KeyB: 'lookBehind',
 };
 
+/**
+ * The movement axes, as the keys `update()` really reads. Exported so the
+ * loading screen and the first-run card can teach movement without a live
+ * `Input` to probe — `update()` reads this same table, so the two cannot drift.
+ */
+export const MOVE_KEYS: Record<'forward' | 'back' | 'left' | 'right', readonly string[]> = {
+  forward: ['KeyW', 'ArrowUp'],
+  back: ['KeyS', 'ArrowDown'],
+  left: ['KeyA', 'ArrowLeft'],
+  right: ['KeyD', 'ArrowRight'],
+};
+
+/** Handbrake is Space while driving — see `Input.handbrake`. */
+export const HANDBRAKE_KEY = 'Space';
+
+/** Every key bound to `a`, in declaration order. The map itself stays private. */
+export function keysForAction(a: ActionName): string[] {
+  return Object.keys(KEY_ACTIONS).filter((code) => KEY_ACTIONS[code] === a);
+}
+
 export class Input {
   readonly axes: InputAxes = { moveX: 0, moveY: 0, lookX: 0, lookY: 0, throttle: 0, steer: 0 };
 
@@ -176,10 +196,10 @@ export class Input {
       return;
     }
 
-    const kx = (this.isDown('KeyD') || this.isDown('ArrowRight') ? 1 : 0) -
-      (this.isDown('KeyA') || this.isDown('ArrowLeft') ? 1 : 0);
-    const ky = (this.isDown('KeyW') || this.isDown('ArrowUp') ? 1 : 0) -
-      (this.isDown('KeyS') || this.isDown('ArrowDown') ? 1 : 0);
+    const axis = (pos: readonly string[], neg: readonly string[]): number =>
+      (pos.some((c) => this.isDown(c)) ? 1 : 0) - (neg.some((c) => this.isDown(c)) ? 1 : 0);
+    const kx = axis(MOVE_KEYS.right, MOVE_KEYS.left);
+    const ky = axis(MOVE_KEYS.forward, MOVE_KEYS.back);
 
     this.axes.moveX = gp ? clampUnit(kx + gp.lx) : kx;
     this.axes.moveY = gp ? clampUnit(ky - gp.ly) : ky;
@@ -223,7 +243,7 @@ export class Input {
   }
   /** Handbrake is Space while driving — resolved by the vehicle system. */
   get handbrake(): boolean {
-    return this.isDown('Space') || (this.enabled && this.forcedActions.has('handbrake'));
+    return this.isDown(HANDBRAKE_KEY) || (this.enabled && this.forcedActions.has('handbrake'));
   }
 
   private pollGamepad(): { lx: number; ly: number; rx: number; ry: number; lt: number; rt: number } | null {

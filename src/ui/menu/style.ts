@@ -467,6 +467,38 @@ export const FRONT_END_CSS = `
   letter-spacing: .1em;
 }
 
+.gta-fe .fe-mobile-notice {
+  position: absolute;
+  z-index: 6;
+  left: var(--fe-pad);
+  bottom: clamp(26px, 4.2vh, 52px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: min(92vw, 420px);
+  padding: 12px 14px 13px;
+  background: linear-gradient(135deg, rgb(44 11 62 / 88%), rgb(18 5 31 / 92%));
+  border-left: 3px solid var(--fe-pink-hot);
+  box-shadow: 0 12px 36px rgb(0 0 0 / 45%);
+}
+.gta-fe .fe-mobile-notice[hidden] { display: none; }
+.gta-fe .fe-mobile-kicker {
+  font-family: var(--fe-cond);
+  font-size: clamp(12px, 2.8vw, 15px);
+  font-weight: 800;
+  letter-spacing: .28em;
+  color: var(--fe-gold);
+}
+.gta-fe .fe-mobile-body {
+  font-size: clamp(12px, 3.1vw, 15px);
+  font-weight: 600;
+  letter-spacing: .04em;
+  line-height: 1.35;
+  color: #f4e9ff;
+}
+.gta-fe.is-mobile .fe-hint { display: none; }
+.gta-fe.is-mobile .fe-menu { bottom: clamp(118px, 22vh, 168px); }
+
 .gta-fe .fe-crisis {
   position: absolute;
   z-index: 5;
@@ -527,6 +559,7 @@ export const FRONT_END_CSS = `
 .gta-fe .fe-title.fe-on .fe-crisis i:nth-child(5) { animation-delay: 2.18s; }
 .gta-fe .fe-title.fe-on .fe-edition { animation: fe-fade-in 1.2s 2s ease both; }
 .gta-fe .fe-title.fe-on .fe-hint { animation: fe-hint-in 1.2s 2.2s ease both; }
+.gta-fe .fe-title.fe-on .fe-mobile-notice { animation: fe-hint-in 1.2s 2.0s ease both; }
 
 /* ---- sub-pages ---------------------------------------------------- */
 /* A page is modal: the frame behind it drops away. This is also insurance —
@@ -790,6 +823,7 @@ export const FRONT_END_CSS = `
 .gta-fe.is-starting .fe-lockup { animation: fe-punch .9s ease-out both; }
 .gta-fe.is-starting .fe-menu,
 .gta-fe.is-starting .fe-hint,
+.gta-fe.is-starting .fe-mobile-notice,
 .gta-fe.is-starting .fe-crisis,
 .gta-fe.is-starting .fe-page { opacity: 0; transition: opacity .3s ease; }
 

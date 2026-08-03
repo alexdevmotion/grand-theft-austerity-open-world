@@ -314,6 +314,19 @@ export const FRONT_END_CSS = `
   width: 2px;
   background: rgb(9 3 16 / 75%);
 }
+/* Controls, taught while the panels hold. Full-width row above the bar. */
+.gta-fe .fe-load-keys {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  margin: 0 0 4px;
+  font-size: clamp(9.5px, .82vw, 13px);
+  letter-spacing: .1em;
+}
+.gta-fe .fe-hint-key { display: inline-flex; align-items: center; gap: 7px; }
+.gta-fe .fe-hint-k { display: inline-flex; gap: 3px; }
+.gta-fe .fe-hint-l { color: rgb(255 255 255 / 62%); font-weight: 700; }
 .gta-fe .fe-load-pct {
   min-width: 3.4em;
   text-align: right;
@@ -877,8 +890,80 @@ export const FRONT_END_CSS = `
   100% { transform: rotate(-1.5deg) scale(1.02); opacity: .2; }
 }
 
+/* ================================================================== */
+/* 6. FIRST-RUN CONTROLS CARD                                          */
+/* ================================================================== */
+/* Outside .gta-fe on purpose: the front-end root is display:none by    */
+/* the time this is on screen, and the card belongs to the world.       */
+
+/* Right flank: the left column is the minimap and the stats, the centre is
+   subtitles and the mission card, so this is the only free real estate. */
+.gta-firstrun {
+  position: fixed;
+  z-index: 90;
+  right: clamp(14px, 2.2vw, 34px);
+  /* Below centre: the opening story card and its subtitles own the middle. */
+  top: 57%;
+  width: min(384px, 44vw);
+  padding: 16px 18px 14px;
+  background: linear-gradient(160deg, rgb(16 6 28 / 92%), rgb(9 3 16 / 88%));
+  border: 1px solid rgb(255 61 127 / 38%);
+  border-left: 3px solid #ffb020;
+  box-shadow: 0 18px 48px rgb(0 0 0 / 55%);
+  color: #f4ecff;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  /* The next thing the player must do is click for the pointer lock. */
+  pointer-events: none;
+  animation: fr-in .5s cubic-bezier(.2,.9,.3,1) both;
+}
+.gta-firstrun.is-gone { animation: fr-out .5s ease both; }
+.gta-firstrun .fr-kicker {
+  margin: 0 0 2px;
+  color: #ffb020;
+  font: 800 9.5px/1 system-ui, sans-serif;
+  letter-spacing: .3em;
+}
+.gta-firstrun .fr-title {
+  margin: 0 0 11px;
+  font: 900 19px/1 system-ui, sans-serif;
+  letter-spacing: .16em;
+}
+.gta-firstrun .fr-keys {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px 14px;
+}
+.gta-firstrun .fe-hint-key { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.gta-firstrun .fe-hint-k { display: flex; gap: 3px; flex-shrink: 0; }
+.gta-firstrun .fe-hint-l { font-size: 10.5px; line-height: 1.35; color: #d9c8ee; }
+.gta-firstrun kbd {
+  padding: 4px 6px;
+  background: rgb(162 92 255 / 16%);
+  border: 1px solid rgb(255 61 127 / 35%);
+  color: #ffd9f0;
+  font: 700 9.5px/1 ui-monospace, monospace;
+  letter-spacing: .06em;
+  white-space: nowrap;
+}
+.gta-firstrun .fr-foot {
+  margin: 12px 0 0;
+  font: 700 9px/1.5 system-ui, sans-serif;
+  letter-spacing: .16em;
+  color: #8b76a8;
+}
+@keyframes fr-in {
+  from { opacity: 0; transform: translate(26px, -50%); }
+  to { opacity: 1; transform: translate(0, -50%); }
+}
+@keyframes fr-out {
+  from { opacity: 1; transform: translate(0, -50%); }
+  to { opacity: 0; transform: translate(16px, -50%); }
+}
+
 /* ---- narrow / short screens --------------------------------------- */
 @media (max-width: 900px) {
+  .gta-firstrun { width: min(300px, 66vw); }
+  .gta-firstrun .fr-keys { grid-template-columns: 1fr; }
   .gta-fe .fe-lockup { top: 18vh; width: 74vw; }
   .gta-fe .fe-lockup h1 { font-size: clamp(46px, 13vw, 82px); }
   .gta-fe .fe-menu { width: 90vw; flex-wrap: wrap; gap: 12px 18px; }
@@ -904,5 +989,6 @@ export const FRONT_END_CSS = `
   .gta-fe .fe-on .fe-artwrap,
   .gta-fe .fe-bar b { animation: none; }
   .gta-fe.is-starting .fe-launch { animation-duration: .01ms; animation-delay: 0s; }
+  .gta-firstrun, .gta-firstrun.is-gone { animation-duration: .01ms; }
 }
 `;

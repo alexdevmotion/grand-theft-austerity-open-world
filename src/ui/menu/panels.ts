@@ -7,6 +7,8 @@
  * proved to cover all four acts of `docs/STORY.md`.
  */
 
+import type { HintId } from './bindings';
+
 export interface LoadPanel {
   /** "01" … "04" — the panel index the reference front-end prints. */
   readonly index: string;
@@ -18,6 +20,13 @@ export interface LoadPanel {
   readonly body: string;
   /** Romanian flavour line under the progress bar, when the loader is quiet. */
   readonly status: string;
+  /**
+   * Controls taught while this panel holds. The loading screen used to be pure
+   * story, so a player who pressed START never learned which key walks — the
+   * key list was two menu pages away and entirely opt-in. Each panel now shows
+   * a few bindings, resolved from the live key tables rather than typed here.
+   */
+  readonly hints: readonly HintId[];
 }
 
 /**
@@ -33,6 +42,7 @@ export const LOAD_PANELS: readonly LoadPanel[] = [
     body:
       'Recover the last server. Find the bootstrapped Dacia. Keep the ecosystem alive.',
     status: 'SE SIGILEAZĂ CASA CONSTRUCTORILOR',
+    hints: ['move', 'look', 'interact'],
   },
   {
     index: '02',
@@ -41,6 +51,7 @@ export const LOAD_PANELS: readonly LoadPanel[] = [
     body:
       'Traversează Bucureștiul, adună constructorii, ia stickul cu dovezi de la Recorder și acreditările de emisie de la Nicușor LAN.',
     status: 'SE ADUNĂ CONSTRUCTORII',
+    hints: ['drive', 'steer', 'handbrake'],
   },
   {
     index: '03',
@@ -49,6 +60,7 @@ export const LOAD_PANELS: readonly LoadPanel[] = [
     body:
       'Ajungi la turnul de emisie și înlocuiești discursul național al lui Georgescu cu ce s-a întâmplat de fapt la Casa Constructorilor.',
     status: 'SE CALIBREAZĂ TRANSMISIUNEA',
+    hints: ['sprint', 'map', 'radioNext'],
   },
   {
     index: '04',
@@ -57,6 +69,7 @@ export const LOAD_PANELS: readonly LoadPanel[] = [
     body:
       'Supraviețuiește întoarcerii, sparge baricada Ministerului și intră pe jos în holul Casei Constructorilor. Muzica începe doar după aceea.',
     status: 'MINISTERUL DE-ACCELERĂRII SE MOBILIZEAZĂ',
+    hints: ['punch', 'aim', 'pause'],
   },
 ];
 
@@ -131,6 +144,40 @@ export const CREDITS: readonly CreditBlock[] = [
 export const GROUP_ORDER_NOTE =
   'Citite direct din harta de input a jocului, tastă cu tastă, nu dintr-o listă scrisă de mână. ' +
   'Dacă o tastă se schimbă în cod, se schimbă și aici.';
+
+/* ------------------------------------------------------------------ */
+/* First-run card                                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The card shown once the curtain clears on a first run. The loading panels
+ * teach three keys at a time and only if the player reads them; this is the
+ * safety net for someone who pressed START and is now standing in București.
+ */
+export const FIRST_RUN_HINTS: readonly HintId[] = [
+  'move',
+  'look',
+  'sprint',
+  'interact',
+  'drive',
+  'handbrake',
+  'map',
+  'pause',
+];
+
+export const FIRST_RUN_TITLE = 'COMENZI';
+export const FIRST_RUN_KICKER = 'PRIMA TURĂ';
+export const FIRST_RUN_DISMISS = 'ORICE TASTĂ SAU CLIC — LISTA COMPLETĂ ÎN MENIUL DE PAUZĂ';
+/** Seconds the card stays up if the player never touches anything. */
+export const FIRST_RUN_SECONDS = 14;
+
+/**
+ * Shown only to a player with nothing to continue — a returning player who
+ * picks START already knows how to walk, and CONTINUE never gets the card.
+ */
+export function showsFirstRunCard(mode: 'new' | 'continue', canContinue: boolean): boolean {
+  return mode === 'new' && !canContinue;
+}
 
 /** Menu row identifiers, in on-screen order. */
 export type MenuId = 'start' | 'continue' | 'controls' | 'audio' | 'credits';

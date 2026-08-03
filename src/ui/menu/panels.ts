@@ -183,6 +183,25 @@ export const MENU_ITEMS: readonly MenuItemDef[] = [
   { id: 'credits', label: 'CREDITS', sub: 'CINE A CONSTRUIT ASTA' },
 ];
 
+/** Title-screen banner when the front-end detects a phone / coarse pointer. */
+export const MOBILE_NOTICE = {
+  kicker: 'DESKTOP ONLY',
+  body: 'Open this in a browser on a computer — it will not run on a phone.',
+} as const;
+
+/**
+ * Whether a main-menu row can be activated. START / CONTINUE need a desktop
+ * browser; CONTINUE also needs a resumable save.
+ */
+export function menuItemEnabled(
+  id: MenuId,
+  opts: { canContinue: boolean; mobile: boolean },
+): boolean {
+  if (id === 'start') return !opts.mobile;
+  if (id === 'continue') return !opts.mobile && opts.canContinue;
+  return true;
+}
+
 /**
  * Move the highlight by `dir`, skipping items that are not selectable (a
  * CONTINUE with nothing to continue). Wraps, and returns `from` when nothing in

@@ -44,11 +44,13 @@ import { studioMark } from './mark';
 import {
   LOAD_PANELS,
   MENU_ITEMS,
+  MOBILE_NOTICE,
   PANEL_SECONDS,
   CREDITS,
   GROUP_ORDER_NOTE,
   LAUNCH_HINTS,
   LAUNCH_HINTS_TITLE,
+  menuItemEnabled,
   panelAt,
   showsWalkthrough,
   stepSelection,
@@ -127,6 +129,8 @@ export class FrontEnd {
   private firstRun = false;
   /** Verification only: hold the current phase instead of advancing. */
   private frozen = false;
+  /** Phones / coarse-pointer devices: START and CONTINUE stay locked. */
+  private mobile = false;
 
   private els!: {
     sting: HTMLElement;
@@ -140,6 +144,7 @@ export class FrontEnd {
     bar: HTMLElement;
     pct: HTMLElement;
     items: HTMLElement[];
+    mobileNotice: HTMLElement;
     pageTitle: HTMLElement;
     pageCrumb: HTMLElement;
     pageBody: HTMLElement;
@@ -161,8 +166,10 @@ export class FrontEnd {
     style.textContent = FRONT_END_CSS;
     document.head.appendChild(style);
 
+    this.mobile = isMobileClient();
     this.root = document.createElement('div');
     this.root.className = 'gta-fe';
+    if (this.mobile) this.root.classList.add('is-mobile');
     this.root.style.setProperty('--fe-art', `url(${artUrl})`);
     this.root.innerHTML = this.template();
     document.body.appendChild(this.root);
@@ -180,6 +187,7 @@ export class FrontEnd {
       bar: q('.fe-bar i'),
       pct: q('.fe-load-pct'),
       items: Array.from(this.root.querySelectorAll<HTMLElement>('.fe-item')),
+      mobileNotice: q('.fe-mobile-notice'),
       pageTitle: q('.fe-page-title'),
       pageCrumb: q('.fe-page-crumb'),
       pageBody: q('.fe-page-body'),
@@ -190,6 +198,7 @@ export class FrontEnd {
       launchKeys: q('.fe-launch-keys'),
     };
 
+    this.els.mobileNotice.hidden = !this.mobile;
     this.session = loadSession();
     this.setPanel(0);
     this.bindMenuMouse();
@@ -325,7 +334,9 @@ export class FrontEnd {
     this.page = 'main';
     this.els.load.classList.remove('fe-on');
     this.els.title.classList.add('fe-on');
-    this.selected = this.canContinue() ? 1 : 0;
+    const flags = this.enabledFlags();
+    const prefer = this.canContinue() ? 1 : 0;
+    this.selected = flags[prefer] ? prefer : stepSelection(prefer, 1, flags);
     this.syncMenu();
   }
 
@@ -408,7 +419,9 @@ export class FrontEnd {
   }
 
   private enabledFlags(): boolean[] {
-    return MENU_ITEMS.map((m) => (m.id === 'continue' ? this.canContinue() : true));
+    return MENU_ITEMS.map((m) =>
+      menuItemEnabled(m.id, { canContinue: this.canContinue(), mobile: this.mobile }),
+    );
   }
 
   private bindMenuMouse(): void {
@@ -432,9 +445,15 @@ export class FrontEnd {
     this.els.items.forEach((el, i) => {
       el.classList.toggle('is-sel', i === this.selected);
       el.classList.toggle('is-off', !flags[i]);
-      if (MENU_ITEMS[i].id === 'continue') {
-        const sub = el.querySelector('.fe-item-sub');
-        if (sub) sub.textContent = describeSession(this.session);
+      const item = MENU_ITEMS[i];
+      const sub = el.querySelector('.fe-item-sub');
+      if (!sub || !item) return;
+      if (item.id === 'continue') {
+        sub.textContent = this.mobile ? MOBILE_NOTICE.kicker : describeSession(this.session);
+      } else if (item.id === 'start' && this.mobile) {
+        sub.textContent = MOBILE_NOTICE.kicker;
+      } else if (item.id === 'start') {
+        sub.textContent = item.sub;
       }
     });
   }
@@ -447,12 +466,15 @@ export class FrontEnd {
   private activate(): void {
     const item = MENU_ITEMS[this.selected];
     if (!item) return;
+    if (!menuItemEnabled(item.id, { canContinue: this.canContinue(), mobile: this.mobile })) {
+      return;
+    }
     switch (item.id) {
       case 'start':
         this.startGame('new');
         return;
       case 'continue':
-        if (this.canContinue()) this.startGame('continue');
+        this.startGame('continue');
         return;
       case 'controls':
         this.openPage('controls');
@@ -787,7 +809,7 @@ export class FrontEnd {
   /* ---------------------------------------------------------------- */
 
   private startGame(mode: 'new' | 'continue'): void {
-    if (this.starting) return;
+    if (this.mobile || this.starting) return;
     this.starting = true;
     // Decide now: `enterWorld` clears the slot on a new game, so by the time the
     // curtain lifts `canContinue()` can no longer tell a first run apart.
@@ -922,6 +944,7 @@ export class FrontEnd {
         launchProgress: this.launchPct,
         canContinue: this.canContinue(),
         firstRun: this.firstRun,
+        mobile: this.mobile,
       }),
       /** Jump the sting/loading wait — for screenshots, not for players. */
       skip: () => {
@@ -1038,6 +1061,10 @@ export class FrontEnd {
   </div>
 
   <nav class="fe-menu" aria-label="Meniu principal">${items}</nav>
+  <p class="fe-mobile-notice" role="status" hidden>
+    <span class="fe-mobile-kicker">${MOBILE_NOTICE.kicker}</span>
+    <span class="fe-mobile-body">${MOBILE_NOTICE.body}</span>
+  </p>
   <p class="fe-hint"><kbd>←</kbd><kbd>→</kbd> NAVIGARE · <kbd>ENTER</kbd> SELECTEAZĂ · <kbd>ESC</kbd> ÎNAPOI</p>
 
   <aside class="fe-crisis" aria-label="Political instability">
@@ -1108,6 +1135,39 @@ export function frontEndGate(search: string, webdriver: boolean): FrontEndGate {
   }
   if (webdriver) return { on: false, why: 'automation (navigator.webdriver)' };
   return { on: true, why: 'player' };
+}
+
+export interface MobileClientHints {
+  /** `navigator.userAgentData.mobile` when the browser exposes it. */
+  userAgentDataMobile?: boolean;
+  /** `matchMedia('(pointer: coarse)')`. */
+  coarsePointer?: boolean;
+  /** Raw UA string fallback for older mobile browsers. */
+  userAgent?: string;
+}
+
+/**
+ * Phones (and coarse-pointer handhelds) cannot drive the keyboard/mouse game.
+ * Pure so the menu lock can be unit-tested without a DOM.
+ */
+export function isMobileClient(hints: MobileClientHints = browserMobileHints()): boolean {
+  if (hints.userAgentDataMobile === true) return true;
+  if (hints.userAgentDataMobile === false) return false;
+  if (hints.coarsePointer) return true;
+  const ua = hints.userAgent ?? '';
+  return /iPhone|iPod|Android.+Mobile|webOS|BlackBerry|IEMobile|Opera Mini/i.test(ua);
+}
+
+function browserMobileHints(): MobileClientHints {
+  if (typeof navigator === 'undefined') return {};
+  const nav = navigator as Navigator & {
+    userAgentData?: { mobile?: boolean };
+  };
+  return {
+    userAgentDataMobile: nav.userAgentData?.mobile,
+    coarsePointer: typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches,
+    userAgent: nav.userAgent,
+  };
 }
 
 let instance: FrontEnd | null = null;

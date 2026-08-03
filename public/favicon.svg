@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">Grand Theft Austerity</title>
+  <desc id="desc">Builderstar B mark on a magenta-violet sunset panel with a gold star.</desc>
+  <defs>
+    <linearGradient id="sky" x1="18" y1="0" x2="46" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#24103f"/>
+      <stop offset=".38" stop-color="#7a1f8a"/>
+      <stop offset=".68" stop-color="#e0447a"/>
+      <stop offset="1" stop-color="#ff8a2a"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="12" y1="8" x2="52" y2="56" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff5aad"/>
+      <stop offset=".45" stop-color="#a03cff"/>
+      <stop offset="1" stop-color="#3a0d62"/>
+    </linearGradient>
+    <clipPath id="tile">
+      <rect width="64" height="64" rx="14"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#tile)">
+    <!-- Sunset tile -->
+    <rect width="64" height="64" fill="url(#sky)"/>
+
+    <!-- Soft center glow -->
+    <circle cx="32" cy="30" r="26" fill="#ff6ab8" opacity=".18"/>
+
+    <!-- Builderstar panel -->
+    <path
+      fill="url(#panel)"
+      stroke="#fff7ff"
+      stroke-width="2.4"
+      stroke-linejoin="round"
+      d="M13.5 10.5h27.5l9.5 9.5v33.5H13.5z"
+    />
+
+    <!-- Bold geometric B -->
+    <path
+      fill="#fff8ff"
+      d="M21 17.5h12.2c5.9 0 9.3 2.5 9.3 6.6 0 2.7-1.5 4.7-4.2 5.7 3.4 1.1 5.3 3.2 5.3 6.4 0 4.8-3.8 7.3-10.8 7.3H21V17.5zm7.6 5.4v5.2h3.6c2.2 0 3.4-.9 3.4-2.6s-1.2-2.6-3.4-2.6h-3.6zm0 10.2v6.2h4.4c2.4 0 3.7-1.1 3.7-3.1 0-2-1.3-3.1-3.7-3.1h-4.4z"
+    />
+
+    <!-- Gold star -->
+    <path
+      fill="#ffd541"
+      stroke="#2a073f"
+      stroke-width="1"
+      stroke-linejoin="round"
+      d="m45.6 11.2 2.55 5.15 5.7.83-4.12 4.02 0.97 5.66-5.1-2.68-5.1 2.68.97-5.66-4.12-4.02 5.7-.83z"
+    />
+
+    <!-- Romanian tricolor kick -->
+    <rect x="0" y="57.5" width="21.34" height="6.5" fill="#0756c8"/>
+    <rect x="21.34" y="57.5" width="21.32" height="6.5" fill="#ffd000"/>
+    <rect x="42.66" y="57.5" width="21.34" height="6.5" fill="#df243d"/>
+  </g>
+</svg>

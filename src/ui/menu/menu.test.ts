@@ -9,9 +9,11 @@ import { test, expect } from 'bun:test';
 import {
   LOAD_PANELS,
   MENU_ITEMS,
+  MOBILE_NOTICE,
   PANEL_SECONDS,
   CREDITS,
   LAUNCH_HINTS,
+  menuItemEnabled,
   panelAt,
   showsWalkthrough,
   stepSelection,
@@ -35,7 +37,7 @@ import {
   SENS_MAX,
   SENS_MIN,
 } from './settings';
-import { frontEndGate, launchProgress, sensPct, worldHandoffPolicy } from './frontEnd';
+import { frontEndGate, isMobileClient, launchProgress, sensPct, worldHandoffPolicy } from './frontEnd';
 
 /* ---- boot gate ---------------------------------------------------- */
 
@@ -138,6 +140,31 @@ test('selection skips a CONTINUE with nothing to continue', () => {
 test('selection survives a row where nothing is selectable', () => {
   expect(stepSelection(1, 1, [false, false])).toBe(1);
   expect(stepSelection(0, 1, [])).toBe(0);
+});
+
+test('phones lock START and CONTINUE but leave the other rows open', () => {
+  expect(menuItemEnabled('start', { canContinue: true, mobile: true })).toBe(false);
+  expect(menuItemEnabled('continue', { canContinue: true, mobile: true })).toBe(false);
+  expect(menuItemEnabled('controls', { canContinue: false, mobile: true })).toBe(true);
+  expect(menuItemEnabled('audio', { canContinue: false, mobile: true })).toBe(true);
+  expect(menuItemEnabled('credits', { canContinue: false, mobile: true })).toBe(true);
+  expect(menuItemEnabled('start', { canContinue: false, mobile: false })).toBe(true);
+  expect(menuItemEnabled('continue', { canContinue: false, mobile: false })).toBe(false);
+  expect(menuItemEnabled('continue', { canContinue: true, mobile: false })).toBe(true);
+});
+
+test('the mobile notice tells players to use a computer browser', () => {
+  expect(MOBILE_NOTICE.kicker).toMatch(/DESKTOP/i);
+  expect(MOBILE_NOTICE.body.toLowerCase()).toContain('browser');
+  expect(MOBILE_NOTICE.body.toLowerCase()).toContain('phone');
+});
+
+test('mobile detection trusts userAgentData, then coarse pointer, then UA', () => {
+  expect(isMobileClient({ userAgentDataMobile: true })).toBe(true);
+  expect(isMobileClient({ userAgentDataMobile: false, coarsePointer: true })).toBe(false);
+  expect(isMobileClient({ coarsePointer: true })).toBe(true);
+  expect(isMobileClient({ userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)' })).toBe(true);
+  expect(isMobileClient({ userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' })).toBe(false);
 });
 
 /* ---- credits ------------------------------------------------------ */

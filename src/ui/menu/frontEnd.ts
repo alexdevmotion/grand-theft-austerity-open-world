@@ -500,21 +500,22 @@ export class FrontEnd {
     this.els.title.classList.toggle('has-page', p !== 'main');
     if (p === 'main') return;
 
+    const back = this.mobile ? 'TAP ÎNAPOI' : 'ESC ÎNAPOI';
     const meta: Record<Exclude<Page, 'main'>, { title: string; crumb: string; foot: string }> = {
       controls: {
         title: 'COMENZI',
         crumb: 'MENIU / COMENZI',
-        foot: 'ESC ÎNAPOI',
+        foot: back,
       },
       audio: {
         title: 'SUNET ȘI IMAGINE',
         crumb: 'MENIU / SETTINGS',
-        foot: '↑ ↓ RÂND · ← → MODIFICĂ · ESC ÎNAPOI',
+        foot: this.mobile ? `TAP RÂND · ${back}` : '↑ ↓ RÂND · ← → MODIFICĂ · ESC ÎNAPOI',
       },
       credits: {
         title: 'CREDITS',
         crumb: 'MENIU / CREDITS',
-        foot: 'ESC ÎNAPOI',
+        foot: back,
       },
     };
     const m = meta[p];
@@ -528,6 +529,7 @@ export class FrontEnd {
 
     this.els.pageBody.scrollTop = 0;
     this.bindPageMouse();
+    this.bindPageFoot();
     this.syncPageRows();
   }
 
@@ -541,6 +543,16 @@ export class FrontEnd {
     if (this.page === 'audio') return 5;
     if (this.page === 'controls' || this.page === 'credits') return 1;
     return 0;
+  }
+
+  private bindPageFoot(): void {
+    const foot = this.els.pageFoot;
+    foot.style.cursor = this.mobile ? 'pointer' : '';
+    foot.onclick = this.mobile
+      ? () => {
+          if (this.page !== 'main') this.closePage();
+        }
+      : null;
   }
 
   private bindPageMouse(): void {

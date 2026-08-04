@@ -497,7 +497,6 @@ export const FRONT_END_CSS = `
   color: #f4e9ff;
 }
 .gta-fe.is-mobile .fe-hint { display: none; }
-.gta-fe.is-mobile .fe-menu { bottom: clamp(118px, 22vh, 168px); }
 
 .gta-fe .fe-crisis {
   position: absolute;
@@ -941,18 +940,143 @@ export const FRONT_END_CSS = `
 
 /* ---- narrow / short screens --------------------------------------- */
 @media (max-width: 900px) {
-  .gta-fe .fe-lockup { top: 18vh; width: 74vw; }
-  .gta-fe .fe-lockup h1 { font-size: clamp(46px, 13vw, 82px); }
-  .gta-fe .fe-menu { width: 90vw; flex-wrap: wrap; gap: 12px 18px; }
+  .gta-fe { --fe-pad: 16px; }
+
+  .gta-fe .fe-studio {
+    top: max(10px, env(safe-area-inset-top, 0px) + 6px);
+    width: clamp(132px, 36vw, 200px);
+  }
+  .gta-fe .fe-lockup {
+    top: max(11vh, env(safe-area-inset-top, 0px) + 52px);
+    width: min(88vw, 420px);
+  }
+  .gta-fe .fe-lockup h1 { font-size: clamp(40px, 12vw, 72px); }
+  .gta-fe .fe-tag {
+    margin-top: .55em;
+    font-size: clamp(12px, 3.4vw, 18px);
+    letter-spacing: .16em;
+  }
   .gta-fe .fe-crisis, .gta-fe .fe-edition { display: none; }
-  .gta-fe .fe-page { left: var(--fe-pad); width: auto; top: 12vh; bottom: 12vh; }
-  .gta-fe .fe-load-copy { width: 86vw; }
+  .gta-fe .fe-hint { display: none; }
+
+  /* Vertical stack — horizontal wrap collided with the pink underline + subs. */
+  .gta-fe .fe-menu {
+    left: var(--fe-pad);
+    right: var(--fe-pad);
+    bottom: max(18px, env(safe-area-inset-bottom, 0px) + 12px);
+    width: auto;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: flex-start;
+    gap: 0;
+  }
+  .gta-fe.is-mobile .fe-menu {
+    bottom: max(96px, env(safe-area-inset-bottom, 0px) + 88px);
+  }
+  .gta-fe .fe-item {
+    font-size: clamp(20px, 6.2vw, 28px);
+    /* Pull the pink underline up against the word — the desktop padding
+       left a weird empty strip under each label on a phone. */
+    padding: .18em 0 0;
+    line-height: 1;
+    border-bottom-width: 2px;
+    margin-bottom: .1em;
+  }
+  .gta-fe .fe-item.is-sel {
+    transform: none;
+    /* Leave a slot under the selected row for the gold sub-label. */
+    margin-bottom: 1.45em;
+  }
+  .gta-fe .fe-item .fe-item-sub {
+    margin-top: .22em;
+    max-width: min(88vw, 360px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .gta-fe .fe-mobile-notice {
+    left: var(--fe-pad);
+    right: var(--fe-pad);
+    bottom: max(12px, env(safe-area-inset-bottom, 0px) + 8px);
+    max-width: none;
+    padding: 10px 12px 11px;
+  }
+  .gta-fe .fe-mobile-kicker { letter-spacing: .22em; }
+  .gta-fe .fe-mobile-body { letter-spacing: .02em; }
+
+  /* Submenus: kill the desktop translateY(-50%) — with top/bottom insets that
+     shoved the whole panel off the top of the phone. */
+  .gta-fe .fe-page {
+    top: max(10px, env(safe-area-inset-top, 0px) + 8px);
+    right: max(12px, env(safe-area-inset-right, 0px) + 8px);
+    bottom: max(10px, env(safe-area-inset-bottom, 0px) + 8px);
+    left: max(12px, env(safe-area-inset-left, 0px) + 8px);
+    width: auto;
+    height: auto;
+    max-height: none;
+    padding: 16px 14px 12px;
+    overflow: hidden;
+    transform: translateY(18px);
+    clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px));
+  }
+  /* Restate the open state so the desktop -50% translate cannot win on phones. */
+  .gta-fe .fe-title.has-page .fe-page {
+    opacity: 1;
+    visibility: visible;
+    transform: translate(0, 0);
+  }
+  .gta-fe .fe-title.has-page .fe-lockup {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .gta-fe .fe-title.has-page .fe-menu,
+  .gta-fe .fe-title.has-page .fe-mobile-notice {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .gta-fe .fe-page-title { font-size: clamp(24px, 7vw, 36px); }
+  .gta-fe .fe-page-body {
+    flex: 1 1 0;
+    min-height: 0;
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .gta-fe .fe-page-foot {
+    margin-top: 10px;
+    flex: 0 0 auto;
+    letter-spacing: .18em;
+  }
+  .gta-fe.is-mobile .fe-page-foot {
+    padding: 10px 0 2px;
+    color: var(--fe-gold);
+    text-decoration: underline;
+    text-underline-offset: 4px;
+  }
+  .gta-fe .fe-row {
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    padding: 10px 12px;
+  }
+  .gta-fe .fe-row-lab { min-width: 0; width: 100%; }
+  .gta-fe .fe-row-ctl { margin-left: 0; width: 100%; justify-content: flex-start; flex-wrap: wrap; }
+  .gta-fe .fe-meter { width: min(100%, 220px); }
+  .gta-fe .fe-keys { grid-template-columns: 1fr; gap: 0; }
+  .gta-fe .fe-key-k { min-width: 88px; }
+  .gta-fe .fe-segs { flex-wrap: wrap; }
+
+  .gta-fe .fe-load-copy { width: min(88vw, 420px); }
   .gta-fe .fe-load-foot { grid-template-columns: 1fr auto; }
   .gta-fe .fe-load-status { grid-column: 1 / -1; }
   .gta-fe .fe-launch { bottom: clamp(28px, 6vh, 54px); }
   .gta-fe .fe-launch-status { letter-spacing: .1em; }
 }
-@media (max-height: 620px) {
+@media (max-width: 900px) and (max-height: 700px) {
+  .gta-fe .fe-lockup { top: max(8vh, env(safe-area-inset-top, 0px) + 40px); }
+  .gta-fe .fe-lockup h1 { font-size: clamp(34px, 10vw, 56px); }
+  .gta-fe .fe-tag { display: none; }
+  .gta-fe .fe-item { font-size: clamp(18px, 5.4vw, 24px); }
+}
+@media (max-height: 620px) and (min-width: 901px) {
   .gta-fe .fe-lockup { top: 15vh; }
   .gta-fe .fe-studio { width: clamp(190px, 20vw, 300px); }
   .gta-fe .fe-menu { bottom: 42px; }

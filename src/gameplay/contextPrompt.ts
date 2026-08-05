@@ -15,6 +15,7 @@
  */
 
 import { hintKeys } from '../core/keyHints';
+import { t, tp } from '../core/i18n';
 import type { VehicleClass } from '../core/services';
 
 /** How close, on foot, before the "get in" prompt appears. */
@@ -68,18 +69,21 @@ export function contextPrompt(s: ContextState): ContextPromptView | null {
       return {
         id: `veh:${s.nearVehicle}`,
         keys,
-        label: `Urcă în ${VEHICLE_LABELS[s.nearVehicle]}`,
+        // The vehicle noun is translated separately from the sentence: English
+        // wants "Get into the car", Romanian "Urcă în mașină", and only the
+        // template knows where the article goes.
+        label: tp('Urcă în {vehicle}', { vehicle: t(VEHICLE_LABELS[s.nearVehicle]) }),
         color: TEAL,
       };
     }
   }
   if (s.seatedStopped) {
     const keys = hintKeys('interact');
-    if (keys.length) return { id: 'veh:exit', keys, label: 'Coboară din mașină', color: TEAL };
+    if (keys.length) return { id: 'veh:exit', keys, label: t('Coboară din mașină'), color: TEAL };
   }
   if (s.nearPerson) {
     const keys = hintKeys('punch');
-    if (keys.length) return { id: 'ped', keys, label: 'Lovește', color: GOLD };
+    if (keys.length) return { id: 'ped', keys, label: t('Lovește'), color: GOLD };
   }
   return null;
 }

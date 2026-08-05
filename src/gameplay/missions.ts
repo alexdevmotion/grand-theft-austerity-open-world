@@ -46,6 +46,7 @@ import {
   type Vec3Lite,
 } from './missionState';
 import { missionHud, resetMissionHud } from './hudState';
+import { onLangChange, t, tp } from '../core/i18n';
 // Type only: `CameraService` in the frozen seam has `focusOn` and nothing that
 // can compose a shot. The camera system publishes the wider contract.
 import type { CameraDirector, CinematicShot } from './cameraSystem';
@@ -54,8 +55,8 @@ const GIVER_ID = 'story:giver';
 const OBJ_ID = 'story:objective';
 const OPENING_TITLE = 'PROLOG — CASA SUB SIGILIU';
 const OPENING_BRIEF =
-  'Georgescu a închis Casa Constructorilor. Ministerul confiscă ultimul server. ' +
-  'Vorbește cu constructorii de la intrare.';
+  'Georgescu a închis Casa Builderilor. Ministerul confiscă ultimul server. ' +
+  'Vorbește cu builderii de la intrare.';
 
 const FORECOURT_BUILDERS: ReadonlyArray<readonly [number, number, number]> = [
   [-46, 20, 0], [-51.5, 22.5, 0.5], [-40.5, 22.8, -0.5],
@@ -135,6 +136,9 @@ export class MissionSystem implements System, MissionService {
 
   private daciaId: string | null = null;
   private partyOn = false;
+  /** `offerNext`'s argument, kept so the giver can be relabelled on a language switch. */
+  private offerRetryId: string | undefined;
+  private offLang: (() => void) | null = null;
 
   get currentId(): string | null {
     return this._current;
@@ -190,7 +194,7 @@ export class MissionSystem implements System, MissionService {
       this.hud()?.missionCard(OPENING_TITLE, OPENING_BRIEF);
       this.enqueueDialogue([{
         speaker: 'ȘTIRI',
-        text: 'Președintele Georgescu a ordonat evacuarea Casei Constructorilor. Ministerul a sigilat intrarea în această dimineață.',
+        text: 'Președintele Georgescu a ordonat evacuarea Casei Builderilor. Ministerul a sigilat intrarea în această dimineață.',
         delayMs: 180,
         ms: 6800,
       }]);
@@ -199,6 +203,18 @@ export class MissionSystem implements System, MissionService {
     ctx.events.on('player:died', () => {
       if (this.run?.isRunning && (this.run.def.failOnDeath ?? true)) this.failRun('ai murit');
     });
+
+    /*
+     * THE GIVER LABEL IS COMPOSED, NOT LOOKED UP.
+     *
+     * "Vorbește cu builderii — Actul I" is built from an act's `startLabel`
+     * and its number, so it is not a sentence the catalogue can contain and
+     * `t()` at draw time cannot rescue it. It is composed once, here, in
+     * whichever language was current at boot — and the language picker lives
+     * on the title screen, i.e. AFTER this ran. Rebuilding the offer is the
+     * honest fix: it re-labels the world prompt and the map entry together.
+     */
+    this.offLang = onLangChange(() => this.offerNext(this.offerRetryId));
 
     this.installDebugHook();
   }
@@ -220,7 +236,7 @@ export class MissionSystem implements System, MissionService {
 
     // Builders waiting outside their own front door.
     FORECOURT_BUILDERS.forEach(([x, z, yaw], i) => {
-      this.cast.add({ id: `builder_out${i}`, name: 'Constructor', role: 'builder', x, z, yaw, parties: true });
+      this.cast.add({ id: `builder_out${i}`, name: 'Builder', role: 'builder', x, z, yaw, parties: true });
     });
 
     /*
@@ -237,7 +253,7 @@ export class MissionSystem implements System, MissionService {
      * they go when the lights come on.
      */
     LOBBY_BUILDERS.forEach(([x, z, yaw], i) => {
-      this.cast.add({ id: `builder_in${i}`, name: 'Constructor', role: 'builder', x, z, yaw, parties: true });
+      this.cast.add({ id: `builder_in${i}`, name: 'Builder', role: 'builder', x, z, yaw, parties: true });
     });
   }
 
@@ -257,7 +273,10 @@ export class MissionSystem implements System, MissionService {
       return;
     }
     if (def.requires && !this._completed.has(def.requires)) {
-      this.toast(`Mai întâi: ${CAMPAIGN_BY_ID.get(def.requires)?.title ?? def.requires}`, 'bad');
+      this.toast(
+        tp('Mai întâi: {title}', { title: t(CAMPAIGN_BY_ID.get(def.requires)?.title ?? def.requires) }),
+        'bad',
+      );
       return;
     }
     // Starting the act must not erase the prologue/news line the player just
@@ -272,7 +291,10 @@ export class MissionSystem implements System, MissionService {
 
     if (def.id === 'act4_giftshop') this.resetBuildersHouseOpening();
 
-    this.hud()?.missionCard(`ACTUL ${romanNumeral(def.act)} — ${def.title}`, def.brief);
+    this.hud()?.missionCard(
+      tp('ACTUL {n} — {title}', { n: romanNumeral(def.act), title: t(def.title) }),
+      def.brief,
+    );
     this.ctx.events.emit('ui:missionCard', { title: def.title, subtitle: def.brief });
     this.ctx.events.emit('mission:advance', { id: def.id });
 
@@ -467,7 +489,7 @@ export class MissionSystem implements System, MissionService {
           ),
           spot?.yaw ?? 0,
         );
-        this.toast('Ești în holul Casei Constructorilor', 'good');
+        this.toast('Ești în holul Casei Builderilor', 'good');
         break;
       }
       case 'liberate':
@@ -505,7 +527,7 @@ export class MissionSystem implements System, MissionService {
     this.ctx.tryGet(Services.Wanted)?.clear();
     this.ctx.tryGet(Services.Audio)?.setMusic('afterparty', 1.5);
     this.ctx.tryGet(Services.Camera)?.shake(0.25, 0.5);
-    this.ctx.events.emit('radio:line', { text: 'Casa Constructorilor e din nou deschisă. Muzica e a noastră.' });
+    this.ctx.events.emit('radio:line', { text: 'Casa Builderilor e din nou deschisă. Muzica e a noastră.' });
 
     this.queueFinalePan();
   }
@@ -580,7 +602,7 @@ export class MissionSystem implements System, MissionService {
           duration: 6.5, distance: 12.5, height: 2.4, lookHeight: 1.7, fov: 44,
           azimuthDeg: 180, push: 5.0, rise: 0.5, rollDeg: -0.8,
           hold: true, priority: 4,
-          subtitle: 'Constructorii sunt acasă.',
+          subtitle: 'Builderii sunt acasă.',
         },
       },
       {
@@ -626,7 +648,10 @@ export class MissionSystem implements System, MissionService {
     this.ctx.tryGet(Services.Progression)?.addXp(def.rewardXp, `misiune:${def.id}`);
     this.ctx.tryGet(Services.Player)?.addLei(def.rewardLei, `misiune:${def.id}`);
     this.ctx.events.emit('mission:complete', { id: def.id });
-    this.hud()?.missionCard(`${def.title} — REUȘIT`, `+${def.rewardXp} XP · +${def.rewardLei} lei`);
+    this.hud()?.missionCard(
+      tp('{title} — REUȘIT', { title: t(def.title) }),
+      tp('+{xp} XP · +{lei} lei', { xp: def.rewardXp, lei: def.rewardLei }),
+    );
 
     this.run = null;
     this._current = null;
@@ -645,7 +670,7 @@ export class MissionSystem implements System, MissionService {
     if (id === 'act4_giftshop') this.resetBuildersHouseOpening();
     this.clearMarkers(true);
     this.ctx.events.emit('mission:failed', { id, reason });
-    this.hud()?.missionCard(`${title} — EȘUAT`, reason);
+    this.hud()?.missionCard(tp('{title} — EȘUAT', { title: t(title) }), reason);
 
     this.run = null;
     this._current = null;
@@ -662,12 +687,15 @@ export class MissionSystem implements System, MissionService {
    * act instead of advancing to the next one.
    */
   private offerNext(retryId?: string): void {
+    this.offerRetryId = retryId;
     this.interaction.remove(GIVER_ID);
     this._offered.length = 0;
     const def = retryId ? CAMPAIGN_BY_ID.get(retryId) : this.nextAct;
     if (!def) return; // campaign finished — leave the world alone
     const p = new THREE.Vector3(def.startAt.x, this.groundAt(def.startAt.x, def.startAt.z), def.startAt.z);
-    const label = retryId ? `Reia: ${def.title}` : `${def.startLabel} — Actul ${romanNumeral(def.act)}`;
+    const label = retryId
+      ? tp('Reia: {title}', { title: t(def.title) })
+      : tp('{label} — Actul {n}', { label: t(def.startLabel), n: romanNumeral(def.act) });
     this.interaction.add({
       id: GIVER_ID,
       label,
@@ -966,6 +994,8 @@ export class MissionSystem implements System, MissionService {
   }
 
   dispose(): void {
+    this.offLang?.();
+    this.offLang = null;
     if (!this.ctx) return;
     this.clearMarkers(true);
   }

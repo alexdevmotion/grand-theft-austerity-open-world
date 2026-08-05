@@ -29,6 +29,7 @@ import {
   type VehicleHandle,
 } from '../core/services';
 import { interactionClaimed } from './interaction';
+import { tp } from '../core/i18n';
 
 const WALK = 2.1;
 const JOG = 4.6;
@@ -1235,8 +1236,11 @@ export class PlayerSystem implements System, PlayerService {
     const paid = this.chargeUpTo(fee, `daune:${v.kind}`);
     this.ctx.tryGet(Services.Hud)?.toast(
       paid >= fee
-        ? `Mașina e praf · tractare și daune −${paid} lei`
-        : `Mașina e praf · ai plătit ${paid} din ${fee} lei. Restul ți-l reține Ministerul.`,
+        ? tp('Mașina e praf · tractare și daune −{paid} lei', { paid })
+        : tp('Mașina e praf · ai plătit {paid} din {fee} lei. Restul ți-l reține Ministerul.', {
+            paid,
+            fee,
+          }),
       'bad',
       4200,
     );

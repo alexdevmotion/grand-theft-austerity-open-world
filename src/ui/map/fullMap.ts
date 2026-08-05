@@ -23,6 +23,7 @@ import { clamp, fmtDistance, makeView, unproject, type MapView } from './mapMath
 import type { MapWorld } from './mapWorld';
 import type { Router } from './route';
 import type { CityService } from '../../core/services';
+import { onLangChange, t, tp } from '../../core/i18n';
 
 const MIN_SCALE = 0.24;
 const MAX_SCALE = 3.2;
@@ -68,7 +69,7 @@ export class FullMap {
   constructor(private painter: MapPainter, private hooks: FullMapHooks) {
     this.root = document.createElement('div');
     this.root.className = 'gta-map';
-    this.root.innerHTML = TEMPLATE;
+    this.root.innerHTML = template();
 
     this.frameEl = this.root.querySelector('.gta-map-frame')!;
     this.canvas = this.root.querySelector('canvas')!;
@@ -76,8 +77,39 @@ export class FullMap {
     this.northBtn = this.root.querySelector('[data-act="north"]')!;
     this.g = this.canvas.getContext('2d', { alpha: true });
 
-    this.root.querySelector('.gta-map-legend')!.innerHTML = LEGEND;
+    this.paintChrome();
     this.bind();
+
+    // The map panel is built once and lives for the session, so a language
+    // switch has to repaint its copy in place. Only the chrome is rebuilt —
+    // rebuilding the whole panel would drop the canvas and the bound handlers.
+    this.disposers.push(onLangChange(() => this.paintChrome()));
+  }
+
+  /** Everything on the panel that is copy rather than canvas. */
+  private paintChrome(): void {
+    const set = (sel: string, html: string): void => {
+      const el = this.root.querySelector(sel);
+      if (el) el.innerHTML = html;
+    };
+    set('.gta-map-eyebrow', t('B★ BULETIN CARTOGRAFIC — SECTORUL 0'));
+    set('.gta-map-head h2', t('HARTA BUCUREȘTIULUI'));
+    set('.gta-map-sub', t('CLIC <b>MARCAJ</b> · ROTIȚĂ <b>ZOOM</b> · TRAGE <b>MUTĂ</b>'));
+    set('.gta-map-foot', t('M / ESC ÎNCHIDE · N ROTIRE MINIMAPĂ · SĂGEȚI MUTĂ · SPAȚIU CENTREAZĂ'));
+    set('.gta-map-legend', legendHtml());
+    const buttons: ReadonlyArray<readonly [string, string]> = [
+      ['in', 'MĂREȘTE  +'],
+      ['out', 'MICȘOREAZĂ  −'],
+      ['centre', 'CENTREAZĂ'],
+      ['clear', 'ȘTERGE MARCAJUL'],
+      ['close', 'ÎNCHIDE  M'],
+    ];
+    for (const [act, label] of buttons) set(`[data-act="${act}"]`, t(label));
+    // The north toggle's label depends on state, not just on language.
+    this.syncButtons();
+    // Force the next frame to rewrite the readout: `lastReadout` is a cached
+    // HTML string and the cache does not know the language moved under it.
+    this.lastReadout = '';
   }
 
   get isOpen(): boolean {
@@ -257,7 +289,7 @@ export class FullMap {
   private syncButtons(): void {
     const on = this.hooks.isNorthUp();
     this.northBtn.classList.toggle('on', on);
-    this.northBtn.textContent = on ? 'MINIMAPĂ ⇧ NORD' : 'MINIMAPĂ ⇧ DIRECȚIE';
+    this.northBtn.textContent = t(on ? 'MINIMAPĂ ⇧ NORD' : 'MINIMAPĂ ⇧ DIRECȚIE');
   }
 
   /* ---------------------------------------------------------------- */
@@ -329,7 +361,7 @@ export class FullMap {
    * The chrome is DOM, laid out by the CSS in `mapStyle.ts`, and the canvas
    * underneath it has no idea any of it is there — which is how "ZONA
    * INDUSTRIALĂ" came to be drawn behind the button column and sliced in half
-   * by it, and how the anchors around Casa Constructorilor ended up stacked
+   * by it, and how the anchors around Casa Builderilor ended up stacked
    * under the title strip.
    *
    * Measuring the real elements rather than hardcoding boxes means the
@@ -393,15 +425,15 @@ export class FullMap {
 
   private readout(world: MapWorld, router: Router, city: CityService | undefined, data: MapData): void {
     const h = this.hover;
-    let title = 'BUCUREȘTI';
-    let line = world.missionTitle || 'Fără misiune activă';
+    let title = t('BUCUREȘTI');
+    let line = t(world.missionTitle || 'Fără misiune activă');
     let sub = '';
 
     if (h) {
       let district = '';
       try {
         const k = city?.districtAt(h.x, h.z);
-        district = k ? DISTRICT_NAMES[k] : '';
+        district = k ? t(DISTRICT_NAMES[k]) : '';
       } catch {
         district = '';
       }
@@ -411,20 +443,25 @@ export class FullMap {
         const d = Math.hypot(lm.x - h.x, lm.z - h.z);
         if (d < bestD) {
           bestD = d;
-          nearest = lm.name;
+          nearest = t(lm.name);
         }
       }
-      title = district || 'BUCUREȘTI';
+      title = district || t('BUCUREȘTI');
       line = nearest || `${Math.round(h.x)}, ${Math.round(h.z)}`;
-      sub = `${fmtDistance(Math.hypot(h.x - world.x, h.z - world.z))} de tine`;
+      sub = tp('{dist} de tine', { dist: fmtDistance(Math.hypot(h.x - world.x, h.z - world.z)) });
     }
 
     if (world.hasWaypoint) {
       const dist = router.points.length > 1 && !router.direct ? router.remaining : world.distanceToWaypoint();
-      sub = `${sub ? `${sub} · ` : ''}MARCAJ ${fmtDistance(dist)}${router.direct ? ' (linie directă)' : ''}`;
+      sub =
+        `${sub ? `${sub} · ` : ''}` +
+        tp('MARCAJ {dist}', { dist: fmtDistance(dist) }) +
+        (router.direct ? t(' (linie directă)') : '');
     }
 
-    const html = `<h4>${title}</h4><p>${line}</p><small>${sub || 'Clic pentru marcaj · clic dreapta pentru anulare'}</small>`;
+    const html =
+      `<h4>${title}</h4><p>${line}</p>` +
+      `<small>${sub || t('Clic pentru marcaj · clic dreapta pentru anulare')}</small>`;
     if (html !== this.lastReadout) {
       this.readoutEl.innerHTML = html;
       this.lastReadout = html;
@@ -440,7 +477,11 @@ export class FullMap {
 
 /* ------------------------------------------------------------------ */
 
-const LEGEND = [
+/**
+ * Built per render, not once at import. Everything on this panel is copy, and
+ * copy has to be able to change language without a page reload.
+ */
+const LEGEND_ROWS: ReadonlyArray<readonly [string, string]> = [
   ['Tu', MapInk.player],
   ['Misiune', MapInk.story],
   ['Marcaj', MapInk.waypoint],
@@ -449,32 +490,35 @@ const LEGEND = [
   ['Cursă', ACTIVITY_INK.race],
   ['Evadare', ACTIVITY_INK.evade],
   ['Foto', ACTIVITY_INK.photo],
-]
-  .map(([name, ink]) => `<span><em style="background:${ink}"></em>${name}</span>`)
-  .join('');
+];
 
-const TEMPLATE = `
+const legendHtml = (): string =>
+  LEGEND_ROWS.map(
+    ([name, ink]) => `<span><em style="background:${ink}"></em>${t(name)}</span>`,
+  ).join('');
+
+const template = (): string => `
 <div class="gta-map-frame">
   <canvas class="gta-map-cv"></canvas>
 </div>
 <div class="gta-map-ui">
 <div class="gta-map-head">
   <div>
-    <div class="gta-map-eyebrow">B★ BULETIN CARTOGRAFIC — SECTORUL 0</div>
-    <h2>HARTA BUCUREȘTIULUI</h2>
+    <div class="gta-map-eyebrow">${t('B★ BULETIN CARTOGRAFIC — SECTORUL 0')}</div>
+    <h2>${t('HARTA BUCUREȘTIULUI')}</h2>
   </div>
-  <div class="gta-map-sub">CLIC <b>MARCAJ</b> · ROTIȚĂ <b>ZOOM</b> · TRAGE <b>MUTĂ</b></div>
+  <div class="gta-map-sub">${t('CLIC <b>MARCAJ</b> · ROTIȚĂ <b>ZOOM</b> · TRAGE <b>MUTĂ</b>')}</div>
 </div>
 <div class="gta-map-rule"></div>
 <div class="gta-map-readout"></div>
 <div class="gta-map-tools">
-  <button data-act="north">MINIMAPĂ ⇧ DIRECȚIE</button>
-  <button data-act="in">MĂREȘTE  +</button>
-  <button data-act="out">MICȘOREAZĂ  −</button>
-  <button data-act="centre">CENTREAZĂ</button>
-  <button data-act="clear">ȘTERGE MARCAJUL</button>
-  <button data-act="close">ÎNCHIDE  M</button>
+  <button data-act="north">${t('MINIMAPĂ ⇧ DIRECȚIE')}</button>
+  <button data-act="in">${t('MĂREȘTE  +')}</button>
+  <button data-act="out">${t('MICȘOREAZĂ  −')}</button>
+  <button data-act="centre">${t('CENTREAZĂ')}</button>
+  <button data-act="clear">${t('ȘTERGE MARCAJUL')}</button>
+  <button data-act="close">${t('ÎNCHIDE  M')}</button>
 </div>
 <div class="gta-map-legend"></div>
-<div class="gta-map-foot">M / ESC ÎNCHIDE · N ROTIRE MINIMAPĂ · SĂGEȚI MUTĂ · SPAȚIU CENTREAZĂ</div>
+<div class="gta-map-foot">${t('M / ESC ÎNCHIDE · N ROTIRE MINIMAPĂ · SĂGEȚI MUTĂ · SPAȚIU CENTREAZĂ')}</div>
 </div>`;

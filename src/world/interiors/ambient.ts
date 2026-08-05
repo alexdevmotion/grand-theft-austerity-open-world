@@ -119,7 +119,7 @@ export function fitShop(b: DetailBuilder, s: ShellSpec, rng: Rng): LightAnchor[]
 }
 
 /* ------------------------------------------------------------------ */
-/* Barul Constructorilor                                               */
+/* Barul Builderilor                                               */
 /* ------------------------------------------------------------------ */
 
 export function fitBar(b: DetailBuilder, s: ShellSpec, rng: Rng): LightAnchor[] {

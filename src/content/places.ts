@@ -86,7 +86,7 @@ export const FORECOURT = {
 
 export const PLACES = {
   /** Where the builders wait, and where every act is offered. */
-  buildersForecourt: { id: 'buildersForecourt', name: 'Casa Constructorilor', x: -46, z: 20, yaw: 0 },
+  buildersForecourt: { id: 'buildersForecourt', name: 'Casa Builderilor', x: -46, z: 20, yaw: 0 },
   /** The community server, in the lee of the escape stair. */
   serverRack: { id: 'serverRack', name: 'Serverul comunității', x: -62, z: 24, yaw: 0 },
   /** The Ministry's barricade across the forecourt (`crowdBarrier` at -72/30). */

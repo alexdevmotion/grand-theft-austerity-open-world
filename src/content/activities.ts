@@ -203,7 +203,7 @@ export const ACTIVITIES: ActivityDef[] = [
   {
     id: 'foto_casa',
     kind: 'photo',
-    name: 'Recompensă foto: Casa Constructorilor',
+    name: 'Recompensă foto: Casa Builderilor',
     blurb: 'Ecranele de pe fațada propriei tale clădiri.',
     x: -20, z: 22,
     limit: 120,

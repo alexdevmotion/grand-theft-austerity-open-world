@@ -142,7 +142,7 @@ export function buildRoads(opt: RoadBuildOptions): void {
    *
    * `covered` is true inside the imported OSM extent. Two things still come
    * from the grid in there and only two: the N–S and E–W monumental axes. Casa
-   * Constructorilor's forecourt, the Dacia's kerbside slot, the barricade and
+   * Builderilor's forecourt, the Dacia's kerbside slot, the barricade and
    * the Parliament axis are all authored against those two centrelines, and the
    * survey has no boulevard on either of them (real Bucharest's Magheru and
    * Regina Elisabeta run close, which is exactly why the fit was chosen — but
@@ -1020,7 +1020,7 @@ export function fillOsmGround(
  * Their carriageways come from the grid, but their pavements used to come from
  * the block rings — and inside the imported extent there are no blocks left to
  * draw them. Without this the monumental axis is a 42 m strip of tarmac with
- * the bare ground either side, which is where Casa Constructorilor stands.
+ * the bare ground either side, which is where Casa Builderilor stands.
  */
 export function dressAuthoredAxes(
   sink: ChunkSink,

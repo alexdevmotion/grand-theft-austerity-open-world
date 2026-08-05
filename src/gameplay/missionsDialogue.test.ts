@@ -10,13 +10,13 @@ describe('mission dialogue timeline', () => {
       ms: 6800,
     }];
     const queued = appendDialogue(opening, 0.4, [{
-      speaker: 'Constructor',
+      speaker: 'Builder',
       text: 'Au luat clădirea.',
       delayMs: 200,
       ms: 4200,
     }]);
 
-    expect(queued.map((l) => l.speaker)).toEqual(['ȘTIRI', 'Constructor']);
+    expect(queued.map((l) => l.speaker)).toEqual(['ȘTIRI', 'Builder']);
     expect(queued[1].at).toBeGreaterThanOrEqual(7.34);
   });
 
@@ -34,7 +34,7 @@ describe('mission dialogue timeline', () => {
     const later = appendDialogue(
       [],
       0.2,
-      [{ speaker: 'Constructor', text: 'Acum răspund.', ms: 3000 }],
+      [{ speaker: 'Builder', text: 'Acum răspund.', ms: 3000 }],
       7.16,
     );
 

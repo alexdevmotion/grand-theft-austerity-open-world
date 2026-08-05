@@ -973,7 +973,7 @@ describe('contextual sidequest dialogue', () => {
       evadare_guvern: /Palat|guvern/i,
       foto_victoriei: /Victoriei/i,
       foto_parlament: /Parlament/i,
-      foto_casa: /Cas(?:a|ei) Constructorilor/i,
+      foto_casa: /Cas(?:a|ei) Builderilor/i,
     };
 
     for (const def of ACTIVITIES) {

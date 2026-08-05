@@ -38,6 +38,7 @@
 import * as THREE from 'three';
 import type { GameContext, System } from './engine';
 import { Services, type SaveRecord, type SaveService, type WeatherPreset } from './services';
+import { tp } from './i18n';
 
 /** Presets a save is allowed to name. Anything else falls back to the default,
  *  so a slot written by an older build cannot poke an unknown preset in. */
@@ -366,7 +367,7 @@ export class SaveSystem implements System, SaveService {
       ctx.events.emit('save:restored', { savedAt: r.savedAt });
       if (failed.length) {
         ctx.tryGet(Services.Hud)?.toast(
-          `Salvarea s-a încărcat parțial (${failed.join(', ')})`, 'bad', 5200,
+          tp('Salvarea s-a încărcat parțial ({failed})', { failed: failed.join(', ') }), 'bad', 5200,
         );
       }
     } finally {

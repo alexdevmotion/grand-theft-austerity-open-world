@@ -40,6 +40,15 @@ import type { GameContext } from '../../core/engine';
 import { Services } from '../../core/services';
 import artUrl from '../../../docs/reference/house-under-siege-duo.png';
 import { FRONT_END_CSS } from './style';
+import {
+  LANGUAGES,
+  LANG_LABELS,
+  lang,
+  setLang,
+  t,
+  tp,
+  type Lang,
+} from '../../core/i18n';
 import { studioMark } from './mark';
 import {
   LOAD_PANELS,
@@ -86,7 +95,7 @@ import {
 } from './session';
 
 type Phase = 'sting' | 'load' | 'title' | 'ingame';
-type Page = 'main' | 'controls' | 'audio' | 'credits';
+type Page = 'main' | 'controls' | 'audio' | 'language' | 'credits';
 
 /** Seconds the studio sting plays before the loading screen takes over. */
 const STING_SECONDS = 4.0;
@@ -199,6 +208,7 @@ export class FrontEnd {
     };
 
     this.els.mobileNotice.hidden = !this.mobile;
+    this.paintStaticCopy();
     this.session = loadSession();
     this.setPanel(0);
     this.bindMenuMouse();
@@ -388,8 +398,8 @@ export class FrontEnd {
     this.els.bar.style.width = `${pct.toFixed(1)}%`;
     this.els.pct.textContent = `${Math.round(pct)}%`;
     const line = this.loadComplete
-      ? 'GATA — BUCUREȘTI ONLINE'
-      : this.statusText || LOAD_PANELS[Math.max(0, this.panelIndex)]?.status || 'SE ÎNCARCĂ BUCUREȘTIUL';
+      ? t('GATA — BUCUREȘTI ONLINE')
+      : t(this.statusText || LOAD_PANELS[Math.max(0, this.panelIndex)]?.status || 'SE ÎNCARCĂ BUCUREȘTIUL');
     if (this.els.status.dataset.line !== line) {
       this.els.status.dataset.line = line;
       this.els.status.textContent = line;
@@ -402,7 +412,7 @@ export class FrontEnd {
     this.panelIndex = i;
     this.els.loadChip.textContent = `${p.index} / 0${LOAD_PANELS.length} — ${p.act}`;
     this.els.loadHead.innerHTML = p.headline;
-    this.els.loadBody.textContent = p.body;
+    this.els.loadBody.textContent = t(p.body);
     // Restart the crossfade: reflow between remove and add or the class never
     // re-triggers the animation.
     this.els.loadCopy.classList.remove('fe-swap');
@@ -452,8 +462,8 @@ export class FrontEnd {
         sub.textContent = this.mobile ? MOBILE_NOTICE.kicker : describeSession(this.session);
       } else if (item.id === 'start' && this.mobile) {
         sub.textContent = MOBILE_NOTICE.kicker;
-      } else if (item.id === 'start') {
-        sub.textContent = item.sub;
+      } else {
+        sub.textContent = t(item.sub);
       }
     });
   }
@@ -482,6 +492,9 @@ export class FrontEnd {
       case 'audio':
         this.openPage('audio');
         return;
+      case 'language':
+        this.openPage('language');
+        return;
       case 'credits':
         this.openPage('credits');
         return;
@@ -500,21 +513,26 @@ export class FrontEnd {
     this.els.title.classList.toggle('has-page', p !== 'main');
     if (p === 'main') return;
 
-    const back = this.mobile ? 'TAP ÎNAPOI' : 'ESC ÎNAPOI';
+    const back = t(this.mobile ? 'TAP ÎNAPOI' : 'ESC ÎNAPOI');
     const meta: Record<Exclude<Page, 'main'>, { title: string; crumb: string; foot: string }> = {
       controls: {
-        title: 'COMENZI',
-        crumb: 'MENIU / COMENZI',
+        title: t('COMENZI'),
+        crumb: t('MENIU / COMENZI'),
         foot: back,
       },
       audio: {
-        title: 'SUNET ȘI IMAGINE',
-        crumb: 'MENIU / SETTINGS',
-        foot: this.mobile ? `TAP RÂND · ${back}` : '↑ ↓ RÂND · ← → MODIFICĂ · ESC ÎNAPOI',
+        title: t('SUNET ȘI IMAGINE'),
+        crumb: t('MENIU / SETTINGS'),
+        foot: this.mobile ? tp('TAP RÂND · {back}', { back }) : t('↑ ↓ RÂND · ← → MODIFICĂ · ESC ÎNAPOI'),
+      },
+      language: {
+        title: 'LANGUAGE',
+        crumb: t('MENIU / LIMBĂ'),
+        foot: this.mobile ? tp('TAP RÂND · {back}', { back }) : t('↑ ↓ RÂND · ENTER ALEGE · ESC ÎNAPOI'),
       },
       credits: {
-        title: 'CREDITS',
-        crumb: 'MENIU / CREDITS',
+        title: t('CREDITS'),
+        crumb: t('MENIU / CREDITS'),
         foot: back,
       },
     };
@@ -525,6 +543,7 @@ export class FrontEnd {
 
     if (p === 'controls') this.els.pageBody.innerHTML = this.controlsHtml();
     else if (p === 'audio') this.els.pageBody.innerHTML = this.audioHtml();
+    else if (p === 'language') this.els.pageBody.innerHTML = this.languageHtml();
     else this.els.pageBody.innerHTML = this.creditsHtml();
 
     this.els.pageBody.scrollTop = 0;
@@ -541,6 +560,8 @@ export class FrontEnd {
 
   private pageRowCount(): number {
     if (this.page === 'audio') return 5;
+    // One row per language, plus BACK.
+    if (this.page === 'language') return LANGUAGES.length + 1;
     if (this.page === 'controls' || this.page === 'credits') return 1;
     return 0;
   }
@@ -582,7 +603,7 @@ export class FrontEnd {
 
   private controlsHtml(): string {
     const ctx = this.ctx;
-    if (!ctx) return '<p class="fe-note">Comenzile apar după ce jocul termină de încărcat.</p>';
+    if (!ctx) return `<p class="fe-note">${t('Comenzile apar după ce jocul termină de încărcat.')}</p>`;
     this.bindings ??= readBindings(ctx.input, this);
     const order: BindGroup[] = ['foot', 'vehicle', 'system'];
     const groups = order
@@ -597,64 +618,108 @@ export class FrontEnd {
             </div>`,
           )
           .join('');
-        return `<div class="fe-group"><h4>${GROUP_TITLES[g]}</h4><div class="fe-keys">${cells}</div></div>`;
+        return `<div class="fe-group"><h4>${t(GROUP_TITLES[g])}</h4><div class="fe-keys">${cells}</div></div>`;
       })
       .join('');
     return `${groups}
-      <p class="fe-note">${GROUP_ORDER_NOTE}</p>
-      <div class="fe-row" data-row="0"><span class="fe-row-t">ÎNAPOI</span></div>`;
+      <p class="fe-note">${t(GROUP_ORDER_NOTE)}</p>
+      <div class="fe-row" data-row="0"><span class="fe-row-t">${t('ÎNAPOI')}</span></div>`;
   }
 
   private audioHtml(): string {
     const s = this.settings;
-    if (!s) return '<p class="fe-note">Setările apar după ce jocul termină de încărcat.</p>';
+    if (!s) return `<p class="fe-note">${t('Setările apar după ce jocul termină de încărcat.')}</p>`;
     const vol = Math.round(s.masterVolume * 100);
     const q = s.quality;
     const sens = s.lookSensitivity;
     const inv = s.invertY;
     const segs = QUALITIES.map(
       (k) =>
-        `<span class="fe-seg${k === q ? ' on' : ''}" data-set="${QUALITIES.indexOf(k)}">${QUALITY_LABELS[k]}</span>`,
+        `<span class="fe-seg${k === q ? ' on' : ''}" data-set="${QUALITIES.indexOf(k)}">${t(QUALITY_LABELS[k])}</span>`,
     ).join('');
     return `
       <div class="fe-row" data-row="0">
-        <span class="fe-row-lab">Volum principal</span>
+        <span class="fe-row-lab">${t('Volum principal')}</span>
         <span class="fe-row-ctl">
           <span class="fe-meter" data-meter="vol"><i style="width:${vol}%"></i><s style="left:${vol}%"></s></span>
           <b data-val="vol">${vol}%</b>
         </span>
       </div>
       <div class="fe-row" data-row="1">
-        <span class="fe-row-lab">Calitate imagine</span>
+        <span class="fe-row-lab">${t('Calitate imagine')}</span>
         <span class="fe-row-ctl fe-segs" data-segs="quality">${segs}</span>
       </div>
       <div class="fe-row" data-row="2">
-        <span class="fe-row-lab">Sensibilitate mouse</span>
+        <span class="fe-row-lab">${t('Sensibilitate mouse')}</span>
         <span class="fe-row-ctl">
           <span class="fe-meter" data-meter="sens"><i style="width:${sensPct(sens)}%"></i><s style="left:${sensPct(sens)}%"></s></span>
           <b data-val="sens">${sensLabel(sens)}</b>
         </span>
       </div>
       <div class="fe-row" data-row="3">
-        <span class="fe-row-lab">Inversează axa Y</span>
+        <span class="fe-row-lab">${t('Inversează axa Y')}</span>
         <span class="fe-row-ctl fe-segs" data-segs="invert">
-          <span class="fe-seg${inv ? '' : ' on'}" data-set="0">NU</span>
-          <span class="fe-seg${inv ? ' on' : ''}" data-set="1">DA</span>
+          <span class="fe-seg${inv ? '' : ' on'}" data-set="0">${t('NU')}</span>
+          <span class="fe-seg${inv ? ' on' : ''}" data-set="1">${t('DA')}</span>
         </span>
       </div>
-      <div class="fe-row" data-row="4"><span class="fe-row-t">ÎNAPOI</span></div>
-      <p class="fe-note">Volumul merge în mixerul jocului, calitatea reconstruiește lanțul de post-procesare, iar
-        sensibilitatea și axa Y sunt cele pe care le citește camera. Aceleași setări apar și în meniul de pauză.</p>`;
+      <div class="fe-row" data-row="4"><span class="fe-row-t">${t('ÎNAPOI')}</span></div>
+      <p class="fe-note">${t(
+        'Volumul merge în mixerul jocului, calitatea reconstruiește lanțul de post-procesare, iar ' +
+          'sensibilitatea și axa Y sunt cele pe care le citește camera. Aceleași setări apar și în meniul de pauză.',
+      )}</p>`;
+  }
+
+  /**
+   * THE LANGUAGE PAGE.
+   *
+   * Both options are always written in their own language — a player who
+   * landed on the wrong one has to be able to recognise the way out. The
+   * change applies the moment a row is chosen, so the page under the cursor
+   * is the proof that it worked.
+   */
+  private languageHtml(): string {
+    const active = lang();
+    const rows = LANGUAGES.map(
+      (code, i) => `<div class="fe-row" data-row="${i}">
+        <span class="fe-row-lab">${escapeHtml(LANG_LABELS[code])}</span>
+        <span class="fe-row-ctl fe-segs">
+          <span class="fe-seg${code === active ? ' on' : ''}" data-set="${i}">${code === active ? '✓' : '·'}</span>
+        </span>
+      </div>`,
+    ).join('');
+    return `${rows}
+      <div class="fe-row" data-row="${LANGUAGES.length}"><span class="fe-row-t">${t('ÎNAPOI')}</span></div>
+      <p class="fe-note">${t(
+        'Jocul se traduce pe loc — meniul, interfața, misiunile și subtitrările. ' +
+          'Vocile și muzica rămân în română, pentru că sunt înregistrări reale.',
+      )}</p>`;
+  }
+
+  /**
+   * Switch, then rebuild everything already on screen. The main menu rows, the
+   * loading strap and this page were all painted once, in the old language.
+   * `bindings` is dropped too: it caches the labels the probe read.
+   */
+  private chooseLanguage(next: Lang): void {
+    if (next === lang()) return;
+    setLang(next);
+    this.bindings = null;
+    this.paintStaticCopy();
+    this.syncMenu();
+    this.paintProgress();
+    this.setPanel(Math.max(0, this.panelIndex));
+    this.openPage('language');
   }
 
   private creditsHtml(): string {
     const blocks = CREDITS.map(
-      (b) => `<div class="fe-credit-block"><h5>${escapeHtml(b.role)}</h5>
-        <p>${b.lines.map(escapeHtml).join('<br />')}</p></div>`,
+      (b) => `<div class="fe-credit-block"><h5>${escapeHtml(t(b.role))}</h5>
+        <p>${b.lines.map((l) => escapeHtml(t(l))).join('<br />')}</p></div>`,
     ).join('');
     return `<div class="fe-credits">${blocks}
       <div class="fe-credit-end">B★ BUILDERSTAR GAMES · BUCUREȘTI</div></div>
-      <div class="fe-row" data-row="0"><span class="fe-row-t">ÎNAPOI</span></div>`;
+      <div class="fe-row" data-row="0"><span class="fe-row-t">${t('ÎNAPOI')}</span></div>`;
   }
 
   private refreshAudioValues(): void {
@@ -686,6 +751,12 @@ export class FrontEnd {
 
   /** Left/right on the selected settings row. */
   private nudge(dir: number): void {
+    if (this.page === 'language') {
+      const i = LANGUAGES.indexOf(lang());
+      const next = LANGUAGES[clamp(i + dir, 0, LANGUAGES.length - 1)];
+      if (next) this.chooseLanguage(next);
+      return;
+    }
     const s = this.settings;
     if (!s || this.page !== 'audio') return;
     switch (this.pageRow) {
@@ -709,6 +780,11 @@ export class FrontEnd {
 
   /** Absolute click on a segment. */
   private setRow(row: number, value: number): void {
+    if (this.page === 'language') {
+      const picked = LANGUAGES[value];
+      if (picked) this.chooseLanguage(picked);
+      return;
+    }
     const s = this.settings;
     if (!s) return;
     if (row === 1) s.setQuality(QUALITIES[clamp(value, 0, QUALITIES.length - 1)] as Quality);
@@ -717,6 +793,12 @@ export class FrontEnd {
   }
 
   private activateRow(): void {
+    if (this.page === 'language') {
+      const picked = LANGUAGES[this.pageRow];
+      if (picked) this.chooseLanguage(picked);
+      else this.closePage();
+      return;
+    }
     if (this.page === 'audio') {
       if (this.pageRow === 3) {
         this.settings?.setInvertY(!this.settings.invertY);
@@ -926,7 +1008,7 @@ export class FrontEnd {
       return;
     }
     this.els.launchKeys.innerHTML =
-      `<p class="fe-launch-keys-t">${LAUNCH_HINTS_TITLE}</p><div class="fe-launch-keys-g">${hintChips(rows)}</div>`;
+      `<p class="fe-launch-keys-t">${t(LAUNCH_HINTS_TITLE)}</p><div class="fe-launch-keys-g">${hintChips(rows)}</div>`;
   }
 
   private setLaunchProgress(pct: number, status: string): void {
@@ -935,8 +1017,32 @@ export class FrontEnd {
     this.launchPct = next;
     this.els.launchBar.style.transform = `scaleX(${(next / 100).toFixed(3)})`;
     this.els.launchPct.textContent = `${next}%`;
-    this.els.launchStatus.textContent = status;
+    this.els.launchStatus.textContent = t(status);
     this.els.launchBar.parentElement?.setAttribute('aria-valuenow', String(next));
+  }
+
+  /**
+   * Copy that lives in `template()` rather than in a render method.
+   *
+   * `data-copy` is the authored Romanian; the element's text is whatever that
+   * translates to right now. Keeping the source on the attribute means this can
+   * run again after a language switch without the markup having to be rebuilt,
+   * and `data-copy-aria` does the same for the labels only a screen reader
+   * sees.
+   */
+  private paintStaticCopy(): void {
+    this.root.querySelectorAll<HTMLElement>('[data-copy]').forEach((el) => {
+      el.textContent = t(el.dataset.copy ?? '');
+    });
+    this.root.querySelectorAll<HTMLElement>('[data-copy-aria]').forEach((el) => {
+      el.setAttribute('aria-label', t(el.dataset.copyAria ?? ''));
+    });
+    const hint = this.root.querySelector<HTMLElement>('.fe-hint');
+    if (hint) {
+      hint.innerHTML =
+        `<kbd>←</kbd><kbd>→</kbd> ${t('NAVIGARE')} · ` +
+        `<kbd>ENTER</kbd> ${t('SELECTEAZĂ')} · <kbd>ESC</kbd> ${t('ÎNAPOI')}`;
+    }
   }
 
   /* ---------------------------------------------------------------- */
@@ -1030,12 +1136,12 @@ export class FrontEnd {
     ${studioMark('fe-sting')}
     <div class="fe-sting-flash"></div>
     <div class="fe-sting-tri"></div>
-    <p class="fe-sting-presents">PREZINTĂ</p>
+    <p class="fe-sting-presents" data-copy="PREZINTĂ"></p>
   </div>
-  <p class="fe-skip">ORICE TASTĂ PENTRU A SĂRI</p>
+  <p class="fe-skip" data-copy="ORICE TASTĂ PENTRU A SĂRI"></p>
 </section>
 
-<section class="fe-phase fe-load" aria-label="Se încarcă">
+<section class="fe-phase fe-load" data-copy-aria="Se încarcă">
   <div class="fe-artwrap"><div class="fe-art"></div></div>
   <div class="fe-wash"></div>
   <div class="fe-bloom"></div>
@@ -1072,12 +1178,12 @@ export class FrontEnd {
     <p class="fe-tag">TAKE BACK THE HOUSE</p>
   </div>
 
-  <nav class="fe-menu" aria-label="Meniu principal">${items}</nav>
+  <nav class="fe-menu" data-copy-aria="Meniu principal">${items}</nav>
   <p class="fe-mobile-notice" role="status" hidden>
     <span class="fe-mobile-kicker">${MOBILE_NOTICE.kicker}</span>
     <span class="fe-mobile-body">${MOBILE_NOTICE.body}</span>
   </p>
-  <p class="fe-hint"><kbd>←</kbd><kbd>→</kbd> NAVIGARE · <kbd>ENTER</kbd> SELECTEAZĂ · <kbd>ESC</kbd> ÎNAPOI</p>
+  <p class="fe-hint"></p>
 
   <aside class="fe-crisis" aria-label="Political instability">
     <span>POLITICAL INSTABILITY</span><b>${stars}</b>
@@ -1098,12 +1204,12 @@ export class FrontEnd {
 <div class="fe-curtain">
   <div class="fe-launch" role="status" aria-live="polite">
     <p class="fe-launch-kicker">STARTING GAME</p>
-    <p class="fe-launch-status">SE PREGĂTEȘTE DOSARUL</p>
+    <p class="fe-launch-status" data-copy="SE PREGĂTEȘTE DOSARUL"></p>
     <div class="fe-launch-progress">
-      <span class="fe-launch-bar" role="progressbar" aria-label="Progres pornire joc" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></span>
+      <span class="fe-launch-bar" role="progressbar" data-copy-aria="Progres pornire joc" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></span>
       <span class="fe-launch-pct">0%</span>
     </div>
-    <div class="fe-launch-keys" aria-label="Comenzi"></div>
+    <div class="fe-launch-keys" data-copy-aria="Comenzi"></div>
   </div>
 </div>`;
   }

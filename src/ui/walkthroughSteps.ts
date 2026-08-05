@@ -108,7 +108,7 @@ export const WALK_STEPS: readonly WalkStep[] = [
     id: 'pause',
     hints: ['pause'],
     title: 'Restul comenzilor sunt în meniul de pauză',
-    body: 'Acolo găsești lista completă, setările și salvarea. Succes, constructor.',
+    body: 'Acolo găsești lista completă, setările și salvarea. Succes, builder.',
     seconds: 24,
     done: (s) => s.pausePressed,
   },

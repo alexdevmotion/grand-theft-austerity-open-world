@@ -35,7 +35,7 @@ import type { ShellSpec } from './shell';
  */
 export const BUILDERS_LOBBY: ShellSpec = {
   id: 'buildersLobby',
-  name: 'Holul Casei Constructorilor',
+  name: 'Holul Casei Builderilor',
   cx: TOWER.cx,
   cz: TOWER.cz,
   w: TOWER.w,
@@ -144,7 +144,7 @@ export const CORNER_SHOP: ShellSpec = {
 
 export const BAR: ShellSpec = {
   id: 'buildersBar',
-  name: 'Barul Constructorilor',
+  name: 'Barul Builderilor',
   cx: -34,
   cz: -36.5,
   w: 16,

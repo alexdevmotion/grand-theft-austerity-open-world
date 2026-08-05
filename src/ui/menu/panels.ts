@@ -34,22 +34,22 @@ export const LOAD_PANELS: readonly LoadPanel[] = [
     headline: 'They closed the House.<br />They forgot about the builders.',
     body:
       'Recover the last server. Find the bootstrapped Dacia. Keep the ecosystem alive.',
-    status: 'SE SIGILEAZĂ CASA CONSTRUCTORILOR',
+    status: 'SE SIGILEAZĂ CASA BUILDERILOR',
   },
   {
     index: '02',
     act: 'BOOTSTRAP RESISTANCE',
     headline: 'A yellow Dacia,<br />and half a city that still answers.',
     body:
-      'Traversează Bucureștiul, adună constructorii, ia stickul cu dovezi de la Recorder și acreditările de emisie de la Nicușor LAN.',
-    status: 'SE ADUNĂ CONSTRUCTORII',
+      'Traversează Bucureștiul, adună builderii, ia stickul cu dovezi de la Recorder și acreditările de emisie de la Nicușor LAN.',
+    status: 'SE ADUNĂ BUILDERII',
   },
   {
     index: '03',
     act: 'TERM SHEET FOR THE REPUBLIC',
     headline: 'The president has a speech.<br />You have the truth on a stick.',
     body:
-      'Ajungi la turnul de emisie și înlocuiești discursul național al lui Georgescu cu ce s-a întâmplat de fapt la Casa Constructorilor.',
+      'Ajungi la turnul de emisie și înlocuiești discursul național al lui Georgescu cu ce s-a întâmplat de fapt la Casa Builderilor.',
     status: 'SE CALIBREAZĂ TRANSMISIUNEA',
   },
   {
@@ -57,7 +57,7 @@ export const LOAD_PANELS: readonly LoadPanel[] = [
     act: 'EXIT THROUGH THE GIFT SHOP',
     headline: 'Five stars of instability,<br />one door left to open.',
     body:
-      'Supraviețuiește întoarcerii, sparge baricada Ministerului și intră pe jos în holul Casei Constructorilor. Muzica începe doar după aceea.',
+      'Supraviețuiește întoarcerii, sparge baricada Ministerului și intră pe jos în holul Casei Builderilor. Muzica începe doar după aceea.',
     status: 'MINISTERUL DE-ACCELERĂRII SE MOBILIZEAZĂ',
   },
 ];
@@ -90,13 +90,13 @@ export const CREDITS: readonly CreditBlock[] = [
   {
     role: 'ÎN ROLURILE PRINCIPALE',
     lines: [
-      'Ilie Bolojan-Agatinei — constructorul care nu se oprește',
+      'Ilie Bolojan-Agatinei — builderul care nu se oprește',
       'George Georgescu — președintele de pe ecrane',
       'Ministerul De-Accelerării Naționale — sistemul',
       'Recorder — curierul de dovezi',
       'Nicușor LAN — infrastructura',
       'Ce Ne Enervează — vocea de la radio',
-      'Constructorii Bucureștiului — mulțimea',
+      'Builderii Bucureștiului — mulțimea',
     ],
   },
   {
@@ -166,7 +166,7 @@ export function showsWalkthrough(mode: 'new' | 'continue', canContinue: boolean)
 }
 
 /** Menu row identifiers, in on-screen order. */
-export type MenuId = 'start' | 'continue' | 'controls' | 'audio' | 'credits';
+export type MenuId = 'start' | 'continue' | 'controls' | 'audio' | 'language' | 'credits';
 
 export interface MenuItemDef {
   readonly id: MenuId;
@@ -180,6 +180,9 @@ export const MENU_ITEMS: readonly MenuItemDef[] = [
   { id: 'continue', label: 'CONTINUE', sub: 'RELUĂM DE UNDE AM RĂMAS' },
   { id: 'controls', label: 'CONTROLS', sub: 'TASTE ȘI MOUSE' },
   { id: 'audio', label: 'SETTINGS', sub: 'SUNET ȘI IMAGINE' },
+  // The row label is deliberately the English word in both languages: a player
+  // who cannot read the current language has to be able to find this one.
+  { id: 'language', label: 'LANGUAGE', sub: 'ROMÂNĂ SAU ENGLEZĂ' },
   { id: 'credits', label: 'CREDITS', sub: 'CINE A CONSTRUIT ASTA' },
 ];
 

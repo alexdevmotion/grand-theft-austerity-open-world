@@ -33,6 +33,7 @@ import { chamferRing, clamp, clampToRect, fmtDistance, project, type MapView, ty
 import type { MapData } from './mapData';
 import type { MapWorld } from './mapWorld';
 import type { Router } from './route';
+import { t } from '../../core/i18n';
 
 export interface PaintOpts {
   /** Device pixel ratio the backing store was sized with. */
@@ -187,7 +188,7 @@ export class MapPainter {
     // Marks are PAINTED last, on top of everything, but they have to be
     // CLAIMED first: the player arrow, the waypoint diamond and the activity
     // blips are drawn after the captions and were happily stamped straight
-    // across them — "Casa Constructorilor" with the player's halo through the
+    // across them — "Casa Builderilor" with the player's halo through the
     // middle of it. Reserving the boxes up front is the only ordering that
     // gets both right: marks on top, captions out of their way.
     if (!o.compact) this.reserveMarks(v, world, o);
@@ -331,7 +332,7 @@ export class MapPainter {
     for (const d of data.districtLabels) {
       project(v, d.x, d.z, _p);
       if (_p.x < -80 || _p.x > v.w + 80 || _p.y < -20 || _p.y > v.h + 20) continue;
-      const text = spaced(d.name);
+      const text = spaced(t(d.name));
       // A district caption may drift a long way from its centroid — the
       // district is a region, not a point, so anywhere inside it names it. That
       // is what lets a caption step out from under a boulevard instead of being
@@ -356,7 +357,7 @@ export class MapPainter {
    * caller can draw immediately.
    *
    * Reject-only claiming — what this replaces — drops a caption the moment its
-   * FIRST choice is taken, which is why the anchors around Casa Constructorilor
+   * FIRST choice is taken, which is why the anchors around Casa Builderilor
    * came out as a pile: everything wanted the same twelve pixels under its own
    * blip and the ones that lost simply vanished or, worse, were drawn by a
    * different pass that did not consult the table at all.
@@ -618,7 +619,7 @@ export class MapPainter {
         g.fill();
       }
 
-      if (o.labels && !o.compact) this.tryLabel(g, v, lm.name, _p.x, _p.y, r, MapInk.text);
+      if (o.labels && !o.compact) this.tryLabel(g, v, t(lm.name), _p.x, _p.y, r, MapInk.text);
     }
 
     if (poiNames) {
@@ -627,7 +628,7 @@ export class MapPainter {
         if (lm.kind !== 'poi') continue;
         project(v, lm.x, lm.z, _p);
         if (!this.onSheet(v, 30)) continue;
-        this.tryLabel(g, v, lm.name, _p.x, _p.y, 2.2, 'rgba(226,201,255,.72)');
+        this.tryLabel(g, v, t(lm.name), _p.x, _p.y, 2.2, 'rgba(226,201,255,.72)');
       }
     }
   }

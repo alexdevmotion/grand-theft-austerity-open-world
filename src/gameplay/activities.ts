@@ -39,6 +39,7 @@ import {
   raceScore,
 } from './activityScoring';
 import type { InteractionService } from '../core/services';
+import { t, tp } from '../core/i18n';
 import { activityHud, resetActivityHud } from './hudState';
 
 const START_PREFIX = 'act:start:';
@@ -181,7 +182,7 @@ interface Garage {
 
 /** Health per leu is deliberately best at the shaorma and worst at the covrig. */
 const FOOD_STALLS: FoodStall[] = [
-  { id: 'covrigarie', name: 'Covrigărie «La Constructori»', item: 'Covrig cu susan', cost: 14, heal: 20, x: -46, z: 20, side: 9 },
+  { id: 'covrigarie', name: 'Covrigărie «La Builderi»', item: 'Covrig cu susan', cost: 14, heal: 20, x: -46, z: 20, side: 9 },
   { id: 'shaormerie', name: 'Shaormerie non-stop «Victoriei»', item: 'Shaorma mare cu de toate', cost: 42, heal: 55, x: 276, z: -340, side: -9 },
   { id: 'bufet', name: 'Bufetul «Curtea Startup»', item: 'Mici cu muștar', cost: 34, heal: 42, x: -368, z: -74, side: 8 },
   { id: 'gogoserie', name: 'Gogoșerie Cișmigiu', item: 'Gogoși cu vișine', cost: 18, heal: 24, x: -460, z: 345, side: -8 },
@@ -341,7 +342,7 @@ export class ActivitySystem implements System, ActivityService {
       this.roadside(g.x, g.z, g.side, p);
       it.add({
         id: `${SHOP_PREFIX}${g.id}:repair`,
-        label: `${g.name} — reparație`,
+        label: tp('{name} — reparație', { name: t(g.name) }),
         position: p.clone(),
         radius: 7.5,
         kind: 'world',
@@ -417,12 +418,20 @@ export class ActivitySystem implements System, ActivityService {
       return;
     }
     if (!player.spend(s.cost, `mâncare:${s.id}`)) {
-      this.toast(`Nu ai ${s.cost} lei`, 'bad');
+      this.toast(tp('Nu ai {cost} lei', { cost: s.cost }), 'bad');
       return;
     }
     const gained = player.heal(s.heal, s.item);
     this.shopCooldown.set(s.id, 12);
-    this.toast(`${s.item} · −${s.cost} lei · +${Math.round(gained)} viață`, 'good', 2800);
+    this.toast(
+      tp('{item} · −{cost} lei · +{gained} viață', {
+        item: t(s.item),
+        cost: s.cost,
+        gained: Math.round(gained),
+      }),
+      'good',
+      2800,
+    );
     this.ctx.events.emit('audio:oneShot', { id: 'pickup', volume: 0.5 });
   }
 
@@ -436,7 +445,7 @@ export class ActivitySystem implements System, ActivityService {
       return;
     }
     if (!player.spend(cost, `reparație:${g.id}`)) {
-      this.toast(`Reparația costă ${cost} lei. Nu-i ai.`, 'bad', 3200);
+      this.toast(tp('Reparația costă {cost} lei. Nu-i ai.', { cost }), 'bad', 3200);
       return;
     }
     // `VehicleHandle` has no `repair()`, only `applyDamage`. Negative damage
@@ -445,7 +454,7 @@ export class ActivitySystem implements System, ActivityService {
     // handle would also undo the body deformation, which this cannot.)
     v.applyDamage(-(v.maxHealth - v.health));
     v.recover();
-    this.toast(`${g.name}: ca nouă · −${cost} lei`, 'good', 3200);
+    this.toast(tp('{name}: ca nouă · −{cost} lei', { name: t(g.name), cost }), 'good', 3200);
     this.ctx.events.emit('audio:oneShot', { id: 'pickup', volume: 0.6 });
   }
 
@@ -454,7 +463,7 @@ export class ActivitySystem implements System, ActivityService {
     const wanted = this.ctx.tryGet(Services.Wanted);
     if (!player || !player.inVehicle || !wanted) return;
     if (!player.spend(RESPRAY_COST, `vopsitorie:${g.id}`)) {
-      this.toast(`Vopsitoria cere ${RESPRAY_COST} lei înainte`, 'bad', 3200);
+      this.toast(tp('Vopsitoria cere {cost} lei înainte', { cost: RESPRAY_COST }), 'bad', 3200);
       return;
     }
     const before = wanted.stars;
@@ -462,8 +471,12 @@ export class ActivitySystem implements System, ActivityService {
     else wanted.setStars(before - RESPRAY_STARS);
     this.toast(
       before > 0
-        ? `Culoare nouă, numere noi · −${RESPRAY_COST} lei · ${before} → ${Math.max(0, before - RESPRAY_STARS)} ★`
-        : `Culoare nouă · −${RESPRAY_COST} lei. Nimeni nu te căuta oricum.`,
+        ? tp('Culoare nouă, numere noi · −{cost} lei · {before} → {after} ★', {
+            cost: RESPRAY_COST,
+            before,
+            after: Math.max(0, before - RESPRAY_STARS),
+          })
+        : tp('Culoare nouă · −{cost} lei. Nimeni nu te căuta oricum.', { cost: RESPRAY_COST }),
       before > 0 ? 'good' : 'info',
       3600,
     );
@@ -602,7 +615,7 @@ export class ActivitySystem implements System, ActivityService {
       this._available.push({ id: def.id, kind: def.kind, position: p.clone(), name: def.name });
       it?.add({
         id: START_PREFIX + def.id,
-        label: `${KIND_LABEL[def.kind]} — ${def.name}`,
+        label: tp('{kind} — {name}', { kind: t(KIND_LABEL[def.kind]), name: t(def.name) }),
         position: p,
         radius: 5.0,
         kind: 'activity',
@@ -642,7 +655,10 @@ export class ActivitySystem implements System, ActivityService {
 
     this.interaction()?.removeByPrefix(START_PREFIX);
     this.ctx.events.emit('activity:started', { id: def.id, kind: def.kind });
-    this.hud()?.missionCard(`${KIND_LABEL[def.kind]} — ${def.name}`, def.blurb);
+    this.hud()?.missionCard(
+      tp('{kind} — {name}', { kind: t(KIND_LABEL[def.kind]), name: t(def.name) }),
+      def.blurb,
+    );
 
     if (def.kind === 'evade' && def.stars) {
       this.ctx.tryGet(Services.Wanted)?.setStars(def.stars);
@@ -676,7 +692,7 @@ export class ActivitySystem implements System, ActivityService {
     if (run.def.kind === 'photo') {
       it?.add({
         id: STEP_ID,
-        label: `Fotografiază ${pt.label ?? 'ecranul'}`,
+        label: tp('Fotografiază {what}', { what: t(pt.label ?? 'ecranul') }),
         position: p,
         radius: 9,
         kind: 'activity',
@@ -721,14 +737,24 @@ export class ActivitySystem implements System, ActivityService {
       this.ctx.tryGet(Services.Player)?.addLei(lei, `activitate:${def.id}`);
       if (score > prev) this.best.set(def.id, score);
       this.hud()?.missionCard(
-        `${def.name} — ${MEDAL_LABEL[medal]}`,
-        `${score} puncte · +${lei} lei${score > prev ? ' · record nou' : ''}`,
+        tp('{name} — {medal}', { name: t(def.name), medal: t(MEDAL_LABEL[medal]) }),
+        tp(score > prev ? '{score} puncte · +{lei} lei · record nou' : '{score} puncte · +{lei} lei', {
+          score,
+          lei,
+        }),
       );
-      activityHud.result = `${def.name}: ${score} (${MEDAL_LABEL[medal]})`;
+      activityHud.result = tp('{name}: {score} ({medal})', {
+        name: t(def.name),
+        score,
+        medal: t(MEDAL_LABEL[medal]),
+      });
       activityHud.resultGood = true;
     } else {
-      this.hud()?.missionCard(`${def.name} — EȘUAT`, reason || 'timp expirat');
-      activityHud.result = `${def.name}: eșuat`;
+      this.hud()?.missionCard(
+        tp('{title} — EȘUAT', { title: t(def.name) }),
+        reason || 'timp expirat',
+      );
+      activityHud.result = tp('{name}: eșuat', { name: t(def.name) });
       activityHud.resultGood = false;
     }
     this.resultTimer = 5;

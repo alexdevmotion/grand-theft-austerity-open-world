@@ -31,6 +31,7 @@ import * as THREE from 'three';
 import type { GameContext, System } from '../core/engine';
 import { CG, probeGroups, type PhysicsWorld } from '../physics/physics';
 import type { PlayerService, VehicleClass } from '../core/services';
+import { t } from '../core/i18n';
 import { Services, type InteractableKind, type InteractableSpec, type InteractionService } from '../core/services';
 import { hintKeys } from '../core/keyHints';
 import {
@@ -409,7 +410,7 @@ export class InteractionSystem implements System, InteractionService {
       return;
     }
     el.innerHTML =
-      `${view.keys.map((k) => `<kbd>${escapeHtml(k)}</kbd>`).join('')}<span>${escapeHtml(view.label)}</span>`;
+      `${view.keys.map((k) => `<kbd>${escapeHtml(k)}</kbd>`).join('')}<span>${escapeHtml(t(view.label))}</span>`;
     el.style.borderColor = `#${view.color.toString(16).padStart(6, '0')}`;
     el.style.opacity = '1';
     el.style.transform = 'translateX(-50%) translateY(0)';

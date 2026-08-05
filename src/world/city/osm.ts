@@ -46,7 +46,7 @@
  *     monumental axis (grid column 12, x = -92),
  *   - Bulevardul Regina Elisabeta / Carol I becomes the authored E–W axis
  *     (grid row 13, z = 0) to within 30 m along its whole run,
- *   - Casa Constructorilor — the story's tower — ends up standing on Piața
+ *   - Casa Builderilor — the story's tower — ends up standing on Piața
  *     Universității, the square Romanian protest actually happens in,
  *   - Piața Victoriei lands at (-896, -1117), the north-west approach, and
  *     Piața Unirii at (-80, 530), both inside the map with margin.
@@ -538,7 +538,7 @@ export function buildOsmCity(opt: OsmCityOptions): OsmCity {
 /**
  * The two authored boulevards are laid by the grid, not by the survey, so the
  * survey has to be told they are there — otherwise a real footprint lands in
- * the middle of the 42 m carriageway Casa Constructorilor's forecourt opens on.
+ * the middle of the 42 m carriageway Casa Builderilor's forecourt opens on.
  */
 function stampAuthoredAxes(city: OsmCity): void {
   const w = 42;
@@ -577,7 +577,7 @@ function widthOf(name: string | null, cls: RoadClass, lanes: number | null): num
 /**
  * The two authored boulevards the story is staged on. Real ways that run along
  * them are dropped rather than drawn twice: the grid still lays these two, at
- * their authored 42 m, because Casa Constructorilor's forecourt, the Dacia's
+ * their authored 42 m, because Casa Builderilor's forecourt, the Dacia's
  * kerbside slot and the Parliament axis are all measured against them.
  */
 const AXIS_KEEPOUT = 15;

@@ -12,6 +12,7 @@
  */
 
 import { HANDBRAKE_KEY, MOVE_KEYS, keysForAction, type ActionName } from './input';
+import { t } from './i18n';
 
 const KEY_GLYPHS: Record<string, string> = {
   Space: 'SPAȚIU',
@@ -43,9 +44,15 @@ const KEY_GLYPHS: Record<string, string> = {
   Mouse2: 'CLIC DR.',
 };
 
-/** `KeyE` → `E`, `ShiftLeft` → `SHIFT`, `Mouse0` → `CLIC ST.` */
+/**
+ * `KeyE` → `E`, `ShiftLeft` → `SHIFT`, `Mouse0` → `CLIC ST.` / `LMB`.
+ *
+ * The glyph table is authored in Romanian like everything else, so the mouse
+ * buttons and SPACE go through the catalogue; `E` and `↑` come back unchanged
+ * because no language translates them.
+ */
 export function glyph(code: string): string {
-  return KEY_GLYPHS[code] ?? code.replace(/^(Key|Digit)/, '');
+  return t(KEY_GLYPHS[code] ?? code.replace(/^(Key|Digit)/, ''));
 }
 
 export type HintId =
@@ -107,7 +114,7 @@ const HINT_SOURCES: Record<HintId, { label: string; codes: () => string[] }> = {
 export function hintRow(id: HintId): HintRow | null {
   const src = HINT_SOURCES[id];
   const keys = src.codes().map(glyph);
-  return keys.length ? { id, label: src.label, keys } : null;
+  return keys.length ? { id, label: t(src.label), keys } : null;
 }
 
 export function hintRows(ids: readonly HintId[]): HintRow[] {

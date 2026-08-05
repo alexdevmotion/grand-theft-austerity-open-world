@@ -346,7 +346,7 @@ export function buildBuildersHouse(sink: LandmarkSink, rng: Rng): LandmarkResult
 
   return {
     id: 'buildersHouse',
-    name: 'Casa Constructorilor',
+    name: 'Casa Builderilor',
     position: new THREE.Vector3(cx, 0, cz - 30),
     radius: 55,
     boxes,

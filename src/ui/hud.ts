@@ -17,6 +17,7 @@ import * as THREE from 'three';
 import type { GameContext, System } from '../core/engine';
 import { Services, type HudService } from '../core/services';
 import { activityHud, missionHud } from '../gameplay/hudState';
+import { num, t, tp } from '../core/i18n';
 
 const _wp = new THREE.Vector3();
 const _cam = new THREE.Vector3();
@@ -126,10 +127,20 @@ export class HudSystem implements System, HudService {
   /* HudService                                                        */
   /* ---------------------------------------------------------------- */
 
+  /*
+   * THE FOUR TRANSLATION SEAMS.
+   *
+   * Everything the campaign, the activities, the police and the radio put on
+   * screen arrives through `toast`, `subtitle`, `missionCard` and `radioLine`.
+   * Translating here rather than at each of the ~60 call sites means the
+   * gameplay systems keep writing Romanian — the language the game is authored
+   * in — and no future caller can forget to ask for a translation.
+   */
+
   private toastTimer = 0;
   toast(text: string, kind: 'info' | 'good' | 'bad' = 'info', ms = 2600): void {
     if (!text) return;
-    this.toastEl.textContent = text;
+    this.toastEl.textContent = t(text);
     this.toastEl.className = `gta-toast ${kind}`;
     this.toastEl.style.opacity = '1';
     window.clearTimeout(this.toastTimer);
@@ -138,14 +149,15 @@ export class HudSystem implements System, HudService {
 
   private subRemaining = 0;
   subtitle(speaker: string, text: string, ms = 3800): void {
-    this.subtitleEl.innerHTML = speaker ? `<b>${speaker}:</b> ${text}` : text;
+    const line = t(text);
+    this.subtitleEl.innerHTML = speaker ? `<b>${t(speaker)}:</b> ${line}` : line;
     this.subtitleEl.style.opacity = '1';
     this.subRemaining = Math.max(0, ms / 1000);
   }
 
   private cardTimer = 0;
   missionCard(title: string, subtitle: string): void {
-    this.cardEl.innerHTML = `<h2>${title}</h2><p>${subtitle}</p>`;
+    this.cardEl.innerHTML = `<h2>${t(title)}</h2><p>${t(subtitle)}</p>`;
     this.cardEl.classList.remove('show');
     void this.cardEl.offsetWidth;
     this.cardEl.classList.add('show');
@@ -172,7 +184,7 @@ export class HudSystem implements System, HudService {
   private radioTimer = 0;
   private radioLine(text: string): void {
     if (!text) return;
-    this.radioEl.innerHTML = `<i>RADIO</i> ${text}`;
+    this.radioEl.innerHTML = `<i>RADIO</i> ${t(text)}`;
     this.radioEl.style.opacity = '1';
     window.clearTimeout(this.radioTimer);
     this.radioTimer = window.setTimeout(() => (this.radioEl.style.opacity = '0'), 5200);
@@ -213,9 +225,9 @@ export class HudSystem implements System, HudService {
       this.objEl.style.display = '';
       this.objEl.className = 'gta-obj failed';
       this.objEl.innerHTML =
-        '<h3>MISIUNE EȘUATĂ</h3>' +
-        `<p>${missionHud.failed}</p>` +
-        '<small>Marcajul de reluare te așteaptă.</small>';
+        `<h3>${t('MISIUNE EȘUATĂ')}</h3>` +
+        `<p>${t(missionHud.failed)}</p>` +
+        `<small>${t('Marcajul de reluare te așteaptă.')}</small>`;
       return;
     }
     if (!missionHud.active) {
@@ -227,9 +239,9 @@ export class HudSystem implements System, HudService {
       this.objEl.style.display = '';
       this.objEl.className = 'gta-obj offered';
       this.objEl.innerHTML =
-        '<h3>POVESTEA CONTINUĂ</h3>' +
-        `<p>${offer.title}</p>` +
-        '<small>Urmează marcajul auriu și apasă E.</small>';
+        `<h3>${t('POVESTEA CONTINUĂ')}</h3>` +
+        `<p>${t(offer.title)}</p>` +
+        `<small>${t('Urmează marcajul auriu și apasă E.')}</small>`;
       return;
     }
     this.objEl.style.display = '';
@@ -241,16 +253,16 @@ export class HudSystem implements System, HudService {
       ? `<div class="bar"><i style="width:${Math.round(missionHud.hold * 100)}%"></i></div>`
       : '';
     this.objEl.innerHTML =
-      `<h3>${missionHud.title} <small>${missionHud.step}/${missionHud.steps}</small></h3>` +
-      `<p>${missionHud.objective || this.objTitle}${time}</p>` +
-      `<small>${missionHud.hint || this.objHint}</small>${hold}`;
+      `<h3>${t(missionHud.title)} <small>${missionHud.step}/${missionHud.steps}</small></h3>` +
+      `<p>${t(missionHud.objective || this.objTitle)}${time}</p>` +
+      `<small>${t(missionHud.hint || this.objHint)}</small>${hold}`;
   }
 
   private drawActivity(): void {
     if (activityHud.result) {
       this.actEl.style.display = '';
       this.actEl.className = `gta-act ${activityHud.resultGood ? 'good' : 'bad'}`;
-      this.actEl.innerHTML = `<h3>${activityHud.result}</h3>`;
+      this.actEl.innerHTML = `<h3>${t(activityHud.result)}</h3>`;
       return;
     }
     if (!activityHud.active) {
@@ -260,10 +272,10 @@ export class HudSystem implements System, HudService {
     this.actEl.style.display = '';
     this.actEl.className = 'gta-act';
     this.actEl.innerHTML =
-      `<h3>${activityHud.kind} <small>${activityHud.progress}</small></h3>` +
-      `<p>${activityHud.name}<em class="${activityHud.timeLeft < 15 ? 'hot' : ''}">` +
+      `<h3>${t(activityHud.kind)} <small>${activityHud.progress}</small></h3>` +
+      `<p>${t(activityHud.name)}<em class="${activityHud.timeLeft < 15 ? 'hot' : ''}">` +
       `${fmtTime(activityHud.timeLeft)}</em></p>` +
-      `<small>${activityHud.score} puncte</small>`;
+      `<small>${tp('{score} puncte', { score: activityHud.score })}</small>`;
   }
 
   /**
@@ -328,8 +340,8 @@ export class HudSystem implements System, HudService {
 
     const hp = player ? Math.round((player.health / Math.max(1, player.maxHealth)) * 100) : 100;
     this.statsEl.innerHTML =
-      `<div class="row"><span class="lv">NIV ${level}</span>` +
-      `<span class="lei">${Math.round(this.lei).toLocaleString('ro-RO')} lei</span></div>` +
+      `<div class="row"><span class="lv">${tp('NIV {level}', { level })}</span>` +
+      `<span class="lei">${num(Math.round(this.lei))} lei</span></div>` +
       `<div class="xp"><i style="width:${pct.toFixed(1)}%;opacity:${(0.65 + this.xpFlash * 0.35).toFixed(2)}"></i></div>` +
       `<div class="hp"><i style="width:${hp}%"></i></div>`;
   }

@@ -50,8 +50,85 @@ export interface VehicleSample {
 
 /** Upright crowd bodies are wider than their torsos once arms are included. */
 const PED_MIN_SEPARATION = 0.74;
-const PED_PAIR_CANDIDATE_RADIUS_SQ = 2.25;
+const PED_RADIUS = PED_MIN_SEPARATION * 0.5;
+const DOWN_RADIUS = 0.35;
+const DOG_PLACEMENT_DIRECTIONS = 32;
+const DOG_PLACEMENT_RINGS = 16;
+const DOG_PLACEMENT_STEP = 0.12;
+const PED_PAIR_CANDIDATE_RADIUS_SQ = 4;
 const DEPENETRATION_PASSES = 6;
+/**
+ * Maximum distance between analytic blocker probes. City blockers are areas,
+ * not line segments; keeping this below a kerb stone's width makes a large or
+ * delayed frame behave like the equivalent sequence of fixed frames.
+ */
+const PED_SWEEP_STEP = 0.025;
+const PED_SWEEP_REFINEMENTS = 8;
+
+/** Optional physical-world sweep supplied by the owning PedSystem. */
+export type PedPhysicsSweep = (
+  ped: Ped,
+  fromX: number,
+  fromY: number,
+  fromZ: number,
+  dx: number,
+  dz: number,
+  out: THREE.Vector2,
+) => number;
+
+/**
+ * Move a point along a segment without hopping over `SpatialQuery` blockers.
+ *
+ * `isBlocked` is deliberately a cheap occupancy query rather than a geometry
+ * API, so a deterministic bounded march is the only faithful sweep available
+ * at this seam. The refinement keeps the stopped root close to the boundary
+ * while the fixed probe spacing makes the result independent of frame size.
+ */
+export function sweepPedMovement(
+  spatial: Pick<SpatialQuery, 'isBlocked'>,
+  fromX: number,
+  fromZ: number,
+  dx: number,
+  dz: number,
+  out: THREE.Vector2,
+): number {
+  const distance = Math.hypot(dx, dz);
+  if (!Number.isFinite(distance) || distance < 1e-10) {
+    out.set(fromX, fromZ);
+    return distance < 1e-10 ? 1 : 0;
+  }
+
+  const steps = Math.max(1, Math.ceil(distance / PED_SWEEP_STEP));
+  const startedBlocked = spatial.isBlocked(fromX, fromZ);
+  let escapedStart = !startedBlocked;
+  let safeT = 0;
+
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const blocked = spatial.isBlocked(fromX + dx * t, fromZ + dz * t);
+    if (blocked) {
+      if (!escapedStart) continue;
+      let lo = safeT;
+      let hi = t;
+      for (let refine = 0; refine < PED_SWEEP_REFINEMENTS; refine++) {
+        const mid = (lo + hi) * 0.5;
+        if (spatial.isBlocked(fromX + dx * mid, fromZ + dz * mid)) hi = mid;
+        else lo = mid;
+      }
+      safeT = lo;
+      out.set(fromX + dx * safeT, fromZ + dz * safeT);
+      return safeT;
+    }
+    escapedStart = true;
+    safeT = t;
+  }
+
+  // If every sample remained inside the blocker, keep the existing root. If
+  // the ped escaped a bad starting state, `safeT` is the open endpoint.
+  if (!escapedStart) safeT = 0;
+  out.set(fromX + dx * safeT, fromZ + dz * safeT);
+  return safeT;
+}
 
 /** Uniform grid over the ped population, rebuilt each fixed step. */
 export class CrowdGrid {
@@ -76,7 +153,13 @@ export class CrowdGrid {
   /** Integrate the prepared population, solve it globally, then publish transforms. */
   step(dt: number, env: CrowdEnv): void {
     for (const p of this.ordered) p.update(dt, env);
-    this.resolvePrepared(env.spatial, env.playerPos, env.playerInVehicle);
+    this.resolvePrepared(
+      env.spatial,
+      env.playerPos,
+      env.playerInVehicle,
+      env.sweepPhysics,
+      env.sweepDogPhysics,
+    );
     for (const p of this.ordered) p.syncAfterCrowdStep();
   }
 
@@ -86,9 +169,11 @@ export class CrowdGrid {
     spatial: SpatialQuery,
     playerPos: THREE.Vector3 | null,
     playerInVehicle: boolean,
+    sweepPhysics?: PedPhysicsSweep,
+    sweepDogPhysics?: PedPhysicsSweep,
   ): void {
     this.rebuild(peds);
-    this.resolvePrepared(spatial, playerPos, playerInVehicle);
+    this.resolvePrepared(spatial, playerPos, playerInVehicle, sweepPhysics, sweepDogPhysics);
   }
 
   /** Resolve and expose a newly attached population before its caller returns. */
@@ -97,8 +182,10 @@ export class CrowdGrid {
     spatial: SpatialQuery,
     playerPos: THREE.Vector3 | null,
     playerInVehicle: boolean,
+    sweepPhysics?: PedPhysicsSweep,
+    sweepDogPhysics?: PedPhysicsSweep,
   ): void {
-    this.resolve(peds, spatial, playerPos, playerInVehicle);
+    this.resolve(peds, spatial, playerPos, playerInVehicle, sweepPhysics, sweepDogPhysics);
     for (const p of this.ordered) p.syncAfterCrowdStep();
   }
 
@@ -106,15 +193,16 @@ export class CrowdGrid {
     spatial: SpatialQuery,
     playerPos: THREE.Vector3 | null,
     playerInVehicle: boolean,
+    sweepPhysics?: PedPhysicsSweep,
+    sweepDogPhysics?: PedPhysicsSweep,
   ): void {
     for (let pass = 0; pass < DEPENETRATION_PASSES; pass++) {
       this.fillCells(this.ordered);
       this.pairA.length = 0;
       this.pairB.length = 0;
       for (const p of this.ordered) {
-        if (p.mode === 'down') continue;
         this.forEachNear(p.position.x, p.position.z, (o) => {
-          if (o.mode === 'down' || comparePedId(p, o) >= 0) return;
+          if (comparePedId(p, o) >= 0) return;
           const dx = p.position.x - o.position.x;
           const dz = p.position.z - o.position.z;
           if (dx * dx + dz * dz > PED_PAIR_CANDIDATE_RADIUS_SQ) return;
@@ -125,47 +213,136 @@ export class CrowdGrid {
 
       let corrected = false;
       for (let i = 0; i < this.pairA.length; i++) {
-        if (this.resolvePairRoots(this.pairA[i], this.pairB[i], spatial)) corrected = true;
+        if (this.resolvePairRoots(this.pairA[i], this.pairB[i], spatial, sweepPhysics)) corrected = true;
       }
       if (playerPos && !playerInVehicle) {
         for (const p of this.ordered) {
-          if (this.resolvePlayerRoot(p, playerPos, spatial)) corrected = true;
+          if (this.resolvePlayerRoot(p, playerPos, spatial, sweepPhysics)) corrected = true;
         }
       }
       if (!corrected) break;
     }
+    this.resolveDogs(spatial, playerPos, playerInVehicle, sweepDogPhysics);
     this.fillCells(this.ordered);
   }
 
-  private resolvePairRoots(a: Ped, b: Ped, spatial: SpatialQuery): boolean {
-    let dx = a.position.x - b.position.x;
-    let dz = a.position.z - b.position.z;
-    const d = Math.hypot(dx, dz);
-    if (d >= PED_MIN_SEPARATION) return false;
-    if (d < 1e-6) {
-      const angle = pairAngle(a.id, b.id);
-      dx = Math.cos(angle);
-      dz = Math.sin(angle);
-    } else {
-      dx /= d;
-      dz /= d;
+  private resolveDogs(
+    spatial: SpatialQuery,
+    playerPos: THREE.Vector3 | null,
+    playerInVehicle: boolean,
+    sweepDogPhysics?: PedPhysicsSweep,
+  ): void {
+    for (const owner of this.ordered) {
+      const dog = owner.dog;
+      if (!dog || this.dogPoseIsClear(owner, dog.x, dog.z, playerPos, playerInVehicle)) continue;
+      const fromX = dog.x;
+      const fromZ = dog.z;
+      const phase = pairAngle(owner.id, 'dog-placement');
+      let placed = false;
+      for (let ring = 1; ring <= DOG_PLACEMENT_RINGS && !placed; ring++) {
+        const radius = ring * DOG_PLACEMENT_STEP;
+        for (let i = 0; i < DOG_PLACEMENT_DIRECTIONS; i++) {
+          const angle = phase + i * Math.PI * 2 / DOG_PLACEMENT_DIRECTIONS;
+          const x = fromX + Math.cos(angle) * radius;
+          const z = fromZ + Math.sin(angle) * radius;
+          if (!this.dogPoseIsClear(owner, x, z, playerPos, playerInVehicle)) continue;
+          if (this.moveDog(owner, x - fromX, z - fromZ, spatial, sweepDogPhysics)) {
+            placed = true;
+            break;
+          }
+        }
+      }
     }
+  }
 
-    const targetDx = dx * PED_MIN_SEPARATION - (a.position.x - b.position.x);
-    const targetDz = dz * PED_MIN_SEPARATION - (a.position.z - b.position.z);
+  private dogPoseIsClear(
+    owner: Ped,
+    x: number,
+    z: number,
+    playerPos: THREE.Vector3 | null,
+    playerInVehicle: boolean,
+  ): boolean {
+    const dog = owner.dog!;
+    const previousX = dog.x;
+    const previousZ = dog.z;
+    dog.x = x;
+    dog.z = z;
+    let clear = true;
+    for (const ped of this.ordered) {
+      if (dogPedSeparation(owner, ped, _pairSeparation)) {
+        clear = false;
+        break;
+      }
+    }
+    if (clear && playerPos && !playerInVehicle && dogPointSeparation(owner, playerPos, _pairSeparation)) {
+      clear = false;
+    }
+    if (clear) {
+      for (const other of this.ordered) {
+        if (other === owner || !other.dog) continue;
+        if (dogDogSeparation(owner, other, _pairSeparation)) {
+          clear = false;
+          break;
+        }
+      }
+    }
+    dog.x = previousX;
+    dog.z = previousZ;
+    return clear;
+  }
+
+  private moveDog(
+    owner: Ped,
+    dx: number,
+    dz: number,
+    spatial: SpatialQuery,
+    sweepDogPhysics?: PedPhysicsSweep,
+  ): boolean {
+    const dog = owner.dog;
+    if (!dog || Math.abs(dx) + Math.abs(dz) < 1e-10) return false;
+    const fromX = dog.x;
+    const fromZ = dog.z;
+    if (sweepPedMovement(spatial, fromX, fromZ, dx, dz, _sweepResult) < 1 - 1e-8) return false;
+    if (
+      sweepDogPhysics
+      && sweepDogPhysics(owner, fromX, dog.y, fromZ, dx, dz, _sweepResult) < 1 - 1e-8
+    ) return false;
+    dog.x += dx;
+    dog.z += dz;
+    return true;
+  }
+
+  private resolvePairRoots(
+    a: Ped,
+    b: Ped,
+    spatial: SpatialQuery,
+    sweepPhysics?: PedPhysicsSweep,
+  ): boolean {
+    if (!horizontalSeparation(a, b, _pairSeparation)) return false;
+    const targetDx = _pairSeparation.x * _pairSeparation.depth;
+    const targetDz = _pairSeparation.z * _pairSeparation.depth;
     const aAnchored = a.mode === 'anchored';
     const bAnchored = b.mode === 'anchored';
-    const aShare = aAnchored && !bAnchored ? 0 : !aAnchored && bAnchored ? 1 : 0.5;
+    // A body on the ground is an obstacle, not a ghost and not something an
+    // upright passer-by should slide around the pavement.
+    const aFixed = aAnchored || a.mode === 'down';
+    const bFixed = bAnchored || b.mode === 'down';
+    const aShare = aFixed && !bFixed ? 0 : !aFixed && bFixed ? 1 : 0.5;
     const bShare = 1 - aShare;
+    const attempts: ReadonlyArray<readonly [number, number]> =
+      a.mode === 'down' && b.mode === 'down' ? [[0.5, 0.5], [1, 0], [0, 1]]
+        : a.mode === 'down' ? [[0, 1]]
+          : b.mode === 'down' ? [[1, 0]]
+            : [[aShare, bShare], [1, 0], [0, 1]];
 
-    for (const [aScale, bScale] of [[aShare, bShare], [1, 0], [0, 1]] as const) {
+    for (const [aScale, bScale] of attempts) {
       const adx = targetDx * aScale;
       const adz = targetDz * aScale;
       const bdx = -targetDx * bScale;
       const bdz = -targetDz * bScale;
       if (
-        !this.correctionIsSafe(a, adx, adz, spatial, true)
-        || !this.correctionIsSafe(b, bdx, bdz, spatial, true)
+        !this.correctionIsSafe(a, adx, adz, spatial, true, sweepPhysics)
+        || !this.correctionIsSafe(b, bdx, bdz, spatial, true, sweepPhysics)
       ) continue;
       a.position.x += adx;
       a.position.z += adz;
@@ -184,7 +361,12 @@ export class CrowdGrid {
     return false;
   }
 
-  private resolvePlayerRoot(p: Ped, player: THREE.Vector3, spatial: SpatialQuery): boolean {
+  private resolvePlayerRoot(
+    p: Ped,
+    player: THREE.Vector3,
+    spatial: SpatialQuery,
+    sweepPhysics?: PedPhysicsSweep,
+  ): boolean {
     if (p.mode === 'down') return false;
     let nx = p.position.x - player.x;
     let nz = p.position.z - player.z;
@@ -206,7 +388,7 @@ export class CrowdGrid {
       const z = player.z + Math.sin(angle) * React.playerSeparation;
       const dx = x - p.position.x;
       const dz = z - p.position.z;
-      if (!this.correctionIsSafe(p, dx, dz, spatial, false)) continue;
+      if (!this.correctionIsSafe(p, dx, dz, spatial, false, sweepPhysics)) continue;
       p.position.x = x;
       p.position.z = z;
       nx = Math.cos(angle);
@@ -227,17 +409,23 @@ export class CrowdGrid {
     dz: number,
     spatial: SpatialQuery,
     moveAnchor: boolean,
+    sweepPhysics?: PedPhysicsSweep,
   ): boolean {
     if (Math.abs(dx) + Math.abs(dz) < 1e-10) return true;
-    const x = p.position.x + dx;
-    const z = p.position.z + dz;
-    if (!Number.isFinite(x) || !Number.isFinite(z) || spatial.isBlocked(x, z)) return false;
+    if (!Number.isFinite(dx) || !Number.isFinite(dz)) return false;
+    if (sweepPedMovement(spatial, p.position.x, p.position.z, dx, dz, _sweepResult) < 1 - 1e-8) {
+      return false;
+    }
+    if (
+      sweepPhysics
+      && sweepPhysics(p, p.position.x, p.position.y, p.position.z, dx, dz, _sweepResult) < 1 - 1e-8
+    ) return false;
     if (!moveAnchor || p.mode !== 'anchored') return true;
-    const anchorX = p.anchorX + dx;
-    const anchorZ = p.anchorZ + dz;
-    return Number.isFinite(anchorX)
-      && Number.isFinite(anchorZ)
-      && !spatial.isBlocked(anchorX, anchorZ);
+    if (sweepPedMovement(spatial, p.anchorX, p.anchorZ, dx, dz, _sweepResult) < 1 - 1e-8) {
+      return false;
+    }
+    return !sweepPhysics
+      || sweepPhysics(p, p.anchorX, p.position.y, p.anchorZ, dx, dz, _sweepResult) >= 1 - 1e-8;
   }
 
   private fillCells(peds: readonly Ped[]): void {
@@ -266,6 +454,169 @@ export class CrowdGrid {
       }
     }
   }
+}
+
+interface Separation2D { x: number; z: number; depth: number }
+
+/**
+ * Minimum translation direction for the actors' horizontal collision shapes.
+ * Upright actors are circles; a downed actor is the same horizontal capsule
+ * used by Rapier, aligned with the visible body's yaw.
+ */
+function horizontalSeparation(a: Ped, b: Ped, out: Separation2D): boolean {
+  capsuleSegment(a, _segmentA);
+  capsuleSegment(b, _segmentB);
+  closestSegmentPoints(_segmentA, _segmentB, _closestA, _closestB);
+  let dx = _closestA.x - _closestB.x;
+  let dz = _closestA.y - _closestB.y;
+  let distance = Math.hypot(dx, dz);
+  const radius = (a.mode === 'down' ? DOWN_RADIUS : PED_RADIUS)
+    + (b.mode === 'down' ? DOWN_RADIUS : PED_RADIUS);
+  if (distance >= radius) return false;
+  if (distance < 1e-7) {
+    // Coincident/collinear capsules must separate across their long axis;
+    // moving along it can leave the full segments overlapped.
+    if (a.mode === 'down' || b.mode === 'down') {
+      const yaw = a.mode === 'down' ? a.yaw : b.yaw;
+      dx = Math.cos(yaw);
+      dz = -Math.sin(yaw);
+    } else {
+      const angle = pairAngle(a.id, b.id);
+      dx = Math.cos(angle);
+      dz = Math.sin(angle);
+    }
+    distance = 0;
+  } else {
+    dx /= distance;
+    dz /= distance;
+  }
+  out.x = dx;
+  out.z = dz;
+  out.depth = radius - distance;
+  return true;
+}
+
+interface Segment2D { ax: number; az: number; bx: number; bz: number }
+
+function capsuleSegment(p: Ped, out: Segment2D): void {
+  const half = p.mode === 'down'
+    ? Math.max(0.38, p.app.height * 0.5 - DOWN_RADIUS)
+    : 0;
+  const x = Math.sin(p.yaw) * half;
+  const z = Math.cos(p.yaw) * half;
+  out.ax = p.position.x - x;
+  out.az = p.position.z - z;
+  out.bx = p.position.x + x;
+  out.bz = p.position.z + z;
+}
+
+function closestSegmentPoints(
+  a: Segment2D,
+  b: Segment2D,
+  outA: THREE.Vector2,
+  outB: THREE.Vector2,
+): void {
+  const ux = a.bx - a.ax;
+  const uz = a.bz - a.az;
+  const vx = b.bx - b.ax;
+  const vz = b.bz - b.az;
+  const wx = a.ax - b.ax;
+  const wz = a.az - b.az;
+  const aa = ux * ux + uz * uz;
+  const bb = ux * vx + uz * vz;
+  const cc = vx * vx + vz * vz;
+  const dd = ux * wx + uz * wz;
+  const ee = vx * wx + vz * wz;
+  const denom = aa * cc - bb * bb;
+  let s = denom > 1e-10 ? clamp((bb * ee - cc * dd) / denom, 0, 1) : 0;
+  let t = cc > 1e-10 ? clamp((bb * s + ee) / cc, 0, 1) : 0;
+  if (aa > 1e-10) s = clamp((bb * t - dd) / aa, 0, 1);
+  if (cc > 1e-10) t = clamp((bb * s + ee) / cc, 0, 1);
+  outA.set(a.ax + ux * s, a.az + uz * s);
+  outB.set(b.ax + vx * t, b.az + vz * t);
+}
+
+function dogSegment(owner: Ped, out: Segment2D): void {
+  const dog = owner.dog!;
+  const half = 0.25 * dog.size;
+  const x = Math.sin(dog.yaw) * half;
+  const z = Math.cos(dog.yaw) * half;
+  out.ax = dog.x - x;
+  out.az = dog.z - z;
+  out.bx = dog.x + x;
+  out.bz = dog.z + z;
+}
+
+function dogPedSeparation(owner: Ped, ped: Ped, out: Separation2D): boolean {
+  dogSegment(owner, _segmentA);
+  capsuleSegment(ped, _segmentB);
+  return segmentSeparation(
+    _segmentA,
+    _segmentB,
+    0.18 * owner.dog!.size + (ped.mode === 'down' ? DOWN_RADIUS : PED_RADIUS),
+    owner.dog!.yaw,
+    `${owner.id}:dog`,
+    ped.id,
+    out,
+  );
+}
+
+function dogDogSeparation(a: Ped, b: Ped, out: Separation2D): boolean {
+  dogSegment(a, _segmentA);
+  dogSegment(b, _segmentB);
+  return segmentSeparation(
+    _segmentA,
+    _segmentB,
+    0.18 * a.dog!.size + 0.18 * b.dog!.size,
+    a.dog!.yaw,
+    `${a.id}:dog`,
+    `${b.id}:dog`,
+    out,
+  );
+}
+
+function dogPointSeparation(owner: Ped, point: THREE.Vector3, out: Separation2D): boolean {
+  dogSegment(owner, _segmentA);
+  _segmentB.ax = _segmentB.bx = point.x;
+  _segmentB.az = _segmentB.bz = point.z;
+  return segmentSeparation(
+    _segmentA,
+    _segmentB,
+    0.18 * owner.dog!.size + 0.32,
+    owner.dog!.yaw,
+    `${owner.id}:dog`,
+    'player',
+    out,
+  );
+}
+
+function segmentSeparation(
+  a: Segment2D,
+  b: Segment2D,
+  radius: number,
+  fallbackYaw: number,
+  idA: string,
+  idB: string,
+  out: Separation2D,
+): boolean {
+  closestSegmentPoints(a, b, _closestA, _closestB);
+  let dx = _closestA.x - _closestB.x;
+  let dz = _closestA.y - _closestB.y;
+  let distance = Math.hypot(dx, dz);
+  if (distance >= radius) return false;
+  if (distance < 1e-7) {
+    const sign = pairAngle(idA, idB) < Math.PI ? 1 : -1;
+    dx = Math.cos(fallbackYaw) * sign;
+    dz = -Math.sin(fallbackYaw) * sign;
+    distance = 0;
+  } else {
+    dx /= distance;
+    dz /= distance;
+  }
+  out.x = dx;
+  out.z = dz;
+  out.depth = radius - distance;
+  return true;
 }
 
 /** Coarse grid over the vehicle population — same idea, bigger cells. */
@@ -322,6 +673,10 @@ export interface CrowdEnv {
   playerSpeed: number;
   vehicles: VehicleGrid;
   peds: CrowdGrid;
+  /** Shared Rapier capsule sweep against physical world/prop blockers. */
+  sweepPhysics?: PedPhysicsSweep;
+  /** The same physical-world seam sized and oriented for a dog on a lead. */
+  sweepDogPhysics?: PedPhysicsSweep;
   /** Raised when a car actually flattens someone. */
   onKnockdown(p: Ped, fatal: boolean): void;
   /** Ambient alarm 0..1 — sirens, gunfire, wanted level. */
@@ -954,7 +1309,8 @@ export class Ped implements CharacterHandle, RigSubject {
       return;
     }
     this.vel.y -= 17 * dt;
-    this.position.addScaledVector(this.vel, dt);
+    this.movePlanar(this.vel.x * dt, this.vel.z * dt, env);
+    this.position.y += this.vel.y * dt;
     const g = env.spatial.groundHeight(this.position.x, this.position.z);
     const floor = g === -Infinity ? 0 : g;
     // Tumble onto the ground, then stay there.
@@ -1014,12 +1370,60 @@ export class Ped implements CharacterHandle, RigSubject {
     if (!buf.length) return false;
     const a = g.anchors[buf[env.rng.int(0, buf.length)]];
     if (!a) return false;
+    const dx = a.x - this.position.x;
+    const dz = a.z - this.position.z;
+    if (sweepPedMovement(env.spatial, this.position.x, this.position.z, dx, dz, _sweepResult) < 1 - 1e-8) {
+      return false;
+    }
+    if (
+      env.sweepPhysics
+      && env.sweepPhysics(
+        this,
+        this.position.x,
+        this.position.y,
+        this.position.z,
+        dx,
+        dz,
+        _sweepResult,
+      ) < 1 - 1e-8
+    ) return false;
     const spec = pickIdle(this.archetype, env.district(a.x, a.z), a.kind === 'shopfront', env.rng);
     this.anchorAt(a.x, a.z, a.yaw, spec);
     return true;
   }
 
   /* ---- steering ---- */
+
+  /** Apply one blocker-aware horizontal displacement and damp clipped momentum. */
+  private movePlanar(dx: number, dz: number, env: CrowdEnv): number {
+    const requested = Math.hypot(dx, dz);
+    if (!Number.isFinite(requested) || requested < 1e-10) return requested < 1e-10 ? 1 : 0;
+    const fromX = this.position.x;
+    const fromY = this.position.y;
+    const fromZ = this.position.z;
+    sweepPedMovement(env.spatial, fromX, fromZ, dx, dz, _sweepResult);
+    if (env.sweepPhysics) {
+      env.sweepPhysics(
+        this,
+        fromX,
+        fromY,
+        fromZ,
+        _sweepResult.x - fromX,
+        _sweepResult.y - fromZ,
+        _sweepResult,
+      );
+    }
+    const movedX = _sweepResult.x - fromX;
+    const movedZ = _sweepResult.y - fromZ;
+    const fraction = Math.min(1, Math.hypot(movedX, movedZ) / requested);
+    this.position.x = _sweepResult.x;
+    this.position.z = _sweepResult.y;
+    if (fraction < 1 - 1e-8) {
+      this.vel.x *= fraction;
+      this.vel.z *= fraction;
+    }
+    return fraction;
+  }
 
   private steerAndIntegrate(dt: number, env: CrowdEnv): void {
     let dx = 0;
@@ -1118,8 +1522,7 @@ export class Ped implements CharacterHandle, RigSubject {
     this.vel.x += (wantX - this.vel.x) * k;
     this.vel.z += (wantZ - this.vel.z) * k;
 
-    this.position.x += this.vel.x * dt;
-    this.position.z += this.vel.z * dt;
+    this.movePlanar(this.vel.x * dt, this.vel.z * dt, env);
     this.speed = Math.hypot(this.vel.x, this.vel.z);
 
     /* ground + kerb steps */
@@ -1190,8 +1593,22 @@ export class Ped implements CharacterHandle, RigSubject {
     const dx = tx - d.x;
     const dz = tz - d.z;
     const k = Math.min(1, dt * 4.2);
-    d.x += dx * k;
-    d.z += dz * k;
+    const fromX = d.x;
+    const fromZ = d.z;
+    sweepPedMovement(env.spatial, fromX, fromZ, dx * k, dz * k, _sweepResult);
+    if (env.sweepDogPhysics) {
+      env.sweepDogPhysics(
+        this,
+        fromX,
+        d.y,
+        fromZ,
+        _sweepResult.x - fromX,
+        _sweepResult.y - fromZ,
+        _sweepResult,
+      );
+    }
+    d.x = _sweepResult.x;
+    d.z = _sweepResult.y;
     const sp = Math.hypot(dx, dz) * 4.2;
     d.phase += dt * (2.5 + sp * 3.4);
     if (Math.hypot(dx, dz) > 0.05) d.yaw = dampAngle(d.yaw, Math.atan2(dx, dz), 7, dt);
@@ -1216,6 +1633,14 @@ export function dampAngle(current: number, target: number, lambda: number, dt: n
 function comparePedId(a: Ped, b: Ped): number {
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
+
+/** Shared sequential scratch; the crowd solver never runs pedestrians concurrently. */
+const _sweepResult = new THREE.Vector2();
+const _segmentA: Segment2D = { ax: 0, az: 0, bx: 0, bz: 0 };
+const _segmentB: Segment2D = { ax: 0, az: 0, bx: 0, bz: 0 };
+const _closestA = new THREE.Vector2();
+const _closestB = new THREE.Vector2();
+const _pairSeparation: Separation2D = { x: 0, z: 0, depth: 0 };
 
 /** Stable escape direction for the otherwise directionless coincident case. */
 function pairAngle(a: string, b: string): number {

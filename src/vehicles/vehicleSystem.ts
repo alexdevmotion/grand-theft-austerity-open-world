@@ -15,7 +15,7 @@
 import * as THREE from 'three';
 import type RAPIER from '@dimforge/rapier3d-compat';
 import type { GameContext, System } from '../core/engine';
-import { CG, GROUP, PhysicsWorld, groups } from '../physics/physics';
+import { CG, GROUP, PhysicsWorld, probeGroups } from '../physics/physics';
 import { Rng } from '../core/rng';
 import {
   Services,
@@ -137,13 +137,18 @@ function makeTuning(kind: VehicleClass, model: VehicleModel): VehicleTuning {
     }
   }
 
-  // Collider covers the lower body only — a box up to the belt line keeps the
-  // car from catching its own roof on things and keeps the inertia low. Long
-  // vehicles get more ground clearance under the box and a slightly shorter
-  // one, or the corners catch every kerb and launch them.
-  const halfY = Math.max(0.3, spec.height * 0.34);
+  // Cover the complete body up to its authoritative roof height. Growing the
+  // existing cuboid upward is safer than adding a second collider: there is
+  // still one crash-event handle and one shape for self-excluding probes. Its
+  // lower face stays exactly where it was, and mass/inertia are explicit below,
+  // so suspension compression, ground clearance and handling do not move.
   const clearance = THREE.MathUtils.clamp(spec.wheelRadius * 0.5, 0.14, 0.26);
-  const colliderCentreY = -spec.rideHeight + halfY + clearance;
+  const colliderBottom = -spec.rideHeight + clearance;
+  const colliderTop = -spec.rideHeight + spec.height;
+  const halfY = (colliderTop - colliderBottom) * 0.5;
+  const colliderCentreY = (colliderBottom + colliderTop) * 0.5;
+  // Long vehicles retain a slightly shorter plan-view proxy, or the corners
+  // catch every kerb and launch them.
   const halfZ = spec.length > 6 ? spec.length * 0.455 : spec.length * 0.48;
 
   return {
@@ -189,6 +194,97 @@ function tuningFor(kind: VehicleClass, model: VehicleModel): VehicleTuning {
 
 const UP = new THREE.Vector3(0, 1, 0);
 const DOWN = new THREE.Vector3(0, -1, 0);
+
+/** Minimum daylight kept around a vehicle selected for spawn or recovery. */
+const VEHICLE_PLACEMENT_CLEARANCE = 0.35;
+
+/** The complete plan-view body envelope used by every placement path. */
+export interface VehiclePlacementFootprint {
+  readonly position: THREE.Vector3;
+  /** Yaw in radians. Zero faces +Z, matching vehicle body transforms. */
+  readonly heading: number;
+  readonly width: number;
+  readonly length: number;
+  readonly height: number;
+}
+
+/**
+ * Test two oriented vehicle rectangles in plan view. The separating-axis test
+ * keeps long vehicles precise: a tram does not reserve a 15 m radius beside
+ * itself, while its full nose and tail still participate in clearance.
+ */
+export function vehicleFootprintsOverlap(
+  a: VehiclePlacementFootprint,
+  b: VehiclePlacementFootprint,
+  clearance = VEHICLE_PLACEMENT_CLEARANCE,
+): boolean {
+  const ac = Math.cos(a.heading);
+  const as = Math.sin(a.heading);
+  const bc = Math.cos(b.heading);
+  const bs = Math.sin(b.heading);
+  const dx = b.position.x - a.position.x;
+  const dz = b.position.z - a.position.z;
+  const ahw = a.width * 0.5;
+  const ahl = a.length * 0.5;
+  const bhw = b.width * 0.5;
+  const bhl = b.length * 0.5;
+
+  // Local right/forward axes under the same +Y rotation used by Vehicle.
+  const arx = ac, arz = -as, afx = as, afz = ac;
+  const brx = bc, brz = -bs, bfx = bs, bfz = bc;
+  const separated = (axisX: number, axisZ: number): boolean => {
+    const distance = Math.abs(dx * axisX + dz * axisZ);
+    const aRadius = ahw * Math.abs(arx * axisX + arz * axisZ) +
+      ahl * Math.abs(afx * axisX + afz * axisZ);
+    const bRadius = bhw * Math.abs(brx * axisX + brz * axisZ) +
+      bhl * Math.abs(bfx * axisX + bfz * axisZ);
+    return distance > aRadius + bRadius + clearance;
+  };
+
+  return !(
+    separated(arx, arz) || separated(afx, afz) ||
+    separated(brx, brz) || separated(bfx, bfz)
+  );
+}
+
+/**
+ * One clearance seam for spawning and every road rescue. Existing vehicles
+ * are compared in plan view so a body moved earlier in the same fixed step is
+ * observed immediately; Rapier remains authoritative for buildings, solid
+ * props, the player, and pedestrian/dog/downed character bodies. Terrain is
+ * deliberately excluded because it is the supporting road.
+ */
+export function vehiclePlacementIsClear(
+  phys: PhysicsWorld,
+  candidate: VehiclePlacementFootprint,
+  existing: ReadonlyArray<VehiclePlacementFootprint>,
+): boolean {
+  for (const other of existing) {
+    if (vehicleFootprintsOverlap(candidate, other)) return false;
+  }
+
+  // Callers commonly stage a fresh body up to 1 m above its eventual road
+  // height so the suspension can settle. Extend the probe through that drop,
+  // otherwise a low bollard or barrier directly underneath looks clear.
+  const below = 1.25;
+  const above = 0.2;
+  const bottom = candidate.position.y - below;
+  const top = candidate.position.y + candidate.height + above;
+  const shape = new phys.rapier.Cuboid(
+    candidate.width * 0.5 + VEHICLE_PLACEMENT_CLEARANCE,
+    (top - bottom) * 0.5,
+    candidate.length * 0.5 + VEHICLE_PLACEMENT_CLEARANCE,
+  );
+  const q = new THREE.Quaternion().setFromAxisAngle(UP, candidate.heading);
+  const hit = phys.world.intersectionWithShape(
+    { x: candidate.position.x, y: (bottom + top) * 0.5, z: candidate.position.z },
+    { x: q.x, y: q.y, z: q.z, w: q.w },
+    shape,
+    undefined,
+    probeGroups(CG.STATIC | CG.PROP | CG.CHARACTER | CG.PLAYER),
+  );
+  return hit === null;
+}
 
 /**
  * A player car should only be rescued after the player has actually tried to
@@ -563,12 +659,9 @@ class Vehicle implements VehicleHandle {
       const w = tuning.wheels[i];
       const attach = this._tmp.copy(w.offset).applyQuaternion(this.rotation).add(this.position);
       const rayLen = tuning.suspensionRest + w.radius;
-      // NB: membership must be one of the bits inside physics.ts' ALL_SOLID
-      // mask, otherwise the filter test can never pass and the ray matches
-      // nothing. CG.WHEEL_RAY is outside that mask — see the report.
       const hit = this.phys.raycast(
         attach, DOWN, rayLen,
-        groups(CG.VEHICLE, CG.STATIC | CG.TERRAIN | CG.PROP),
+        probeGroups(CG.STATIC | CG.TERRAIN | CG.PROP),
         this.collider,
       );
 
@@ -968,6 +1061,7 @@ const _shadowQ = new THREE.Quaternion();
 const _shadowInv = new THREE.Quaternion();
 const _railE = new THREE.Euler();
 const _railQ = new THREE.Quaternion();
+const _placementEuler = new THREE.Euler();
 const FLAT_Q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
 
 /* ------------------------------------------------------------------ */
@@ -1198,8 +1292,45 @@ export class VehicleSystem implements System, VehicleService {
 
   /* ---------------- spawning ---------------- */
 
+  private placementFootprint(
+    position: THREE.Vector3,
+    heading: number,
+    spec: VehicleSpec,
+  ): VehiclePlacementFootprint {
+    return {
+      position,
+      heading,
+      width: spec.width,
+      length: spec.length,
+      height: spec.height,
+    };
+  }
+
+  private placementClear(
+    position: THREE.Vector3,
+    heading: number,
+    spec: VehicleSpec,
+    ignore?: Vehicle,
+  ): boolean {
+    const existing: VehiclePlacementFootprint[] = [];
+    for (const other of this.list) {
+      if (other === ignore) continue;
+      _placementEuler.setFromQuaternion(other.rotation, 'YXZ');
+      existing.push(this.placementFootprint(
+        other.position,
+        _placementEuler.y,
+        other.tuning.spec,
+      ));
+    }
+    return vehiclePlacementIsClear(
+      this.phys,
+      this.placementFootprint(position, heading, spec),
+      existing,
+    );
+  }
+
   /**
-   * Find a point near `want` that is not already occupied by another vehicle.
+   * Find a point near `want` whose complete oriented body envelope is clear.
    *
    * WHY THIS EXISTS. `spawn` used to place the rigid body wherever it was
    * asked, with no regard for what was already parked there. Two calls with
@@ -1219,32 +1350,48 @@ export class VehicleSystem implements System, VehicleService {
    */
   private clearSpawnPoint(want: THREE.Vector3, headingRad: number, spec: VehicleSpec): THREE.Vector3 {
     const out = want.clone();
-    if (this.list.length === 0) return out;
     const fx = Math.sin(headingRad);
     const fz = Math.cos(headingRad);
-    const occupied = (x: number, z: number): boolean => {
-      for (const o of this.list) {
-        // Radii of the two footprints, plus half a metre of daylight.
-        const gap = (spec.length + o.tuning.spec.length) * 0.5 * 0.86 + 0.5;
-        const dx = o.position.x - x;
-        const dz = o.position.z - z;
-        if (dx * dx + dz * dz < gap * gap) return true;
-      }
-      return false;
+    const rx = Math.cos(headingRad);
+    const rz = -Math.sin(headingRad);
+    const clear = (forward: number, lateral = 0): boolean => {
+      out.set(
+        want.x + fx * forward + rx * lateral,
+        want.y,
+        want.z + fz * forward + rz * lateral,
+      );
+      return this.placementClear(out, headingRad, spec);
     };
-    if (!occupied(out.x, out.z)) return out;
-    const step = spec.length * 0.5 + 1.4;
-    for (let i = 1; i <= 8; i++) {
+    if (clear(0)) return out;
+
+    const forwardStep = Math.max(2.5, spec.length * 0.5 + 1.4);
+    for (let i = 1; i <= 64; i++) {
       // -1 first: behind, then in front, alternating outward.
       const dir = i % 2 === 1 ? -1 : 1;
-      const d = step * Math.ceil(i / 2) * dir;
-      const x = want.x + fx * d;
-      const z = want.z + fz * d;
-      if (!occupied(x, z)) return out.set(x, want.y, z);
+      const d = forwardStep * Math.ceil(i / 2) * dir;
+      if (clear(d)) return out;
     }
-    // Last resort: a lane's width to the side, so the worst case is a car
-    // parked awkwardly rather than a car inside another car.
-    return out.set(want.x - fz * 3.2, want.y, want.z + fx * 3.2);
+
+    // A curved road can make its original tangent enter a building. Search
+    // adjacent lanes only after the queue search, and validate every one — the
+    // old final lateral shift was returned unchecked and could be inside a
+    // prop, building, or another long vehicle.
+    const lateralStep = Math.max(3.2, spec.width + 1);
+    for (let lane = 1; lane <= 8; lane++) {
+      for (const side of [-1, 1]) {
+        const lateral = lateralStep * lane * side;
+        if (clear(0, lateral)) return out;
+        for (let rank = 1; rank <= 32; rank++) {
+          if (clear(-forwardStep * rank, lateral)) return out;
+          if (clear(forwardStep * rank, lateral)) return out;
+        }
+      }
+    }
+
+    throw new Error(
+      `No collision-free placement for ${spec.length.toFixed(1)} m vehicle near ` +
+      `(${want.x.toFixed(1)}, ${want.z.toFixed(1)})`,
+    );
   }
 
   spawn(
@@ -1496,9 +1643,21 @@ export class VehicleSystem implements System, VehicleService {
       // seconds has fallen off geometry somewhere. Left alone it grinds down a
       // wall taking contact damage until it is scrap. Put it back on a road.
       if (v.airTime > 4 && v.occupants.length === 0) {
-        const { pos, heading } = this.roadSlot(this.rng.range(-30, 30));
-        v.teleport(pos, heading);
-        v.airTime = 0;
+        const start = this.rng.range(-30, 30);
+        const offsets = [start, start + 18, start - 18, start + 36, start - 36, start + 54, start - 54];
+        let slot: { pos: THREE.Vector3; heading: number } | null = null;
+        for (const along of offsets) {
+          slot = this.roadSlot(along, undefined, v);
+          if (slot) break;
+        }
+        if (slot) {
+          v.teleport(slot.pos, slot.heading);
+          v.airTime = 0;
+        } else {
+          // Keep looking, but not on every fixed step while the nearby graph
+          // remains obstructed.
+          v.airTime = 3.5;
+        }
       }
     }
     this.drainCollisions();
@@ -1725,37 +1884,15 @@ export class VehicleSystem implements System, VehicleService {
     if (!this.ctx.tryGet(Services.City)) return null;
     const offsets = [18, 34, 50, 66, 82, 98, -4, -20];
     for (const along of offsets) {
-      const slot = this.roadSlot(along, v.position);
+      const slot = this.roadSlot(along, v.position, v);
+      if (!slot) continue;
       // If the graph has no traversable continuation from this node, several
       // offsets can legitimately collapse to the same node. Never call that
       // the rescue: it would put the player straight back in the obstacle.
       if (slot.pos.distanceToSquared(v.position) < 8 * 8) continue;
-      if (this.recoveryFootprintClear(slot.pos, slot.heading, v)) return slot;
+      return slot;
     }
     return null;
-  }
-
-  private recoveryFootprintClear(pos: THREE.Vector3, heading: number, ignore: Vehicle): boolean {
-    const city = this.ctx.tryGet(Services.City);
-    if (!city) return false;
-    const halfX = ignore.tuning.halfExtents.x + 0.65;
-    const halfZ = ignore.tuning.halfExtents.z + 0.9;
-    const sx = Math.sin(heading);
-    const sz = Math.cos(heading);
-    const points = [
-      [0, 0], [halfX, halfZ], [halfX, -halfZ], [-halfX, halfZ], [-halfX, -halfZ],
-    ] as const;
-    for (const [localX, localZ] of points) {
-      const x = pos.x + localX * Math.cos(heading) + localZ * sx;
-      const z = pos.z - localX * sx + localZ * sz;
-      if (city.spatial.isBlocked(x, z)) return false;
-    }
-    for (const other of this.list) {
-      if (other === ignore) continue;
-      const gap = (ignore.tuning.spec.length + other.tuning.spec.length) * 0.5 + 1.2;
-      if (Math.hypot(other.position.x - pos.x, other.position.z - pos.z) < gap) return false;
-    }
-    return true;
   }
 
   /**
@@ -1768,7 +1905,17 @@ export class VehicleSystem implements System, VehicleService {
    * rejected if it lands inside a blocker, and lifted to the real ground
    * height rather than a hardcoded 0.5.
    */
-  private roadSlot(along = 0, origin?: THREE.Vector3): { pos: THREE.Vector3; heading: number } {
+  private roadSlot(along?: number, origin?: THREE.Vector3): { pos: THREE.Vector3; heading: number };
+  private roadSlot(
+    along: number,
+    origin: THREE.Vector3 | undefined,
+    clearFor: Vehicle,
+  ): { pos: THREE.Vector3; heading: number } | null;
+  private roadSlot(
+    along = 0,
+    origin?: THREE.Vector3,
+    clearFor?: Vehicle,
+  ): { pos: THREE.Vector3; heading: number } | null {
     const city = this.ctx.tryGet(Services.City);
     const p = origin?.clone() ?? this.ctx.tryGet(Services.Player)?.position ?? new THREE.Vector3();
     const pos = p.clone();
@@ -1822,6 +1969,7 @@ export class VehicleSystem implements System, VehicleService {
     } else {
       pos.y = 0.5;
     }
+    if (clearFor && !this.placementClear(pos, heading, clearFor.tuning.spec, clearFor)) return null;
     return { pos, heading };
   }
 

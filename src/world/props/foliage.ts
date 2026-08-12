@@ -109,6 +109,12 @@ export function autumnTree(
   const leanR = rng.range(0.04, 0.15) * trunkH;
   const cx = x + Math.cos(leanA) * leanR;
   const cz = z + Math.sin(leanA) * leanR;
+  const trunkHeight = trunkH + 0.06;
+  b.addCollisionCapsule(
+    'tree',
+    (x + cx) / 2, WALK_Y - 0.06 + trunkHeight / 2, (z + cz) / 2,
+    trunkHeight, Math.max(trunkR * 2.1, trunkR + leanR / 2),
+  );
   b.cyl(x, WALK_Y - 0.06, z, trunkR * 2.1, trunkR * 1.4, 0.26, 6, bark, false);
   b.cyl(x, WALK_Y - 0.05, z, trunkR * 1.4, trunkR * 1.05, trunkH * 0.5, 6, bark, false);
   b.tube(x, WALK_Y + trunkH * 0.5, z, cx, WALK_Y + trunkH, cz, trunkR * 0.98, 6, bark);
@@ -357,6 +363,17 @@ export function hedgeRow(
   length: number, height: number,
   rng: Rng,
 ): void {
+  const dirLength = Math.hypot(dirX, dirZ);
+  if (dirLength > 1e-5) {
+    b.addCollisionBox(
+      'hedge',
+      x + dirX * length / 2, WALK_Y + height / 2, z + dirZ * length / 2,
+      length * dirLength, height, 1.1, Math.atan2(-dirZ, dirX),
+    );
+  } else {
+    // Match the visual fallback below, which becomes a centred Z-aligned run.
+    b.addCollisionBox('hedge', x, WALK_Y + height / 2, z, 1.1, height, length, 0);
+  }
   const n = Math.max(2, Math.round(length / 1.25));
   for (let i = 0; i < n; i++) {
     const t = (i + 0.5) * (length / n);
@@ -380,6 +397,7 @@ export function planter(b: PropBuilder, x: number, z: number, rng: Rng): void {
   const w = rng.range(1.0, 1.6);
   const h = rng.range(0.5, 0.75);
   const yaw = rng.range(0, Math.PI);
+  b.addCollisionBox('planter', x, WALK_Y + h / 2, z, w, h, w, yaw);
   b.openBox(x, WALK_Y + h / 2, z, w, h, w, yaw, opt(C.concrete, MR.stone));
   b.box(x, WALK_Y + h - 0.06, z, w - 0.16, 0.1, w - 0.16, yaw, opt(C.bark, [0, 0.96]));
   const shrubs = 1 + rng.int(0, 3);

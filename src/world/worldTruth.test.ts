@@ -225,6 +225,14 @@ describe('the world exists', () => {
   });
 });
 
+describe('world boundary agreement', () => {
+  test('physics has no invisible floor outside the analytic playable world', () => {
+    const outside = HALF + 112;
+    expect(W.city.spatial.groundHeight(outside, 0)).toBe(Number.NEGATIVE_INFINITY);
+    expect(physicsGround(outside, 0, 20, 40)).toBeNull();
+  });
+});
+
 /* ================================================================== */
 /* 2. PROBE-GROUP CANARY                                               */
 /*                                                                     */

@@ -66,7 +66,11 @@ export function driveActor(
   if (p.ragdolled) {
     actor.mesh.castShadow = distance < shadowRadius;
     actor.update(dt, ctx);
-    p.position.copy(actor.position);
+    // Ragdoll motion is applied to the skeleton's hips bone, not the actor
+    // root. Publish those real world-space hips so crowd queries and the
+    // Rapier proxy follow the visible corpse rather than its pre-impact root.
+    const hips = actor.ragdollHips;
+    if (hips) p.position.copy(hips);
     return;
   }
 

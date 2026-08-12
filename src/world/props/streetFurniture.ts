@@ -30,6 +30,7 @@ export function bench(b: PropBuilder, x: number, z: number, fx: number, fz: numb
   const wood = opt(rng.bool(0.5) ? C.wood : C.woodPale, MR.wood);
   const iron = opt(C.steelDark, MR.metal);
   const len = 1.8;
+  b.addCollisionBox('bench', x, WALK_Y + 0.44, z, len, 0.88, 0.55, yaw);
   // Seat slats, offset along the depth axis.
   for (let i = 0; i < 3; i++) {
     const off = (i - 1) * 0.17;
@@ -53,6 +54,7 @@ export function bench(b: PropBuilder, x: number, z: number, fx: number, fz: numb
 /** Perforated steel litter bin on a post. ~40 tris. */
 export function litterBin(b: PropBuilder, x: number, z: number, rng: Rng): void {
   const body = opt(rng.bool(0.4) ? C.paintGreen : C.steel, MR.metalRough);
+  b.addCollisionCapsule('bin', x, WALK_Y + 0.6, z, 1.2, 0.27);
   b.cyl(x, WALK_Y, z, 0.07, 0.07, 0.62, 6, opt(C.steelDark, MR.metal), false);
   b.cyl(x, WALK_Y + 0.6, z, 0.24, 0.27, 0.56, 8, body, false);
   b.cyl(x, WALK_Y + 1.16, z, 0.29, 0.26, 0.07, 8, opt(C.steelDark, MR.metal));
@@ -65,6 +67,7 @@ export function litterBin(b: PropBuilder, x: number, z: number, rng: Rng): void 
 
 /** Squat concrete ashtray/bollard combo. */
 export function stoneBollard(b: PropBuilder, x: number, z: number): void {
+  b.addCollisionCapsule('bollard', x, WALK_Y + 0.4, z, 0.84, 0.16);
   b.cyl(x, WALK_Y - 0.02, z, 0.16, 0.14, 0.78, 6, opt(C.concreteDark, MR.stone));
   b.cyl(x, WALK_Y + 0.76, z, 0.15, 0.11, 0.06, 6, opt(C.steelPale, MR.metal));
 }
@@ -88,6 +91,19 @@ export function busShelter(
   const frame = opt(C.steel, MR.metal);
   const glass = opt(C.glass, MR.glass);
   const back = -d / 2;
+  // Keep the pavement-facing side genuinely open. The shelter is three
+  // semantic blockers, matching the rendered back, bench and advert end;
+  // a single footprint box would create an invisible wall across its entrance.
+  b.addCollisionBox(
+    'bus-shelter-back',
+    x + fx * back, WALK_Y + 1.35, z + fz * back,
+    w, 2.2, 0.08, yaw,
+  );
+  b.addCollisionBox(
+    'bus-shelter-bench',
+    x + fx * (back + 0.3), WALK_Y + 0.46, z + fz * (back + 0.3),
+    w - 1.2, 0.07, 0.34, yaw,
+  );
 
   // Roof.
   b.box(x + fx * 0.1, WALK_Y + h, z + fz * 0.1, w, 0.12, d + 0.5, yaw, opt(C.alu, MR.metal));
@@ -111,6 +127,7 @@ export function busShelter(
   const ex = x + Math.sin(yaw) * s * (w / 2);
   const ez = z + Math.cos(yaw) * s * (w / 2);
   const adColor = rng.bool(0.5) ? C.magenta : C.screenBlue;
+  b.addCollisionBox('bus-shelter-advert', ex, WALK_Y + 1.32, ez, 0.14, 1.9, d - 0.15, yaw);
   b.box(ex, WALK_Y + 1.32, ez, 0.14, 1.9, d - 0.15, yaw, frame);
   b.box(ex + fx * 0.02, WALK_Y + 1.32, ez + fz * 0.02, 0.06, 1.72, d - 0.32, yaw,
     opt(adColor, MR.lamp, emi(adColor, 2.4)));
@@ -137,6 +154,7 @@ export function kiosk(
   const d = rng.range(1.8, 2.3);
   const h = 2.7;
   const shell = rng.weighted([C.paintCream, C.paintGreen, C.paintBlue, C.steelPale], [3, 2, 2, 2]);
+  b.addCollisionBox('kiosk', x, WALK_Y + h / 2, z, w, h, d, yaw);
 
   b.box(x, WALK_Y + h / 2, z, w, h, d, yaw, opt(shell, MR.paint));
   // Roof cap.
@@ -173,6 +191,7 @@ export function kiosk(
 /** Wall-mounted ATM / bancomat with a lit screen. ~45 tris. */
 export function atm(b: PropBuilder, x: number, z: number, fx: number, fz: number): void {
   const yaw = yawOf(fx, fz);
+  b.addCollisionBox('atm', x, WALK_Y + 1.35, z, 1.0, 1.9, 0.34, yaw);
   b.box(x, WALK_Y + 1.35, z, 1.0, 1.9, 0.34, yaw, opt(C.steelPale, MR.metal));
   b.box(x + fx * 0.18, WALK_Y + 1.62, z + fz * 0.18, 0.62, 0.46, 0.05, yaw,
     opt(C.screenBlue, MR.lamp, emi(C.screenBlue, 2.6)));
@@ -187,6 +206,7 @@ export function phoneBox(b: PropBuilder, x: number, z: number, fx: number, fz: n
   const yaw = yawOf(fx, fz);
   const h = 2.25;
   const frame = opt(C.paintBlue, MR.paint);
+  b.addCollisionBox('phone-box', x, WALK_Y + h / 2, z, 1.0, h, 0.86, yaw);
   for (const [sx, sz] of [[-1, -1], [-1, 1], [1, 1], [1, -1]] as const) {
     const px = x + Math.sin(yaw) * sx * 0.42 + Math.cos(yaw) * sz * 0.36;
     const pz = z + Math.cos(yaw) * sx * 0.42 - Math.sin(yaw) * sz * 0.36;
@@ -200,6 +220,7 @@ export function phoneBox(b: PropBuilder, x: number, z: number, fx: number, fz: n
 /** Newspaper / lottery stand: a low glazed case on legs. ~50 tris. */
 export function newsStand(b: PropBuilder, x: number, z: number, fx: number, fz: number, rng: Rng): void {
   const yaw = yawOf(fx, fz);
+  b.addCollisionBox('news-stand', x, WALK_Y + 0.9, z, 1.5, 1.8, 0.72, yaw);
   b.box(x, WALK_Y + 0.5, z, 1.4, 0.9, 0.6, yaw, opt(C.steel, MR.metal));
   b.box(x, WALK_Y + 1.02, z, 1.5, 0.14, 0.72, yaw, opt(C.paintRed, MR.paint));
   // Papers stacked on the top, roughly aligned.
@@ -222,7 +243,9 @@ export function newsStand(b: PropBuilder, x: number, z: number, fx: number, fz: 
 export function utilityCabinet(b: PropBuilder, x: number, z: number, fx: number, fz: number, rng: Rng): void {
   const yaw = yawOf(fx, fz);
   const h = rng.range(1.0, 1.5);
-  b.box(x, WALK_Y + h / 2, z, rng.range(0.7, 1.1), h, 0.42, yaw, opt(C.galv, MR.metalRough));
+  const w = rng.range(0.7, 1.1);
+  b.addCollisionBox('utility-cabinet', x, WALK_Y + h / 2, z, w, h, 0.42, yaw);
+  b.box(x, WALK_Y + h / 2, z, w, h, 0.42, yaw, opt(C.galv, MR.metalRough));
   b.box(x + fx * 0.22, WALK_Y + h * 0.62, z + fz * 0.22, 0.34, 0.24, 0.02, yaw, opt(C.paper, MR.paper));
 }
 
@@ -238,6 +261,8 @@ export function bikeRack(
   const sx = Math.sin(yaw);
   const sz = Math.cos(yaw);
   const steel = opt(C.steelPale, MR.metal);
+  b.addCollisionBox('bike-rack', x + Math.cos(yaw) * 0.175, WALK_Y + 0.36, z + Math.sin(yaw) * 0.175,
+    0.75, 0.72, Math.max(0.1, (n - 1) * 0.85 + 0.1), yaw);
   for (let i = 0; i < n; i++) {
     const off = (i - (n - 1) / 2) * 0.85;
     const px = x + sx * off;
@@ -249,7 +274,14 @@ export function bikeRack(
   }
 }
 
-/** Leaning bicycle. ~70 tris. */
+/**
+ * Leaning bicycle. ~70 tris.
+ *
+ * Bicycles are emitted only by `bikeRack`; that high-level prop owns one
+ * aggregate blocker for the stands and any optional bikes. Giving each wheel
+ * and frame another collider would add overlapping shapes without changing
+ * what can traverse the rack.
+ */
 export function bicycle(b: PropBuilder, x: number, z: number, yaw: number, rng: Rng): void {
   const frameC = rng.weighted(
     [C.paintRed, C.paintBlue, C.steelDark, C.paintGreen, C.paintYellow],
@@ -292,6 +324,10 @@ export function eScooter(b: PropBuilder, x: number, z: number, yaw: number, rng:
   const px = (t: number): number => x + ax * t;
   const pz = (t: number): number => z + az * t;
   const drop = Math.abs(tilt) * 0.18;
+  b.addCollisionBox(
+    'e-scooter', px(-0.02), WALK_Y + 0.52, pz(-0.02),
+    1.05, 1.04, 0.28, yaw + Math.PI / 2,
+  );
 
   // Deck.
   b.box(px(-0.02), WALK_Y + 0.15 - drop, pz(-0.02), 0.9, 0.07, 0.19, yaw + Math.PI / 2, deck);
@@ -329,6 +365,7 @@ export function trafficLight(
   const yaw = yawOf(fx, fz);
   const post = opt(C.steelDark, MR.metal);
   const h = mast ? 5.6 : 3.4;
+  b.addCollisionCapsule('traffic-light', x, WALK_Y + h / 2 - 0.05, z, h, 0.2);
   b.cyl(x, WALK_Y - 0.05, z, 0.115, 0.085, h, 6, post, false);
   b.cyl(x, WALK_Y - 0.06, z, 0.2, 0.17, 0.28, 6, post);
 
@@ -386,6 +423,7 @@ export function roadSign(
   const yaw = yawOf(fx, fz);
   const post = opt(C.galv, MR.metal);
   const top = rng.range(2.1, 2.5);
+  b.addCollisionCapsule('road-sign', x, WALK_Y + top / 2, z, top, 0.07);
   b.cyl(x, WALK_Y, z, 0.045, 0.04, top, 5, post, false);
   const fy = WALK_Y + top - 0.1;
   // Sheeting is retroreflective: low roughness so practicals pick it out.
@@ -466,6 +504,7 @@ export function tricolour(
   b.tube(x, y, z, tx, ty, tz, 0.045, 5, pole);
   b.blob(tx, ty, tz, 0.075, 0.09, 0.075, opt(C.roYellow, MR.metal), 0, 3);
   if (mast) {
+    b.addCollisionCapsule('flagpole', x, y + len / 2, z, len, 0.24);
     b.cyl(x, y - 0.02, z, 0.24, 0.19, 0.34, 8, opt(C.concrete, MR.stone));
   } else {
     b.box(x, y, z, 0.18, 0.3, 0.18, Math.atan2(fx, fz), opt(C.steel, MR.metal));
@@ -529,6 +568,7 @@ export function marketStall(
   const w = rng.range(2.6, 3.4);
   const d = 1.7;
   const legs = opt(C.steelPale, MR.metal);
+  b.addCollisionBox('market-stall', x, WALK_Y + 0.45, z, w, 0.9, d - 0.3, yaw);
   for (const sx of [-1, 1]) {
     for (const sz of [-1, 1]) {
       const px = x + Math.sin(yaw) * sx * (w / 2 - 0.1) + Math.cos(yaw) * sz * (d / 2 - 0.1);

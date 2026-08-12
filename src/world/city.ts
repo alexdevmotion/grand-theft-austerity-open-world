@@ -746,6 +746,7 @@ export class CitySystem implements System, CityService {
   private buildGroundPlane(): void {
     const phys = this.findPhysics();
     const size = gridBlocks * blockSize + blockSize * 6;
+    const playableHalf = HALF + blockSize;
     const TOP_Y = -0.06;
     const THICKNESS = 80;
     const mat = new THREE.MeshStandardMaterial({
@@ -764,7 +765,10 @@ export class CitySystem implements System, CityService {
     this.root.add(ground);
 
     phys?.addStaticBox(
-      new THREE.Vector3(size, 0.5, size),
+      // Match SpatialQuery.groundHeight exactly. The larger rendered underlay
+      // hides the sky below the map, but must not become invisible driveable
+      // ground several kilometres beyond the playable city.
+      new THREE.Vector3(playableHalf, 0.5, playableHalf),
       new THREE.Vector3(0, -0.5, 0),
       undefined,
       GROUP.terrain,
@@ -772,6 +776,7 @@ export class CitySystem implements System, CityService {
   }
 
   private bake(): void {
+    const phys = this.findPhysics();
     for (const c of this.chunks) {
       const add = (
         b: FacadeBuilder | SurfaceBuilder | DetailBuilder,
@@ -791,6 +796,17 @@ export class CitySystem implements System, CityService {
       this.stats.facadeTris += c.facade.triangles;
       this.stats.surfaceTris += c.surface.triangles;
       this.stats.detailTris += c.detail.triangles;
+
+      for (const box of c.detail.collisionBoxes) {
+        phys?.addStaticBox(
+          box.halfExtents,
+          box.position,
+          box.rotationY
+            ? new THREE.Quaternion().setFromAxisAngle(UP, -box.rotationY)
+            : undefined,
+          GROUP.prop,
+        );
+      }
 
       add(c.surface, this.mats.surface, 'surface', false);
       add(c.facade, this.mats.facade, 'facade', true);

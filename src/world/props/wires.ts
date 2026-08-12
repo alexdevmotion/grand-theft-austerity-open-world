@@ -61,6 +61,7 @@ export function tractionPole(
 ): void {
   const steel = opt(C.steel, MR.metal);
   const h = rng.range(9.4, 10.6);
+  b.addCollisionCapsule('traction-pole', x, WALK_Y - 0.1 + h / 2, z, h, 0.34);
   b.cyl(x, WALK_Y - 0.1, z, 0.22, 0.11, h, 8, steel, false);
   // Cast base.
   b.cyl(x, WALK_Y - 0.12, z, 0.34, 0.27, 0.62, 8, steel);

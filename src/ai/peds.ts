@@ -23,8 +23,10 @@
  */
 
 import * as THREE from 'three';
+import type RAPIER from '@dimforge/rapier3d-compat';
 import type { GameContext, System } from '../core/engine';
 import { Rng } from '../core/rng';
+import { CG, GROUP, PhysicsWorld, probeGroups } from '../physics/physics';
 import {
   QUALITY,
   detectQuality,
@@ -52,7 +54,13 @@ import {
 } from '../characters';
 import { EdgeKind, PavementGraph } from './peds/navigation';
 import { CIG_GLOW, crowdFaceVariant, CrowdRenderer, PHONE_GLOW } from './peds/rig';
-import { CrowdGrid, Ped, VehicleGrid, type CrowdEnv } from './peds/crowd';
+import {
+  CrowdGrid,
+  Ped,
+  VehicleGrid,
+  type CrowdEnv,
+  type PedPhysicsSweep,
+} from './peds/crowd';
 import { pickCluster, pickIdle } from './peds/behaviours';
 import { driveActor } from './peds/actors';
 import {
@@ -72,6 +80,329 @@ const PED_MELEE_MIN_DOT = Math.cos(THREE.MathUtils.degToRad(38));
 /** Do not punch someone through a floor/ceiling just because X/Z overlap. */
 const PED_MELEE_MAX_VERTICAL = 1.25;
 const PED_MELEE_DEBUG_OFFSETS = [0, 0.22, -0.22, 0.4, -0.4] as const;
+const PED_COLLIDER_RADIUS = 0.32;
+const PED_MIN_HALF_HEIGHT = 0.38;
+const DOG_COLLIDER_RADIUS = 0.18;
+const DOG_COLLIDER_HALF_LENGTH = 0.25;
+const DOG_COLLIDER_CENTRE_Y = 0.36;
+const PED_PHYSICS_SWEEP_SKIN = 0.018;
+const PED_PHYSICS_MASK = probeGroups(CG.STATIC | CG.PROP);
+const DOG_PHYSICS_MASK = probeGroups(CG.STATIC | CG.PROP | CG.CHARACTER | CG.PLAYER);
+
+interface KinematicProxy {
+  body: RAPIER.RigidBody;
+  collider: RAPIER.Collider;
+  radius: number;
+  halfHeight: number;
+}
+
+interface PedProxy extends KinematicProxy {
+  dog: KinematicProxy | null;
+}
+
+/**
+ * Physical bodies for the analytically-steered crowd.
+ *
+ * One manager owns every Rapier allocation so streaming and pool reuse cannot
+ * leave a collider behind. Peds still solve their cheap deterministic crowd
+ * motion in `crowd.ts`; these position-based bodies make that solved pose solid
+ * to the player and vehicles on the next physics step.
+ */
+export class PedCollisionProxies {
+  private readonly proxies = new Map<string, PedProxy>();
+  private readonly spawnShape: RAPIER.Capsule;
+
+  constructor(private readonly physics: PhysicsWorld) {
+    this.spawnShape = new physics.rapier.Capsule(0.55, PED_COLLIDER_RADIUS);
+  }
+
+  attach(ped: Ped): void {
+    if (this.proxies.has(ped.id)) {
+      this.snap(ped);
+      return;
+    }
+    const radius = PED_COLLIDER_RADIUS;
+    const halfHeight = Math.max(PED_MIN_HALF_HEIGHT, ped.app.height * 0.5 - radius);
+    this.pedPose(ped, ped.position.x, ped.position.y, ped.position.z, halfHeight, radius);
+    const body = this.physics.world.createRigidBody(
+      this.physics.rapier.RigidBodyDesc.kinematicPositionBased()
+        .setTranslation(_proxyPosition.x, _proxyPosition.y, _proxyPosition.z)
+        .setRotation(_proxyRotation)
+        .setUserData({ kind: 'ped', id: ped.id }),
+    );
+    const collider = this.physics.world.createCollider(
+      this.physics.rapier.ColliderDesc.capsule(halfHeight, radius)
+        .setCollisionGroups(GROUP.character)
+        .setFriction(0.72)
+        .setRestitution(0),
+      body,
+    );
+    const proxy: PedProxy = { body, collider, radius, halfHeight, dog: null };
+    this.proxies.set(ped.id, proxy);
+    if (ped.dog) proxy.dog = this.createDog(ped);
+    this.snap(ped);
+    this.physics.world.propagateModifiedBodyPositionsToColliders();
+  }
+
+  sync(ped: Ped): void {
+    this.writeTransforms(ped, false);
+  }
+
+  /** Immediate publication for spawn/teleport boundaries before a world step. */
+  snap(ped: Ped): void {
+    this.writeTransforms(ped, true);
+  }
+
+  syncAll(peds: readonly Ped[]): void {
+    // Peds solve after Rapier has already stepped this fixed frame. Publish the
+    // solved transforms now, or every visible analytic actor leads its physical
+    // proxy by one complete simulation step.
+    for (const ped of peds) {
+      if (!ped.ragdolled) this.snap(ped);
+    }
+    this.physics.world.propagateModifiedBodyPositionsToColliders();
+  }
+
+  snapAll(peds: readonly Ped[]): void {
+    for (const ped of peds) this.snap(ped);
+    this.physics.world.propagateModifiedBodyPositionsToColliders();
+  }
+
+  detach(ped: Ped): void {
+    const proxy = this.proxies.get(ped.id);
+    if (!proxy) return;
+    this.proxies.delete(ped.id);
+    if (proxy.dog && this.physics.world.bodies.contains(proxy.dog.body.handle)) {
+      this.physics.world.removeRigidBody(proxy.dog.body);
+    }
+    if (this.physics.world.bodies.contains(proxy.body.handle)) {
+      this.physics.world.removeRigidBody(proxy.body);
+    }
+  }
+
+  /**
+   * Clamp one solved crowd displacement against real walls and props. This is
+   * a single broad-phase capsule cast, shared by the whole crowd rather than a
+   * character-controller allocation per pedestrian.
+   */
+  readonly sweep: PedPhysicsSweep = (ped, fromX, fromY, fromZ, dx, dz, out) => {
+    const distance = Math.hypot(dx, dz);
+    if (!Number.isFinite(distance) || distance < 1e-10) {
+      out.set(fromX, fromZ);
+      return distance < 1e-10 ? 1 : 0;
+    }
+    const proxy = this.proxies.get(ped.id);
+    if (!proxy) {
+      out.set(fromX + dx, fromZ + dz);
+      return 1;
+    }
+    this.pedPose(ped, fromX, fromY, fromZ, proxy.halfHeight, proxy.radius);
+    const hit = this.physics.world.castShape(
+      _proxyPosition,
+      _proxyRotation,
+      { x: dx, y: 0, z: dz },
+      proxy.collider.shape,
+      PED_PHYSICS_SWEEP_SKIN,
+      1,
+      false,
+      undefined,
+      PED_PHYSICS_MASK,
+      proxy.collider,
+      proxy.body,
+    );
+    const fraction = hit ? THREE.MathUtils.clamp(hit.time_of_impact, 0, 1) : 1;
+    out.set(fromX + dx * fraction, fromZ + dz * fraction);
+    return fraction;
+  };
+
+  /** Dog-sized horizontal sweep used before the lead spring publishes a pose. */
+  readonly sweepDog: PedPhysicsSweep = (ped, fromX, fromY, fromZ, dx, dz, out) => {
+    const distance = Math.hypot(dx, dz);
+    if (!Number.isFinite(distance) || distance < 1e-10) {
+      out.set(fromX, fromZ);
+      return distance < 1e-10 ? 1 : 0;
+    }
+    const proxy = this.proxies.get(ped.id)?.dog;
+    if (!proxy || !ped.dog) {
+      out.set(fromX + dx, fromZ + dz);
+      return 1;
+    }
+    this.dogPose(ped, fromX, fromY, fromZ);
+    const hit = this.physics.world.castShape(
+      _proxyPosition,
+      _proxyRotation,
+      { x: dx, y: 0, z: dz },
+      proxy.collider.shape,
+      PED_PHYSICS_SWEEP_SKIN,
+      1,
+      false,
+      undefined,
+      DOG_PHYSICS_MASK,
+      proxy.collider,
+      proxy.body,
+    );
+    const fraction = hit ? THREE.MathUtils.clamp(hit.time_of_impact, 0, 1) : 1;
+    out.set(fromX + dx * fraction, fromZ + dz * fraction);
+    return fraction;
+  };
+
+  /** Reject streamed roots that would begin inside a building or solid prop. */
+  isObstacleAt(x: number, groundY: number, z: number): boolean {
+    let occupied = false;
+    this.physics.world.intersectionsWithShape(
+      { x, y: groundY + 0.55 + PED_COLLIDER_RADIUS, z },
+      IDENTITY_ROTATION,
+      this.spawnShape,
+      () => {
+        occupied = true;
+        return false;
+      },
+      undefined,
+      PED_PHYSICS_MASK,
+    );
+    return occupied;
+  }
+
+  dispose(): void {
+    for (const id of [...this.proxies.keys()]) {
+      const proxy = this.proxies.get(id);
+      if (!proxy) continue;
+      if (proxy.dog && this.physics.world.bodies.contains(proxy.dog.body.handle)) {
+        this.physics.world.removeRigidBody(proxy.dog.body);
+      }
+      if (this.physics.world.bodies.contains(proxy.body.handle)) {
+        this.physics.world.removeRigidBody(proxy.body);
+      }
+    }
+    this.proxies.clear();
+  }
+
+  private writeTransforms(ped: Ped, immediate: boolean): void {
+    const proxy = this.proxies.get(ped.id);
+    if (!proxy) return;
+    this.pedPose(
+      ped,
+      ped.position.x,
+      ped.position.y,
+      ped.position.z,
+      proxy.halfHeight,
+      proxy.radius,
+    );
+    this.writeBody(proxy.body, immediate);
+
+    if (ped.dog && !proxy.dog) proxy.dog = this.createDog(ped);
+    else if (!ped.dog && proxy.dog) {
+      if (this.physics.world.bodies.contains(proxy.dog.body.handle)) {
+        this.physics.world.removeRigidBody(proxy.dog.body);
+      }
+      proxy.dog = null;
+    }
+    if (ped.dog && proxy.dog) {
+      this.dogPose(ped, ped.dog.x, ped.dog.y, ped.dog.z);
+      this.writeBody(proxy.dog.body, immediate);
+    }
+  }
+
+  private writeBody(body: RAPIER.RigidBody, immediate: boolean): void {
+    if (immediate) {
+      body.setTranslation(_proxyPosition, true);
+      body.setRotation(_proxyRotation, true);
+    }
+    body.setNextKinematicTranslation(_proxyPosition);
+    body.setNextKinematicRotation(_proxyRotation);
+  }
+
+  private createDog(ped: Ped): KinematicProxy {
+    const dog = ped.dog!;
+    const radius = DOG_COLLIDER_RADIUS * dog.size;
+    const halfHeight = DOG_COLLIDER_HALF_LENGTH * dog.size;
+    this.dogPose(ped, dog.x, dog.y, dog.z);
+    const body = this.physics.world.createRigidBody(
+      this.physics.rapier.RigidBodyDesc.kinematicPositionBased()
+        .setTranslation(_proxyPosition.x, _proxyPosition.y, _proxyPosition.z)
+        .setRotation(_proxyRotation)
+        .setUserData({ kind: 'ped-dog', id: ped.id }),
+    );
+    const collider = this.physics.world.createCollider(
+      this.physics.rapier.ColliderDesc.capsule(halfHeight, radius)
+        .setCollisionGroups(GROUP.character)
+        .setFriction(0.65)
+        .setRestitution(0),
+      body,
+    );
+    return { body, collider, radius, halfHeight };
+  }
+
+  private pedPose(
+    ped: Ped,
+    x: number,
+    y: number,
+    z: number,
+    halfHeight: number,
+    radius: number,
+  ): void {
+    _proxyRotation.setFromAxisAngle(UP, ped.yaw);
+    if (ped.mode === 'down') {
+      _proxyRotation.multiply(_horizontalCapsuleRotation);
+      // A promoted ragdoll publishes its visible hips as `ped.position`; there
+      // is no longer a ground-root below them to offset by the capsule radius.
+      _proxyPosition.set(x, ped.ragdolled ? y : y + radius, z);
+    } else {
+      _proxyPosition.set(x, y + halfHeight + radius, z);
+    }
+  }
+
+  private dogPose(ped: Ped, x: number, y: number, z: number): void {
+    const dog = ped.dog!;
+    _proxyRotation.setFromAxisAngle(UP, dog.yaw).multiply(_horizontalCapsuleRotation);
+    _proxyPosition.set(
+      x,
+      y + DOG_COLLIDER_CENTRE_Y * dog.size,
+      z,
+    );
+  }
+}
+
+const UP = new THREE.Vector3(0, 1, 0);
+const _proxyPosition = new THREE.Vector3();
+const _proxyRotation = new THREE.Quaternion();
+const _horizontalCapsuleRotation = new THREE.Quaternion()
+  .setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+const IDENTITY_ROTATION = { x: 0, y: 0, z: 0, w: 1 } as const;
+
+/**
+ * Resolve a requested actor root before any object or collider is attached.
+ * The exact point wins; deterministic concentric candidates are only used when
+ * the caller authored a point inside another body or the physical world.
+ */
+export function resolvePedSpawnPoint(
+  spatial: Pick<SpatialQuery, 'groundHeight' | 'isBlocked'>,
+  physicallyBlocked: (x: number, groundY: number, z: number) => boolean,
+  actorBlocked: (x: number, z: number) => boolean,
+  requested: THREE.Vector3,
+  out: THREE.Vector3,
+): boolean {
+  const clear = (x: number, z: number): boolean => {
+    if (spatial.isBlocked(x, z)) return false;
+    const y = spatial.groundHeight(x, z);
+    if (!Number.isFinite(y) || physicallyBlocked(x, y, z) || actorBlocked(x, z)) return false;
+    out.set(x, y, z);
+    return true;
+  };
+  if (clear(requested.x, requested.z)) return true;
+  const phase = Math.atan2(requested.z || 1, requested.x || 1);
+  for (let ring = 1; ring <= 32; ring++) {
+    const radius = ring * 0.75;
+    for (let i = 0; i < 24; i++) {
+      const angle = phase + i * Math.PI * 2 / 24;
+      if (clear(
+        requested.x + Math.cos(angle) * radius,
+        requested.z + Math.sin(angle) * radius,
+      )) return true;
+    }
+  }
+  return false;
+}
 
 /**
  * Find a deterministic walkable point that the production melee selector can
@@ -170,6 +501,7 @@ export class PedSystem implements System, PedService {
 
   private ctx!: GameContext;
   private city: CityService | null = null;
+  private collisions: PedCollisionProxies | null = null;
   private graph = new PavementGraph();
   /** Dogs only — people are on the characters agent's skinned rig. */
   private renderer!: CrowdRenderer;
@@ -230,6 +562,8 @@ export class PedSystem implements System, PedService {
     this.ctx = ctx;
     ctx.provide(Services.Peds, this);
     this.city = ctx.tryGet(Services.City) ?? null;
+    const physics = ctx.tryGet(Services.Physics) ?? null;
+    this.collisions = physics ? new PedCollisionProxies(physics) : null;
 
     const q = this.resolveQuality(ctx);
     const qs = QUALITY[q];
@@ -274,6 +608,8 @@ export class PedSystem implements System, PedService {
       playerSpeed: 0,
       vehicles: this.vehGrid,
       peds: this.grid,
+      sweepPhysics: this.collisions?.sweep,
+      sweepDogPhysics: this.collisions?.sweepDog,
       onKnockdown: (p, fatal) => this.onKnockdown(p, fatal),
       tension: 0,
     };
@@ -343,7 +679,15 @@ export class PedSystem implements System, PedService {
         ped.anchorAt(ped.position.x, ped.position.z, heading, {
           kind: 'wait', pose: 'idle', duration: 1e6, facesGroup: false,
         });
-        this.grid.publish(this.list, this.env.spatial, this.env.playerPos, this.env.playerInVehicle);
+        this.grid.publish(
+          this.list,
+          this.env.spatial,
+          this.env.playerPos,
+          this.env.playerInVehicle,
+          this.env.sweepPhysics,
+          this.env.sweepDogPhysics,
+        );
+        this.collisions?.snapAll(this.list);
         this.debugMeleeTargetId = ped.id;
         return this.debugPedState(ped.id);
       },
@@ -519,12 +863,27 @@ export class PedSystem implements System, PedService {
   /* ---------------------------------------------------------------- */
 
   spawn(archetype: PedArchetype, position: THREE.Vector3, headingRad: number): CharacterHandle {
+    if (!resolvePedSpawnPoint(
+      this.env.spatial,
+      (x, y, z) => this.collisions?.isObstacleAt(x, y, z) ?? false,
+      (x, z) => this.crowdedAt(x, z, 0.95),
+      position,
+      this._spawnResolved,
+    )) {
+      throw new Error(`No collision-free pedestrian spawn near ${position.x},${position.z}`);
+    }
     const p = this.take();
     const rng = this.rng;
-    p.reset(archetype, makeAppearance(archetype, rng), position.x, position.z, headingRad, baseSpeed(archetype, rng), rng);
-    this.routeFromHere(p);
-    p.position.y = this.env.spatial.groundHeight(p.position.x, p.position.z);
-    if (p.position.y === -Infinity) p.position.y = position.y;
+    p.reset(
+      archetype,
+      makeAppearance(archetype, rng),
+      this._spawnResolved.x,
+      this._spawnResolved.z,
+      headingRad,
+      baseSpeed(archetype, rng),
+      rng,
+    );
+    p.position.y = this._spawnResolved.y;
     this.attach(p);
     return p;
   }
@@ -536,6 +895,7 @@ export class PedSystem implements System, PedService {
     const i = this.list.indexOf(p);
     if (i >= 0) this.list.splice(i, 1);
     p.active = false;
+    this.collisions?.detach(p);
     p.object.removeFromParent();
     const actor = this.actors.get(id);
     if (actor) {
@@ -624,11 +984,20 @@ export class PedSystem implements System, PedService {
     p.appearance = appearance;
     p.app.height = appearance.height;
     copyWardrobe(appearance, p);
+    this.collisions?.attach(p);
     this.stats.spawned++;
     // Debug fill and the boot-time batch both return before another fixed
     // frame. Publish now so candidate queries and rendered roots immediately
     // include this attachment instead of consulting the previous frame's grid.
-    this.grid.publish(this.list, this.env.spatial, this.env.playerPos, this.env.playerInVehicle);
+    this.grid.publish(
+      this.list,
+      this.env.spatial,
+      this.env.playerPos,
+      this.env.playerInVehicle,
+      this.env.sweepPhysics,
+      this.env.sweepDogPhysics,
+    );
+    this.collisions?.snapAll(this.list);
   }
 
   /** Give a ped the real skinned rig. */
@@ -712,7 +1081,9 @@ export class PedSystem implements System, PedService {
         if (dot > 0.22) continue;
       }
       if (this.env.spatial.isBlocked(x, z)) continue;
-      if (this.env.spatial.groundHeight(x, z) <= 0.08) continue;
+      const groundY = this.env.spatial.groundHeight(x, z);
+      if (groundY <= 0.08) continue;
+      if (this.collisions?.isObstacleAt(x, groundY, z)) continue;
       if (this.crowdedAt(x, z, 1.0)) continue;
 
       const hour = this.ctx.tryGet(Services.Weather)?.timeOfDay ?? 19;
@@ -729,8 +1100,19 @@ export class PedSystem implements System, PedService {
       const p = this.take();
       const app = makeAppearance(arch, this.rng);
       p.reset(arch, app, x, z, Math.atan2(e.ux, e.uz), baseSpeed(arch, this.rng), this.rng);
-      p.position.y = Math.max(0, this.env.spatial.groundHeight(x, z));
       p.placeOnEdge(g, e.id, this.rng.bool() ? e.a : e.b, t);
+      const routedGroundY = this.env.spatial.groundHeight(p.position.x, p.position.z);
+      if (
+        !Number.isFinite(routedGroundY)
+        || this.env.spatial.isBlocked(p.position.x, p.position.z)
+        || this.collisions?.isObstacleAt(p.position.x, routedGroundY, p.position.z)
+        || this.crowdedAt(p.position.x, p.position.z, 1.0)
+      ) {
+        p.active = false;
+        this.pool.push(p);
+        continue;
+      }
+      p.position.y = Math.max(0, routedGroundY);
       p.lateralTargetRandomise(this.rng);
 
       // A slice of the crowd is standing still doing something.
@@ -748,6 +1130,7 @@ export class PedSystem implements System, PedService {
         const anchor = this.nearestAnchor(x, z, 30);
         if (anchor) {
           p.anchorAt(anchor.x, anchor.z, anchor.yaw, pickIdle(arch, district, true, this.rng));
+          p.position.y = Math.max(0, this.env.spatial.groundHeight(anchor.x, anchor.z));
         }
       }
 
@@ -760,7 +1143,9 @@ export class PedSystem implements System, PedService {
         p.app.phone = false;
       } else if (p.mode === 'route' && this.rng.bool(0.07)) {
         p.dog = {
-          x: p.position.x, z: p.position.z, y: p.position.y,
+          x: p.position.x - Math.sin(p.yaw) * 1.05 + Math.cos(p.yaw) * 0.55,
+          z: p.position.z - Math.cos(p.yaw) * 1.05 - Math.sin(p.yaw) * 0.55,
+          y: p.position.y,
           yaw: p.yaw, phase: this.rng.range(0, 6.28),
           colour: new THREE.Color(this.rng.pick(DOG_COLOURS)).convertSRGBToLinear(),
           size: this.rng.range(0.72, 1.15),
@@ -790,10 +1175,12 @@ export class PedSystem implements System, PedService {
       const cx = x + Math.sin(a) * radius;
       const cz = z + Math.cos(a) * radius;
       if (this.env.spatial.isBlocked(cx, cz)) continue;
+      const groundY = Math.max(0, this.env.spatial.groundHeight(cx, cz));
+      if (this.collisions?.isObstacleAt(cx, groundY, cz)) continue;
       const arch = forced ?? this.archetypeAt(cx, cz, hour);
       const p = this.take();
       p.reset(arch, makeAppearance(arch, this.rng), cx, cz, a + Math.PI, baseSpeed(arch, this.rng), this.rng);
-      p.position.y = Math.max(0, this.env.spatial.groundHeight(cx, cz));
+      p.position.y = groundY;
       const spec = pickIdle(arch, district, false, this.rng);
       // Everyone in a cluster is in the same conversation.
       p.anchorAt(cx, cz, a + Math.PI, {
@@ -825,7 +1212,14 @@ export class PedSystem implements System, PedService {
     for (const id of this.anchorBuf) {
       const a = anchors[id];
       const d = (a.x - x) ** 2 + (a.z - z) ** 2;
-      if (d < bestD && !this.crowdedAt(a.x, a.z, 0.95)) {
+      const groundY = this.env.spatial.groundHeight(a.x, a.z);
+      if (
+        d < bestD
+        && Number.isFinite(groundY)
+        && !this.env.spatial.isBlocked(a.x, a.z)
+        && !this.collisions?.isObstacleAt(a.x, groundY, a.z)
+        && !this.crowdedAt(a.x, a.z, 0.95)
+      ) {
         bestD = d;
         best = a;
       }
@@ -898,6 +1292,10 @@ export class PedSystem implements System, PedService {
 
     t = prof.begin();
     this.grid.step(dt, this.env);
+    // Ordinary analytic actors have their final fixed-step pose now. Ragdoll
+    // hips advance in lateUpdate with the visual skeleton and are snapped
+    // there, avoiding a proxy that trails the visible body by one render step.
+    this.collisions?.syncAll(this.list);
     prof.add('peds.steer', t);
 
     t = prof.begin();
@@ -1035,6 +1433,7 @@ export class PedSystem implements System, PedService {
         if (!actor.object.visible) actor.setVisible(true);
         tp = prof.begin();
         driveActor(actor, p, dt, ctx, d, this.shadowRadius, t);
+        if (p.ragdolled) this.collisions?.snap(p);
         prof.add('peds.skinnedActors', tp);
         if (d < 44) this.handLight(actor, p, r, t);
         skinned++;
@@ -1081,8 +1480,11 @@ export class PedSystem implements System, PedService {
 
   private readonly _hand = new THREE.Vector3();
   private readonly _glow = new THREE.Color();
+  private readonly _spawnResolved = new THREE.Vector3();
 
   dispose(): void {
+    this.collisions?.dispose();
+    this.collisions = null;
     this.renderer?.dispose();
     this.peds.clear();
     this.list.length = 0;

@@ -173,6 +173,32 @@ export interface PropOpts {
 const NO_E = [0, 0, 0];
 const DEFAULT_MR: readonly [number, number] = [0, 0.85];
 
+/**
+ * Cheap physics stand-ins authored by complete props, in world space.
+ *
+ * These are deliberately separate from the render primitives below. A kiosk
+ * is one blocker even though its merged mesh contains dozens of boxes, while
+ * a ground quad, wire or decorative bracket is not a blocker at all.
+ */
+export type PropCollisionProxy =
+  | {
+    readonly shape: 'box';
+    readonly label: string;
+    readonly center: readonly [number, number, number];
+    /** Full extents, matching the size convention used by `box`. */
+    readonly size: readonly [number, number, number];
+    /** The same authored rotation accepted by `box`. */
+    readonly rotationY: number;
+  }
+  | {
+    readonly shape: 'capsule';
+    readonly label: string;
+    readonly center: readonly [number, number, number];
+    /** Total end-to-end height, including both rounded caps. */
+    readonly height: number;
+    readonly radius: number;
+  };
+
 /* ------------------------------------------------------------------ */
 /* Builder                                                             */
 /* ------------------------------------------------------------------ */
@@ -190,6 +216,11 @@ export class PropBuilder {
   readonly trans: number[] = [];
   readonly wind: number[] = [];
   readonly idx: number[] = [];
+  private readonly proxies: PropCollisionProxy[] = [];
+
+  get collisionProxies(): readonly PropCollisionProxy[] {
+    return this.proxies;
+  }
 
   get triangles(): number {
     return this.idx.length / 3;
@@ -197,6 +228,35 @@ export class PropBuilder {
 
   get isEmpty(): boolean {
     return this.idx.length === 0;
+  }
+
+  /** Register one semantic, rotated-box blocker for the complete prop. */
+  addCollisionBox(
+    label: string,
+    cx: number, cy: number, cz: number,
+    sx: number, sy: number, sz: number,
+    rotationY = 0,
+  ): void {
+    this.proxies.push({
+      shape: 'box', label,
+      center: [cx, cy, cz],
+      size: [sx, sy, sz],
+      rotationY,
+    });
+  }
+
+  /** Register one vertical capsule blocker for a complete round prop. */
+  addCollisionCapsule(
+    label: string,
+    cx: number, cy: number, cz: number,
+    height: number, radius: number,
+  ): void {
+    this.proxies.push({
+      shape: 'capsule', label,
+      center: [cx, cy, cz],
+      height,
+      radius,
+    });
   }
 
   private v(

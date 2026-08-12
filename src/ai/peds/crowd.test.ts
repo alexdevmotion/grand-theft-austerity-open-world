@@ -49,6 +49,13 @@ function activePed(x: number, z: number): Ped {
   return p;
 }
 
+function resetPed(x = 0, z = 0): Ped {
+  const rng = new Rng('vehicle-strike-ped');
+  const p = new Ped();
+  p.reset('civilian', makeAppearance('civilian', rng), x, z, 0, 1.2, rng);
+  return p;
+}
+
 function minimumPairDistance(peds: readonly Ped[]): number {
   let minimum = Number.POSITIVE_INFINITY;
   for (let i = 0; i < peds.length; i++) {
@@ -61,6 +68,102 @@ function minimumPairDistance(peds: readonly Ped[]): number {
   }
   return minimum;
 }
+
+test('a boulevard-speed vehicle strike kills and launches a full-health pedestrian', () => {
+  const ped = resetPed();
+  const grid = new CrowdGrid();
+  const env = crowdEnv(grid, null);
+  const knockdowns: boolean[] = [];
+  env.onKnockdown = (_target, fatal) => knockdowns.push(fatal);
+  env.vehicles.add(0, 0, 0, 1, 13, 'sedan');
+  grid.rebuild([ped]);
+
+  grid.step(1 / 60, env);
+
+  expect(ped.health).toBe(0);
+  expect(ped.isAlive).toBe(false);
+  expect(ped.mode).toBe('down');
+  expect(ped.state).toBe('die');
+  expect(ped.vel.z).toBeGreaterThanOrEqual(2.5);
+  expect(ped.vel.z).toBeLessThanOrEqual(13);
+  expect(ped.vel.y).toBeGreaterThanOrEqual(2.2);
+  expect(ped.vel.y).toBeLessThanOrEqual(5);
+  expect(knockdowns).toEqual([true]);
+});
+
+test('an urban road-speed vehicle strike is fatal from full health', () => {
+  const ped = resetPed();
+  const grid = new CrowdGrid();
+  const env = crowdEnv(grid, null);
+  let fatal: boolean | null = null;
+  env.onKnockdown = (_ped, died) => { fatal = died; };
+  env.vehicles.add(0, 0, 0, 1, 10, 'urban-car');
+  grid.rebuild([ped]);
+
+  grid.step(1 / 60, env);
+
+  expect(ped.health).toBe(0);
+  expect(ped.state).toBe('die');
+  expect(fatal).toBe(true);
+});
+
+test('a 2 m/s vehicle contact does not strike or damage a pedestrian', () => {
+  const ped = resetPed();
+  const grid = new CrowdGrid();
+  const env = crowdEnv(grid, null);
+  const knockdowns: boolean[] = [];
+  env.onKnockdown = (_target, fatal) => knockdowns.push(fatal);
+  env.vehicles.add(0, 0, 0, 1, 2, 'slow-car');
+  grid.rebuild([ped]);
+
+  grid.step(1 / 60, env);
+
+  expect(ped.health).toBe(100);
+  expect(ped.mode).not.toBe('down');
+  expect(ped.vel.y).toBe(0);
+  expect(knockdowns).toEqual([]);
+});
+
+test('a 5 m/s vehicle strike knocks down and launches without reporting a death', () => {
+  const ped = resetPed();
+  const grid = new CrowdGrid();
+  const env = crowdEnv(grid, null);
+  const knockdowns: boolean[] = [];
+  env.onKnockdown = (_target, fatal) => knockdowns.push(fatal);
+  env.vehicles.add(0, 0, 0, 1, 5, 'moderate-car');
+  grid.rebuild([ped]);
+
+  grid.step(1 / 60, env);
+
+  expect(ped.health).toBeGreaterThan(75);
+  expect(ped.health).toBeLessThan(85);
+  expect(ped.isAlive).toBe(true);
+  expect(ped.mode).toBe('down');
+  expect(ped.state).toBe('ragdoll');
+  expect(ped.vel.z).toBeCloseTo(3.55, 6);
+  expect(ped.vel.y).toBeCloseTo(2.7, 6);
+  expect(knockdowns).toEqual([false]);
+});
+
+test('continued vehicle overlap cannot re-damage or re-report downed and dead pedestrians', () => {
+  for (const [speed, fatal] of [[5, false], [13, true]] as const) {
+    const ped = resetPed();
+    const grid = new CrowdGrid();
+    const env = crowdEnv(grid, null);
+    const knockdowns: boolean[] = [];
+    env.onKnockdown = (_target, died) => knockdowns.push(died);
+    env.vehicles.add(0, 0, 0, 1, speed, `overlap-${speed}`);
+    grid.rebuild([ped]);
+
+    grid.step(1 / 60, env);
+    const healthAfterStrike = ped.health;
+    for (let i = 0; i < 8; i++) grid.step(1 / 60, env);
+
+    expect(ped.health).toBe(healthAfterStrike);
+    expect(ped.isAlive).toBe(!fatal);
+    expect(knockdowns).toEqual([fatal]);
+  }
+});
 
 test('ordinary depenetration uses the open half-plane and retains safe roots in a closed corner', () => {
   const a = activePed(0.1, 0);

@@ -112,22 +112,10 @@ export class DamageModel {
   private cooldown = 0;
   /** Stops a sustained overlap chewing through the health bar in one frame. */
   private impactLock = 0;
-  /**
-   * Damage allowance, refilled over time. A single crash should be able to
-   * spend the whole thing at once, but a vehicle grinding along a kerb cannot
-   * out-spend the refill rate — which is what let a wedged bus destroy itself
-   * in eight seconds without anything hitting it.
-   */
-  private budget: number;
-  private readonly refillPerSecond: number;
-  private readonly budgetCap: number;
 
   constructor(maxHealth: number) {
     this.health = maxHealth;
     this.maxHealth = maxHealth;
-    this.budgetCap = maxHealth * 0.55;
-    this.refillPerSecond = maxHealth * 0.05;
-    this.budget = this.budgetCap;
   }
 
   get ratio(): number {
@@ -153,11 +141,10 @@ export class DamageModel {
     // registers its own weight. Only the excess over `threshold` is a crash.
     if (this.impactLock > 0) return 0;
     const raw = Math.min(420, Math.max(0, (force - threshold) * 0.0009)) * scale;
-    const dmg = Math.min(raw, this.budget);
+    const dmg = Math.min(raw, this.health);
     if (dmg <= 0.5) return 0;
-    this.budget -= dmg;
     this.impactLock = 0.22;
-    this.health = Math.max(0, this.health - dmg);
+    this.health -= dmg;
     if (this.applied < 26) {
       const severity = THREE.MathUtils.clamp(dmg / 160, 0.12, 1);
       this.pending.push({
@@ -172,7 +159,7 @@ export class DamageModel {
 
   /** Direct damage with no deformation (fire, explosions elsewhere). */
   applyDamage(amount: number): void {
-    this.health = Math.max(0, this.health - amount);
+    this.health = THREE.MathUtils.clamp(this.health - amount, 0, this.maxHealth);
   }
 
   /**
@@ -182,7 +169,6 @@ export class DamageModel {
   /** Called every fixed step, visible or not. */
   tick(dt: number): void {
     if (this.impactLock > 0) this.impactLock -= dt;
-    this.budget = Math.min(this.budgetCap, this.budget + this.refillPerSecond * dt);
   }
 
   flush(mesh: THREE.Mesh, dt: number): void {

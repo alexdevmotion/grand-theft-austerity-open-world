@@ -139,6 +139,57 @@ export interface StreamingService {
 }
 
 /* ------------------------------------------------------------------ */
+/* Breakable environment props                                         */
+/* ------------------------------------------------------------------ */
+
+export interface BreakablePoleRegistration {
+  /** Stable authored id used by deterministic QA and reset. */
+  readonly id: string;
+  /** Rapier handle of the explicitly breakable static pole collider. */
+  readonly colliderHandle: number;
+  /** Base of the pole in world space. */
+  readonly position: Vector3;
+  readonly height: number;
+  /** Direction the lamp arm points, used as a deterministic fall fallback. */
+  readonly inward: Vector3;
+  /** Addressable render slot; false removes only this intact lamp. */
+  readonly setIntactVisible: (visible: boolean) => void;
+}
+
+export interface BreakablePoleState {
+  readonly id: string;
+  readonly colliderHandle: number | null;
+  readonly position: Vector3;
+  readonly height: number;
+  readonly broken: boolean;
+  /** Live fallen replacement, when it has not been evicted from the bounded pool. */
+  readonly debris: {
+    readonly position: Vector3;
+    readonly rotation: Quaternion;
+    /** World Y component of its local up axis: 1 upright, 0 lying flat. */
+    readonly upY: number;
+  } | null;
+}
+
+export type EnvironmentImpactResult = 'ignored' | 'resisted' | 'broken' | 'already-broken';
+
+export interface EnvironmentDamageStats {
+  readonly registeredPoles: number;
+  readonly brokenPoles: number;
+  readonly activeDebris: number;
+  readonly debrisLimit: number;
+}
+
+export interface EnvironmentDamageService {
+  registerBreakablePole(pole: BreakablePoleRegistration): void;
+  /** Route one vehicle contact by its non-vehicle collider handle. */
+  impact(colliderHandle: number, force: number, direction: Vector3): EnvironmentImpactResult;
+  getPole(id: string): BreakablePoleState | undefined;
+  readonly stats: EnvironmentDamageStats;
+  reset(): void;
+}
+
+/* ------------------------------------------------------------------ */
 /* Vehicles                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -616,6 +667,7 @@ export interface RenderService {
 export const Services = {
   /** The Rapier world wrapper. Registered by PhysicsWorld during init. */
   Physics: key<import('../physics/physics').PhysicsWorld>('physicsWorld'),
+  EnvironmentDamage: key<EnvironmentDamageService>('environmentDamage'),
   City: key<CityService>('city'),
   Streaming: key<StreamingService>('streaming'),
   Vehicles: key<VehicleService>('vehicles'),

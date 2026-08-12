@@ -1362,6 +1362,7 @@ export class CharacterActor {
 
   private hero: boolean;
   private ragdollSim: Ragdoll | null = null;
+  private ragdollAnchor: THREE.Vector3 | null = null;
   private accum = 0;
   private lastLodDt = 0;
   private disposed = false;
@@ -1493,8 +1494,18 @@ export class CharacterActor {
     this.anim.request('ragdoll');
   }
 
+  /** Anchor a visual ragdoll to an authoritative external physics proxy. */
+  anchorRagdollHips(position: THREE.Vector3 | null): void {
+    if (!position) {
+      this.ragdollAnchor = null;
+      return;
+    }
+    (this.ragdollAnchor ??= new THREE.Vector3()).copy(position);
+  }
+
   revive(): void {
     this.ragdollSim = null;
+    this.ragdollAnchor = null;
     this.anim.reset('idle');
   }
 
@@ -1524,6 +1535,15 @@ export class CharacterActor {
     // near the camera, standard material past ~30 m.
     if (this.heroHead) this.heroHead.update(ctx, dist);
 
+    // Corpse motion is gameplay physics, not an animation LOD. It must keep
+    // following its authoritative proxy even outside the camera frustum or it
+    // will jump back through walls when it becomes visible again.
+    if (this.ragdollSim) {
+      this.ragdollSim.update(dt, this.phys, this.ragdollAnchor ?? undefined);
+      this.ragdollSim.apply();
+      return;
+    }
+
     let rate = 1;
     if (!this.hero) {
       _sphere.center.copy(_actorPos);
@@ -1546,12 +1566,6 @@ export class CharacterActor {
     if (rate > 1 && this.lastLodDt < rate / 60) return;
     const useDt = this.lastLodDt;
     this.lastLodDt = 0;
-
-    if (this.ragdollSim) {
-      this.ragdollSim.update(useDt, this.phys);
-      this.ragdollSim.apply();
-      return;
-    }
 
     let tp = prof.begin();
     this.anim.update(useDt);

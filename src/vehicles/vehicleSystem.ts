@@ -19,6 +19,8 @@ import { CG, GROUP, PhysicsWorld, probeGroups } from '../physics/physics';
 import { Rng } from '../core/rng';
 import {
   Services,
+  type EnvironmentDamageService,
+  type EnvironmentImpactResult,
   type Faction,
   type VehicleClass,
   type VehicleHandle,
@@ -286,6 +288,63 @@ export function vehiclePlacementIsClear(
   return hit === null;
 }
 
+/** Contacts below this are resting/parking load, not a moving-car impact. */
+const ENVIRONMENT_IMPACT_SPEED = 4;
+
+export interface VehicleEnvironmentContact {
+  readonly collider1: number;
+  readonly collider2: number;
+  readonly vehicleOnFirst: boolean;
+  readonly force: number;
+  readonly direction: THREE.Vector3;
+  /** Incoming velocity along the contact normal, never tangential speed. */
+  readonly normalSpeed: number;
+  readonly settled: boolean;
+  readonly parked: boolean;
+}
+
+export function incomingNormalSpeed(
+  incoming: THREE.Vector3Like,
+  normal: THREE.Vector3Like,
+  otherIncoming?: THREE.Vector3Like,
+): number {
+  const length = Math.hypot(normal.x, normal.y, normal.z);
+  if (!Number.isFinite(length) || length < 1e-8) return 0;
+  const rx = incoming.x - (otherIncoming?.x ?? 0);
+  const ry = incoming.y - (otherIncoming?.y ?? 0);
+  const rz = incoming.z - (otherIncoming?.z ?? 0);
+  return Math.abs((rx * normal.x + ry * normal.y + rz * normal.z) / length);
+}
+
+/**
+ * Route one Rapier pair to the explicit environment registry. GROUP.prop is
+ * deliberately not enough: buildings, bollards and other static props remain
+ * indestructible because only the non-vehicle HANDLE is looked up there.
+ */
+export function routeVehicleEnvironmentContact(
+  environment: EnvironmentDamageService,
+  contact: VehicleEnvironmentContact,
+): EnvironmentImpactResult {
+  if (
+    !contact.settled || contact.parked || !Number.isFinite(contact.normalSpeed) ||
+    contact.normalSpeed < ENVIRONMENT_IMPACT_SPEED
+  ) return 'ignored';
+  const other = contact.vehicleOnFirst ? contact.collider2 : contact.collider1;
+  // Rapier reports one pair direction. Mirror it when the vehicle is the
+  // second collider so every registered prop receives the pair in the same
+  // vehicle-to-environment convention.
+  const sign = contact.vehicleOnFirst ? 1 : -1;
+  return environment.impact(
+    other,
+    contact.force,
+    new THREE.Vector3(
+      contact.direction.x * sign,
+      contact.direction.y * sign,
+      contact.direction.z * sign,
+    ),
+  );
+}
+
 /**
  * A player car should only be rescued after the player has actually tried to
  * get out of the trap.  A low speed by itself is not enough: it is also the
@@ -474,6 +533,10 @@ class Vehicle implements VehicleHandle {
   private grace = 3.0;
   /** True while the static-friction clamp is holding the car still. */
   parked = false;
+  /** Velocity entering the current Rapier step, captured after last frame's
+   * controller impulses. Contact events are drained after the solver, whose
+   * response may already have removed nearly all of the closing speed. */
+  readonly incomingVelocity = new THREE.Vector3();
   /** Decaying peak speed. Crash damage needs closing speed, not just contact —
    *  this is what stops a car wedged against a kerb grinding itself to death. */
   recentSpeed = 0;
@@ -609,6 +672,7 @@ class Vehicle implements VehicleHandle {
     // vehicle and player fixed steps; leaving this stale for one frame put the
     // seated player at the old wall even though Rapier had moved the car.
     this.position.set(position.x, position.y + this.tuning.spec.rideHeight, position.z);
+    this.incomingVelocity.set(0, 0, 0);
     this.rotation.copy(q);
     this.object.position.copy(this.position);
     this.object.quaternion.copy(q);
@@ -876,6 +940,8 @@ class Vehicle implements VehicleHandle {
     const targetLong = (fwdSpeed - this.prevFwdSpeed) / dt;
     this.prevFwdSpeed = fwdSpeed;
     this.longAccel += (THREE.MathUtils.clamp(targetLong, -30, 30) - this.longAccel) * Math.min(1, dt * 7);
+    const nextIncoming = body.linvel();
+    this.incomingVelocity.set(nextIncoming.x, nextIncoming.y, nextIncoming.z);
   }
 
   get needsOccupiedRecovery(): boolean {
@@ -1625,6 +1691,10 @@ export class VehicleSystem implements System, VehicleService {
 
   fixedUpdate(dt: number): void {
     if (this.harness) this.runHarness(dt);
+    // Physics has just produced this frame's contact events. Consume them
+    // before simulate() overwrites each stored pre-solver velocity with the
+    // controller output for the next step.
+    this.drainCollisions();
     for (const v of this.list) {
       v.simulate(dt);
       if (v.needsOccupiedRecovery && !v.isWrecked && !v.tuning.spec.railed) {
@@ -1660,7 +1730,6 @@ export class VehicleSystem implements System, VehicleService {
         }
       }
     }
-    this.drainCollisions();
   }
 
   /**
@@ -1714,6 +1783,21 @@ export class VehicleSystem implements System, VehicleService {
       const a = this.byCollider.get(event.collider1());
       const b = this.byCollider.get(event.collider2());
       const dir = event.maxForceDirection();
+      const environment = this.ctx.tryGet(Services.EnvironmentDamage);
+      if (environment && (!!a !== !!b)) {
+        const vehicle = a ?? b!;
+        const velocity = vehicle.incomingVelocity;
+        routeVehicleEnvironmentContact(environment, {
+          collider1: event.collider1(),
+          collider2: event.collider2(),
+          vehicleOnFirst: a !== undefined,
+          force: magnitude,
+          direction: new THREE.Vector3(dir.x, dir.y, dir.z),
+          normalSpeed: incomingNormalSpeed(velocity, dir),
+          settled: vehicle.settled && !vehicle.tuning.spec.railed,
+          parked: vehicle.parked,
+        });
+      }
       for (const v of [a, b]) {
         if (!v || !v.settled) continue;
         // A 26 tonne tram is not damaged by a Dacia, and it certainly is not
@@ -1724,21 +1808,15 @@ export class VehicleSystem implements System, VehicleService {
         // Damage needs a genuine impact, which means RELATIVE motion. Grading
         // on absolute speed meant a stationary vehicle wedged against a kerb
         // kept registering its own resting weight as a crash and ground itself
-        // to scrap. A parked car is never in a collision.
-        if (v.parked) continue;
-        const lv = v.body.linvel();
+        // to scrap. Parked only suppresses static ground/prop contacts: a
+        // moving vehicle can still damage a stationary target.
+        const lv = v.incomingVelocity;
         // Against a static collider (kerb, wall, prop) the only thing that can
         // constitute an impact is this vehicle's own CURRENT speed. Using the
         // decaying peak let a vehicle that had merely arrived somewhere keep
         // taking hits from the surface it was resting on.
-        if (Math.hypot(lv.x, lv.y, lv.z) < (other ? 2.0 : 4.0)) continue;
-        const closing = other
-          ? _relVel.set(
-              lv.x - other.body.linvel().x,
-              lv.y - other.body.linvel().y,
-              lv.z - other.body.linvel().z,
-            ).length()
-          : v.recentSpeed;
+        const closing = incomingNormalSpeed(lv, dir, other?.incomingVelocity);
+        if (!other && (v.parked || closing < 4.0)) continue;
         if (closing < 2.4) continue;
         // Approximate the impact point: walk out along the contact normal to
         // the surface of the body box.
@@ -2004,4 +2082,3 @@ const _brakeCol = new THREE.Color(0xff2a20);
 const _sirenCol = new THREE.Color(0x3a6cff);
 const _pointPos = new THREE.Vector3();
 const _zero = new THREE.Vector3();
-const _relVel = new THREE.Vector3();

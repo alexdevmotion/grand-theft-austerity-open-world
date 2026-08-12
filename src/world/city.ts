@@ -65,6 +65,8 @@ import {
   type LandmarkResult,
 } from './city/landmarks';
 import { buildInteriorFloor, buildLobby } from './city/interiors';
+import { streetLamp } from './city/facades';
+import { StreetLampBatch } from './environment/streetLampBatch';
 
 const { blockSize, gridBlocks } = WorldScale;
 
@@ -273,7 +275,7 @@ export class CitySystem implements System, CityService {
           cz: cj,
           facade: new FacadeBuilder(),
           surface: new SurfaceBuilder(),
-          detail: new DetailBuilder(),
+          detail: new DetailBuilder(true),
           group: g,
           centre: new THREE.Vector3(
             -HALF + (ci + 0.5) * CHUNK_M,
@@ -777,6 +779,14 @@ export class CitySystem implements System, CityService {
 
   private bake(): void {
     const phys = this.findPhysics();
+    const environment = this.ctx.tryGet(Services.EnvironmentDamage);
+    // One shared city-detail template, instanced into stable per-chunk slots.
+    // Its arm faces local +X and starts at y=0; each placement supplies yaw,
+    // pavement height and the modest height variation.
+    const lampTemplateBuilder = new DetailBuilder();
+    streetLamp(lampTemplateBuilder, 0, 0, 1, 0, 8.4, 0);
+    const lampTemplate = lampTemplateBuilder.build();
+    const lampTemplateTris = lampTemplate.getIndex()!.count / 3;
     for (const c of this.chunks) {
       const add = (
         b: FacadeBuilder | SurfaceBuilder | DetailBuilder,
@@ -795,9 +805,13 @@ export class CitySystem implements System, CityService {
       };
       this.stats.facadeTris += c.facade.triangles;
       this.stats.surfaceTris += c.surface.triangles;
-      this.stats.detailTris += c.detail.triangles;
+      this.stats.detailTris += c.detail.triangles + c.detail.streetLamps.length * lampTemplateTris;
 
       for (const box of c.detail.collisionBoxes) {
+        // Runtime street lamps are registered below from their addressable
+        // visual slots. Skipping the legacy semantic box avoids a duplicate
+        // indestructible collider occupying the same trunk.
+        if (box.kind === 'street-lamp' && c.detail.addressableStreetLamps) continue;
         phys?.addStaticBox(
           box.halfExtents,
           box.position,
@@ -815,6 +829,35 @@ export class CitySystem implements System, CityService {
       // most of a frame budget for detail nobody reads.
       add(c.detail, this.mats.detail, 'detail', false);
 
+      if (c.detail.streetLamps.length) {
+        const batch = new StreetLampBatch(
+          lampTemplate,
+          this.mats.detail,
+          c.detail.streetLamps,
+          `${c.group.name}-street-lamps-detail`,
+        );
+        c.group.add(batch.mesh);
+        if (phys) {
+          for (let i = 0; i < c.detail.streetLamps.length; i++) {
+            const lamp = c.detail.streetLamps[i];
+            const collider = phys.addStaticBox(
+              new THREE.Vector3(0.17, lamp.height / 2, 0.17),
+              new THREE.Vector3(lamp.x, lamp.y0 + lamp.height / 2, lamp.z),
+              undefined,
+              GROUP.prop,
+            );
+            environment?.registerBreakablePole({
+              id: `street-lamp:${c.cx}:${c.cz}:${i}`,
+              colliderHandle: collider.handle,
+              position: new THREE.Vector3(lamp.x, lamp.y0, lamp.z),
+              height: lamp.height,
+              inward: new THREE.Vector3(lamp.inwardX, 0, lamp.inwardZ),
+              setIntactVisible: (visible) => batch.setIntactVisible(i, visible),
+            });
+          }
+        }
+      }
+
       if (c.group.children.length) {
         c.group.updateMatrix();
         this.root.add(c.group);
@@ -822,7 +865,7 @@ export class CitySystem implements System, CityService {
       // Release the CPU-side accumulators.
       c.facade = new FacadeBuilder();
       c.surface = new SurfaceBuilder();
-      c.detail = new DetailBuilder();
+      c.detail = new DetailBuilder(true);
     }
   }
 

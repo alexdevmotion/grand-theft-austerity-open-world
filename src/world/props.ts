@@ -182,6 +182,8 @@ export class PropsSystem implements System {
   private flares = new HeadGlow();
   private lamps!: LampLights;
   private leaves!: LeafDrift;
+  private offPoleBroken: (() => void) | null = null;
+  private offGameStarted: (() => void) | null = null;
 
   private atlasMats: THREE.Material[] = [];
   private atlasTextures: THREE.Texture[] = [];
@@ -223,6 +225,20 @@ export class PropsSystem implements System {
 
     this.mats = createPropMaterials();
     this.lamps = new LampLights(5, this.root);
+    this.offPoleBroken = ctx.events.on('prop:broken', ({ kind, position }) => {
+      if (kind !== 'street-lamp') return;
+      // These effects were reconstructed from the same authored lamp base.
+      // Source tags make the match exact: a nearby kiosk or neighbouring lamp
+      // is never extinguished by a broad spatial radius.
+      this.pools.disableSourceNear(position.x, position.z, 0.45);
+      this.flares.disableSourceNear(position.x, position.z, 0.45);
+      this.lamps.disableSourceNear(position.x, position.z, 0.45);
+    });
+    this.offGameStarted = ctx.events.on('game:started', () => {
+      this.pools.enableAllSources();
+      this.flares.enableAllSources();
+      this.lamps.enableAllSources();
+    });
 
     const t0 = performance.now();
     this.buildTiles();
@@ -449,6 +465,7 @@ export class PropsSystem implements System {
     // single strongest cue in the reference frame.
     for (const lt of lampT) {
       const [lx, lz] = P(lt, 1.15);
+      const source = { x: lx, z: lz };
       const headOut = 1.9;
       const hx = lx + ed.ox * headOut;
       const hz = lz + ed.oz * headOut;
@@ -456,7 +473,9 @@ export class PropsSystem implements System {
       // Pool radius tracks the street: a 42 m boulevard needs a 14 m pool or
       // the carriageway between the two kerb lines stays pitch dark.
       const poolR = ed.rank === 2 ? 8.5 : ed.rank === 1 ? 6.8 : 5.0;
-      this.pools.add(hx, POOL_Y, hz, poolR, PAL.sodiumLamp, ed.rank === 0 ? 0.85 : 1.05);
+      this.pools.add(
+        hx, POOL_Y, hz, poolR, PAL.sodiumLamp, ed.rank === 0 ? 0.85 : 1.05, source,
+      );
       // THE WET-ROAD SMEAR. A round pool under a lamp reads as damp tarmac; the
       // reference frame's road is a mirror, and a mirror turns every sodium
       // head into a 25 m vertical streak running down the carriageway toward
@@ -469,17 +488,17 @@ export class PropsSystem implements System {
       const outer = road * (ed.rank === 2 ? 0.34 : 0.28);
       this.pools.addStreak(
         hx + ed.ox * outer, POOL_Y - 0.005, hz + ed.oz * outer,
-        poolR * 3.0, poolR * 0.5, tanX, tanZ, PAL.sodiumLamp, 0.34,
+        poolR * 3.0, poolR * 0.5, tanX, tanZ, PAL.sodiumLamp, 0.34, source,
       );
       this.pools.addStreak(
         hx + ed.ox * 0.6, POOL_Y - 0.004, hz + ed.oz * 0.6,
-        poolR * 1.9, poolR * 0.26, tanX, tanZ, PAL.sodiumLamp, 0.30,
+        poolR * 1.9, poolR * 0.26, tanX, tanZ, PAL.sodiumLamp, 0.30, source,
       );
-      this.flares.add(hx, hy - 0.03, hz, 0.5, PAL.sodiumLamp, 1.1);
+      this.flares.add(hx, hy - 0.03, hz, 0.5, PAL.sodiumLamp, 1.1, source);
       this.lamps.register({
         x: hx, y: hy - 0.4, z: hz,
         color: PAL.sodiumLamp.clone(), intensity: 26, distance: 24,
-      });
+      }, source);
     }
 
     /* ---- kerb-side furniture ---- */
@@ -1312,6 +1331,10 @@ export class PropsSystem implements System {
   }
 
   dispose(): void {
+    this.offPoleBroken?.();
+    this.offGameStarted?.();
+    this.offPoleBroken = null;
+    this.offGameStarted = null;
     this.root.traverse((o) => {
       const m = o as THREE.Mesh;
       if (m.isMesh) m.geometry.dispose();

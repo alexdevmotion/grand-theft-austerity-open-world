@@ -13,6 +13,7 @@
  */
 
 import * as THREE from 'three';
+import type { StreetLampSlot } from '../environment/streetLampBatch';
 
 export interface Vec2 {
   x: number;
@@ -414,6 +415,10 @@ export class DetailBuilder {
   readonly idx: number[] = [];
   /** Semantic blockers only; decorative sub-parts never add boxes themselves. */
   readonly collisionBoxes: DetailCollisionBox[] = [];
+  /** Addressable lamps are instanced at bake instead of merged into this mesh. */
+  readonly streetLamps: StreetLampSlot[] = [];
+
+  constructor(readonly addressableStreetLamps = false) {}
 
   get triangles(): number {
     return this.idx.length / 3;

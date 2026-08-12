@@ -83,6 +83,14 @@ test('ped and dog collision proxies follow attach, sync, despawn, and pool reuse
     expect(targets.get('ped-dog')?.x).toBeCloseTo(7, 8);
     expect(targets.get('ped-dog')?.z).toBeCloseTo(-6, 8);
 
+    expect(ped.strikeByVehicle(1, 0, 13)).toBe(true);
+    collisions.syncAll([ped]);
+    expect(collisions.physicalState(ped)).toMatchObject({
+      bodyType: 'dynamic',
+      mass: 75,
+      ccd: true,
+    });
+
     collisions.detach(ped);
     expect(physics.world.bodies.len()).toBe(0);
     expect(physics.world.colliders.len()).toBe(0);
@@ -95,9 +103,131 @@ test('ped and dog collision proxies follow attach, sync, despawn, and pool reuse
     expect(physics.world.bodies.len()).toBe(1);
     expect(physics.world.bodies.getAll()[0].translation().x).toBeCloseTo(11, 8);
     expect(physics.world.bodies.getAll()[0].translation().z).toBeCloseTo(-8, 8);
+    expect(collisions.physicalState(ped)).toMatchObject({
+      bodyType: 'kinematic',
+      linearVelocity: [0, 0, 0],
+    });
   } finally {
     collisions.dispose();
     expect(physics.world.bodies.len()).toBe(0);
+    physics.dispose();
+  }
+});
+
+test('a fatal vehicle strike launches an authoritative CCD body downstream and upward', async () => {
+  const { physics } = await physicsHarness();
+  const collisions = new PedCollisionProxies(physics);
+  const ped = pedAt(0, 0, 'ped-fatal-dynamic-launch');
+
+  try {
+    collisions.attach(ped);
+    expect(ped.strikeByVehicle(1, 0, 13)).toBe(true);
+    expect(ped.isAlive).toBe(false);
+
+    collisions.syncAll([ped]);
+    const state = collisions.physicalState(ped);
+    expect(state?.bodyType).toBe('dynamic');
+    expect(state?.linearVelocity[0]).toBeGreaterThan(7);
+    expect(state?.linearVelocity[1]).toBeGreaterThan(3.5);
+    expect(state?.linearVelocity[2]).toBeCloseTo(0, 6);
+    expect(state?.mass).toBeCloseTo(75, 3);
+    expect(state?.ccd).toBe(true);
+  } finally {
+    collisions.dispose();
+    physics.dispose();
+  }
+});
+
+for (const [label, group] of [
+  ['building wall', GROUP.staticWorld],
+  ['substantial prop', GROUP.prop],
+] as const) {
+  test(`a launched fatal body cannot tunnel through a ${label} and settles on terrain`, async () => {
+    const { ctx, physics } = await physicsHarness();
+    physics.world.gravity = { x: 0, y: -9.81, z: 0 };
+    const collisions = new PedCollisionProxies(physics);
+    const ped = pedAt(0, 0, `ped-fatal-${label}`);
+
+    try {
+      physics.addStaticBox(
+        new THREE.Vector3(8, 0.1, 8),
+        new THREE.Vector3(0, -0.1, 0),
+        undefined,
+        GROUP.terrain,
+      );
+      physics.addStaticBox(
+        new THREE.Vector3(0.04, 1.5, 2),
+        new THREE.Vector3(2, 1.5, 0),
+        undefined,
+        group,
+      );
+      collisions.attach(ped);
+      expect(ped.strikeByVehicle(1, 0, 13)).toBe(true);
+      collisions.syncAll([ped]);
+
+      let furthestX = Number.NEGATIVE_INFINITY;
+      for (let frame = 0; frame < 420; frame++) {
+        physics.fixedUpdate(1 / 60, ctx);
+        collisions.syncAll([ped]);
+        furthestX = Math.max(furthestX, ped.position.x);
+      }
+
+      const settled = collisions.physicalState(ped);
+      expect(furthestX).toBeLessThan(1.98);
+      expect(ped.position.x).toBeLessThan(1.98);
+      expect(ped.position.y).toBeGreaterThanOrEqual(0.29);
+      expect(ped.position.y).toBeLessThan(0.6);
+      expect(Math.abs(settled?.linearVelocity[1] ?? Infinity)).toBeLessThan(0.08);
+      expect(settled?.sleeping).toBe(true);
+    } finally {
+      collisions.dispose();
+      physics.dispose();
+    }
+  });
+}
+
+test('a settled downed body remains physically movable by a later vehicle impact', async () => {
+  const { ctx, physics } = await physicsHarness();
+  physics.world.gravity = { x: 0, y: -9.81, z: 0 };
+  const collisions = new PedCollisionProxies(physics);
+  const ped = pedAt(0, 0, 'ped-dynamic-rehit');
+
+  try {
+    physics.addStaticBox(
+      new THREE.Vector3(12, 0.1, 4),
+      new THREE.Vector3(0, -0.1, 0),
+      undefined,
+      GROUP.terrain,
+    );
+    collisions.attach(ped);
+    expect(ped.strikeByVehicle(0, 0, 5)).toBe(true);
+    collisions.syncAll([ped]);
+    for (let frame = 0; frame < 300; frame++) {
+      physics.fixedUpdate(1 / 60, ctx);
+      collisions.syncAll([ped]);
+    }
+    const before = ped.position.x;
+
+    const vehicle = physics.world.createRigidBody(
+      physics.rapier.RigidBodyDesc.dynamic()
+        .setTranslation(-3, 0.65, 0)
+        .setLinvel(10, 0, 0)
+        .setCcdEnabled(true),
+    );
+    physics.world.createCollider(
+      physics.rapier.ColliderDesc.cuboid(0.7, 0.55, 0.8)
+        .setCollisionGroups(GROUP.vehicle)
+        .setMass(900),
+      vehicle,
+    );
+    for (let frame = 0; frame < 90; frame++) {
+      physics.fixedUpdate(1 / 60, ctx);
+      collisions.syncAll([ped]);
+    }
+
+    expect(ped.position.x).toBeGreaterThan(before + 0.3);
+  } finally {
+    collisions.dispose();
     physics.dispose();
   }
 });

@@ -98,6 +98,18 @@ interface KinematicProxy {
 
 interface PedProxy extends KinematicProxy {
   dog: KinematicProxy | null;
+  /** The standing kinematic capsule has been handed to Rapier as a corpse. */
+  downed: boolean;
+}
+
+export interface PedPhysicalState {
+  readonly bodyType: 'kinematic' | 'dynamic';
+  readonly position: readonly [number, number, number];
+  readonly linearVelocity: readonly [number, number, number];
+  readonly angularVelocity: readonly [number, number, number];
+  readonly mass: number;
+  readonly ccd: boolean;
+  readonly sleeping: boolean;
 }
 
 /**
@@ -137,7 +149,7 @@ export class PedCollisionProxies {
         .setRestitution(0),
       body,
     );
-    const proxy: PedProxy = { body, collider, radius, halfHeight, dog: null };
+    const proxy: PedProxy = { body, collider, radius, halfHeight, dog: null, downed: false };
     this.proxies.set(ped.id, proxy);
     if (ped.dog) proxy.dog = this.createDog(ped);
     this.snap(ped);
@@ -157,15 +169,31 @@ export class PedCollisionProxies {
     // Peds solve after Rapier has already stepped this fixed frame. Publish the
     // solved transforms now, or every visible analytic actor leads its physical
     // proxy by one complete simulation step.
-    for (const ped of peds) {
-      if (!ped.ragdolled) this.snap(ped);
-    }
+    for (const ped of peds) this.snap(ped);
     this.physics.world.propagateModifiedBodyPositionsToColliders();
   }
 
   snapAll(peds: readonly Ped[]): void {
     for (const ped of peds) this.snap(ped);
     this.physics.world.propagateModifiedBodyPositionsToColliders();
+  }
+
+  /** Read-only state used by deterministic browser QA and integration tests. */
+  physicalState(ped: Ped): PedPhysicalState | null {
+    const proxy = this.proxies.get(ped.id);
+    if (!proxy) return null;
+    const p = proxy.body.translation();
+    const v = proxy.body.linvel();
+    const w = proxy.body.angvel();
+    return {
+      bodyType: proxy.downed ? 'dynamic' : 'kinematic',
+      position: [p.x, p.y, p.z],
+      linearVelocity: [v.x, v.y, v.z],
+      angularVelocity: [w.x, w.y, w.z],
+      mass: proxy.body.mass(),
+      ccd: proxy.body.isCcdEnabled(),
+      sleeping: proxy.body.isSleeping(),
+    };
   }
 
   detach(ped: Ped): void {
@@ -280,15 +308,21 @@ export class PedCollisionProxies {
   private writeTransforms(ped: Ped, immediate: boolean): void {
     const proxy = this.proxies.get(ped.id);
     if (!proxy) return;
-    this.pedPose(
-      ped,
-      ped.position.x,
-      ped.position.y,
-      ped.position.z,
-      proxy.halfHeight,
-      proxy.radius,
-    );
-    this.writeBody(proxy.body, immediate);
+    if (ped.mode === 'down') {
+      if (!proxy.downed) this.promoteDownedBody(ped, proxy);
+      this.readDownedBody(ped, proxy);
+    } else {
+      if (proxy.downed) this.restoreUprightBody(proxy);
+      this.pedPose(
+        ped,
+        ped.position.x,
+        ped.position.y,
+        ped.position.z,
+        proxy.halfHeight,
+        proxy.radius,
+      );
+      this.writeBody(proxy.body, immediate);
+    }
 
     if (ped.dog && !proxy.dog) proxy.dog = this.createDog(ped);
     else if (!ped.dog && proxy.dog) {
@@ -301,6 +335,73 @@ export class PedCollisionProxies {
       this.dogPose(ped, ped.dog.x, ped.dog.y, ped.dog.z);
       this.writeBody(proxy.dog.body, immediate);
     }
+  }
+
+  /**
+   * Transfer a struck pedestrian to a single authoritative dynamic body.
+   * Keeping the existing allocation makes the transition atomic: vehicles
+   * that were touching the standing capsule still touch the corpse on the
+   * very next solver step, so a real bumper contact supplies follow-up force.
+   */
+  private promoteDownedBody(ped: Ped, proxy: PedProxy): void {
+    const body = proxy.body;
+    const previous = body.translation();
+    this.pedPose(
+      ped,
+      ped.position.x,
+      ped.position.y,
+      ped.position.z,
+      proxy.halfHeight,
+      proxy.radius,
+    );
+    // A standing actor's hips are near the upright capsule centre. Preserve
+    // that height for the launch instead of teleporting the victim's hips to
+    // pavement level at the instant of impact.
+    _proxyPosition.y = Math.max(_proxyPosition.y, previous.y);
+
+    body.setBodyType(this.physics.rapier.RigidBodyType.Dynamic, true);
+    body.enableCcd(true);
+    body.setSoftCcdPrediction(0.35);
+    body.setLinearDamping(0.18);
+    body.setAngularDamping(0.42);
+    body.setTranslation(_proxyPosition, true);
+    body.setRotation(_proxyRotation, true);
+    body.setLinvel({ x: ped.vel.x, y: ped.vel.y, z: ped.vel.z }, true);
+    body.setAngvel({
+      x: ped.vel.z * 0.2,
+      y: Math.sign(ped.vel.x + ped.vel.z || 1) * 0.55,
+      z: -ped.vel.x * 0.2,
+    }, true);
+    proxy.collider.setMass(75);
+    proxy.collider.setFriction(0.85);
+    proxy.collider.setRestitution(0.025);
+    body.recomputeMassPropertiesFromColliders();
+    proxy.downed = true;
+  }
+
+  /** Rapier has already stepped this frame; publish its solved corpse pose. */
+  private readDownedBody(ped: Ped, proxy: PedProxy): void {
+    const p = proxy.body.translation();
+    const v = proxy.body.linvel();
+    ped.position.set(p.x, p.y, p.z);
+    ped.vel.set(v.x, v.y, v.z);
+  }
+
+  /** Defensive reset for a pooled Ped reattached without an intervening detach. */
+  private restoreUprightBody(proxy: PedProxy): void {
+    const body = proxy.body;
+    body.setBodyType(this.physics.rapier.RigidBodyType.KinematicPositionBased, true);
+    body.enableCcd(false);
+    body.setSoftCcdPrediction(0);
+    body.setLinvel(ZERO_VECTOR, true);
+    body.setAngvel(ZERO_VECTOR, true);
+    body.resetForces(true);
+    body.resetTorques(true);
+    proxy.collider.setFriction(0.72);
+    proxy.collider.setRestitution(0);
+    proxy.collider.setDensity(1);
+    body.recomputeMassPropertiesFromColliders();
+    proxy.downed = false;
   }
 
   private writeBody(body: RAPIER.RigidBody, immediate: boolean): void {
@@ -369,6 +470,7 @@ const _proxyRotation = new THREE.Quaternion();
 const _horizontalCapsuleRotation = new THREE.Quaternion()
   .setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
 const IDENTITY_ROTATION = { x: 0, y: 0, z: 0, w: 1 } as const;
+const ZERO_VECTOR = { x: 0, y: 0, z: 0 } as const;
 
 /**
  * Resolve a requested actor root before any object or collider is attached.
@@ -531,7 +633,12 @@ export class PedSystem implements System, PedService {
   private readonly camFwd = new THREE.Vector3();
   private readonly debugMeleePos = new THREE.Vector3();
   private readonly debugMeleeFwd = new THREE.Vector3();
+  private readonly debugCrashPos = new THREE.Vector3();
+  private readonly debugCrashFwd = new THREE.Vector3();
   private debugMeleeTargetId: string | null = null;
+  private debugCrashTargetId: string | null = null;
+  /** Stable Ped ids are reused by the pool, so this is cleared on attachment. */
+  private readonly reportedDeaths = new Set<string>();
   private spawnTimer = 0;
   private filled = false;
   private tension = 0;
@@ -691,9 +798,84 @@ export class PedSystem implements System, PedService {
         this.debugMeleeTargetId = ped.id;
         return this.debugPedState(ped.id);
       },
+      /**
+       * Put a living, anchored civilian in the path of a real vehicle. The
+       * target is never damaged here: QA must drive into it so the same
+       * VehicleGrid contact, damage and dynamic-body transition run as play.
+       */
+      spawnCrashTarget: (opts: {
+        x?: number;
+        y?: number;
+        z?: number;
+        vehicleId?: string;
+        distance?: number;
+      } = {}) => {
+        const player = ctx.tryGet(Services.Player);
+        const vehicles = ctx.tryGet(Services.Vehicles);
+        const vehicle = opts.vehicleId
+          ? vehicles?.get(opts.vehicleId)
+          : player?.inVehicle ?? vehicles?.all[0];
+        const hasPoint = Number.isFinite(opts.x) && Number.isFinite(opts.z);
+        const distance = THREE.MathUtils.clamp(opts.distance ?? 8, 3, 30);
+
+        if (hasPoint) {
+          this.debugCrashPos.set(opts.x!, opts.y ?? 0, opts.z!);
+          this.debugCrashFwd.set(0, 0, 1);
+        } else if (vehicle) {
+          this.debugCrashFwd.set(0, 0, 1).applyQuaternion(vehicle.rotation).setY(0).normalize();
+          if (vehicle.speed < -0.1) this.debugCrashFwd.negate();
+          this.debugCrashPos.copy(vehicle.position).addScaledVector(this.debugCrashFwd, distance);
+        } else if (player) {
+          this.debugCrashFwd.set(0, 0, 1)
+            .applyQuaternion(player.character.object.quaternion)
+            .setY(0)
+            .normalize();
+          this.debugCrashPos.copy(player.position).addScaledVector(this.debugCrashFwd, distance);
+        } else {
+          return null;
+        }
+        const groundY = this.env.spatial.groundHeight(this.debugCrashPos.x, this.debugCrashPos.z);
+        if (!Number.isFinite(groundY)) return null;
+        this.debugCrashPos.y = groundY;
+
+        if (this.debugCrashTargetId) this.despawn(this.debugCrashTargetId);
+        // Keep the fixture deterministic: a passer-by may not claim the same
+        // physical root and force spawn resolution to move the target aside.
+        for (const p of this.list.slice()) {
+          const dx = p.position.x - this.debugCrashPos.x;
+          const dz = p.position.z - this.debugCrashPos.z;
+          if (dx * dx + dz * dz < 1.4 * 1.4) this.despawn(p.id);
+        }
+        const heading = Math.atan2(-this.debugCrashFwd.x, -this.debugCrashFwd.z);
+        let handle: CharacterHandle;
+        try {
+          handle = this.spawn('civilian', this.debugCrashPos, heading);
+        } catch {
+          return null;
+        }
+        const ped = this.peds.get(handle.id);
+        if (!ped) return null;
+        ped.anchorAt(ped.position.x, ped.position.z, heading, {
+          kind: 'wait', pose: 'idle', duration: 1e6, facesGroup: false,
+        });
+        this.grid.publish(
+          this.list,
+          this.env.spatial,
+          this.env.playerPos,
+          this.env.playerInVehicle,
+          this.env.sweepPhysics,
+          this.env.sweepDogPhysics,
+        );
+        this.collisions?.snapAll(this.list);
+        this.debugCrashTargetId = ped.id;
+        return this.debugPedState(ped.id);
+      },
       state: (id: string) => this.debugPedState(id),
       combatTarget: () => this.debugMeleeTargetId
         ? this.debugPedState(this.debugMeleeTargetId)
+        : null,
+      crashTarget: () => this.debugCrashTargetId
+        ? this.debugPedState(this.debugCrashTargetId)
         : null,
       setDensity: (n: number) => {
         this.density = n;
@@ -826,6 +1008,8 @@ export class PedSystem implements System, PedService {
       pose: p.pose,
       faction: p.faction,
       position: p.position.toArray(),
+      velocity: p.vel.toArray(),
+      physics: this.collisions?.physicalState(p) ?? null,
     };
   }
 
@@ -906,6 +1090,7 @@ export class PedSystem implements System, PedService {
     this.pool.push(p);
     this.stats.despawned++;
     if (this.debugMeleeTargetId === id) this.debugMeleeTargetId = null;
+    if (this.debugCrashTargetId === id) this.debugCrashTargetId = null;
   }
 
   get(id: string): CharacterHandle | undefined {
@@ -973,6 +1158,7 @@ export class PedSystem implements System, PedService {
   }
 
   private attach(p: Ped): void {
+    this.reportedDeaths.delete(p.id);
     this.peds.set(p.id, p);
     this.list.push(p);
     this.renderer.root.add(p.object);
@@ -1253,8 +1439,15 @@ export class PedSystem implements System, PedService {
   }
 
   private onKnockdown(p: Ped, fatal: boolean): void {
+    // A body can keep receiving physical impulses after death, but the crime,
+    // audio and witness reaction belong to the fatal transition, not every
+    // contact solver frame while a bumper remains against the corpse.
+    if (fatal && this.reportedDeaths.has(p.id)) return;
     this.stats.knockdowns++;
-    this.ctx.events.emit('ped:killed', { position: p.position.clone() });
+    if (fatal) {
+      this.reportedDeaths.add(p.id);
+      this.ctx.events.emit('ped:killed', { position: p.position.clone() });
+    }
     this.ctx.tryGet(Services.Audio)?.oneShot(fatal ? 'ped_hit' : 'ped_yell', p.position, 0.8);
     // Everyone who saw it runs.
     this.scatter(p.position, 22);
@@ -1292,9 +1485,9 @@ export class PedSystem implements System, PedService {
 
     t = prof.begin();
     this.grid.step(dt, this.env);
-    // Ordinary analytic actors have their final fixed-step pose now. Ragdoll
-    // hips advance in lateUpdate with the visual skeleton and are snapped
-    // there, avoiding a proxy that trails the visible body by one render step.
+    // Ordinary actors publish their solved kinematic pose. Downed actors read
+    // back the dynamic Rapier body's post-step transform; rendering follows it
+    // and never writes a competing corpse trajectory.
     this.collisions?.syncAll(this.list);
     prof.add('peds.steer', t);
 

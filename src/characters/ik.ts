@@ -404,7 +404,7 @@ export class Ragdoll {
     return this.pos[P.hips];
   }
 
-  update(dt: number, phys: PhysicsWorld | null): void {
+  update(dt: number, phys: PhysicsWorld | null, hipsAnchor?: THREE.Vector3): void {
     const step = Math.min(dt, 1 / 30);
     this.groundAge += step;
     if (phys && this.groundAge > 0.25) {
@@ -459,6 +459,8 @@ export class Ragdoll {
       }
     }
 
+    if (hipsAnchor) this.anchorHips(hipsAnchor);
+
     let motion = 0;
     for (let i = 0; i < PARTICLE_COUNT; i++) motion += this.pos[i].distanceToSquared(this.prev[i]);
     this.settled = motion < 1e-5 ? this.settled + step : 0;
@@ -466,6 +468,22 @@ export class Ragdoll {
 
   get isSettled(): boolean {
     return this.settled > 0.8;
+  }
+
+  /**
+   * Keep the visual particle cloud on a single authoritative physics body.
+   * Both current and previous positions move by the same delta, preserving
+   * limb velocity while preventing the independent Verlet root from drifting
+   * through a wall that stopped the Rapier corpse capsule.
+   */
+  anchorHips(worldPosition: THREE.Vector3): void {
+    if (!Number.isFinite(worldPosition.x + worldPosition.y + worldPosition.z)) return;
+    _d.subVectors(worldPosition, this.pos[P.hips]);
+    if (_d.lengthSq() < 1e-16) return;
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      this.pos[i].add(_d);
+      this.prev[i].add(_d);
+    }
   }
 
   /** Map the particle cloud back onto the bone hierarchy. */

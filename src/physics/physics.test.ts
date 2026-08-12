@@ -63,6 +63,12 @@ describe('collision group arithmetic', () => {
     }
   });
 
+  test('visible debris is solid to vehicles, characters, players, props and terrain', () => {
+    for (const name of ['staticWorld', 'terrain', 'vehicle', 'character', 'player', 'prop'] as const) {
+      expect(`${name}: ${interacts(GROUP.debris, GROUP[name])}`).toBe(`${name}: true`);
+    }
+  });
+
   /**
    * THE ORIGINAL BUG, as arithmetic — and why it was so hard to see.
    *

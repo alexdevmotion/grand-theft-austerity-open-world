@@ -173,3 +173,22 @@ test('fatal service strike emits the existing killed consequence exactly once', 
   // listener; the pedestrian service must not also double-charge it here.
   expect(h.heat).toEqual([]);
 });
+
+test('knockdown consequences report death only for a fatal transition and only once', () => {
+  const target = new Ped();
+  target.position.set(2, 0, -3);
+  const h = serviceHarness(target);
+  const notify = (h.system as unknown as {
+    onKnockdown(ped: Ped, fatal: boolean): void;
+  }).onKnockdown.bind(h.system);
+
+  notify(target, false);
+  expect(h.killed).toEqual([]);
+
+  target.health = 0;
+  notify(target, true);
+  notify(target, true);
+  expect(h.killed).toHaveLength(1);
+  expect(h.killed[0].toArray()).toEqual(target.position.toArray());
+  expect(h.audio.map((entry) => entry.id)).toEqual(['ped_yell', 'ped_hit']);
+});

@@ -23,7 +23,7 @@ import type {
   SpatialQuery,
 } from '../../core/services';
 import { EdgeKind, PavementGraph, type PavEdge } from './navigation';
-import { React, pickIdle, type IdleSpec } from './behaviours';
+import { React, pickIdle, vehicleStrikeModel, type IdleSpec } from './behaviours';
 import type { PedAppearance, PoseState, RigSubject } from './rig';
 
 export type PedMode = 'route' | 'waitCross' | 'anchored' | 'flee' | 'down' | 'scripted';
@@ -944,6 +944,29 @@ export class Ped implements CharacterHandle, RigSubject {
     this.health = Math.max(0, this.health - 34 - force * 6);
   }
 
+  /** Apply one ambient vehicle-grid contact episode. */
+  strikeByVehicle(ix: number, iz: number, speed: number): boolean {
+    if (this.mode === 'down') return false;
+    const strike = vehicleStrikeModel(speed);
+    if (!strike) return false;
+    const l = Math.hypot(ix, iz) || 1;
+    const vx = (ix / l) * strike.horizontalSpeed;
+    const vz = (iz / l) * strike.horizontalSpeed;
+    this.mode = 'down';
+    this.pose = 'down';
+    this.downTimer = React.downSeconds;
+    this.vel.set(vx, strike.verticalSpeed, vz);
+    // Both the analytic root and a promoted visual ragdoll start from the same
+    // world-space launch velocity, so promotion does not change the trajectory.
+    this.ragdollPending = new THREE.Vector3(vx, strike.verticalSpeed, vz);
+    this.tiltRoll = 0;
+    this.tiltPitch = 0;
+    this.tumbleDir = Math.abs(wrapPi(Math.atan2(ix, iz) - this.yaw)) < Math.PI / 2 ? -1 : 1;
+    this.health = Math.max(0, this.health - strike.damage);
+    this.state = this.health > 0 ? 'ragdoll' : 'die';
+    return true;
+  }
+
   private tumbleDir = 1;
 
   /* ---------------------------------------------------------------- */
@@ -961,7 +984,10 @@ export class Ped implements CharacterHandle, RigSubject {
       return;
     }
 
-    this.senseVehicles(dt, env);
+    const struck = this.senseVehicles(dt, env);
+    // A strike changes modes synchronously. Do not let the standing locomotion
+    // pass overwrite its die/ragdoll state before the next ballistic update.
+    if (struck) return;
     this.sensePlayer(dt, env);
 
     switch (this.mode) {
@@ -987,7 +1013,7 @@ export class Ped implements CharacterHandle, RigSubject {
   private threatZ = 0;
   private threatWeight = 0;
 
-  private senseVehicles(dt: number, env: CrowdEnv): void {
+  private senseVehicles(dt: number, env: CrowdEnv): boolean {
     this.threatWeight = 0;
     this.threatX = 0;
     this.threatZ = 0;
@@ -1052,14 +1078,17 @@ export class Ped implements CharacterHandle, RigSubject {
 
     if (hit) {
       const v = hit as VehicleSample;
-      this.knockDown(v.vx, v.vz, Math.min(9, v.speed * 0.55));
-      env.onKnockdown(this, v.speed > 9 || this.health <= 0);
-      return;
+      if (this.strikeByVehicle(v.vx, v.vz, v.speed)) {
+        env.onKnockdown(this, !this.isAlive);
+        return true;
+      }
+      return false;
     }
 
     this.flinchTimer = Math.max(0, this.flinchTimer - dt);
     // Ambient tension (sirens, stars) makes the crowd jumpy.
     if (env.tension > 0.5 && this.alarm < env.tension * 0.6) this.alarm = env.tension * 0.6;
+    return false;
   }
 
   private sensePlayer(dt: number, env: CrowdEnv): void {

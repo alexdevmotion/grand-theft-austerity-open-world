@@ -1686,6 +1686,10 @@ export function streetLamp(
   y0 = 0.17,
 ): void {
   d.collisionBox('street-lamp', x, y0 + height / 2, z, 0.34, height, 0.34);
+  if (d.addressableStreetLamps && Array.isArray(d.streetLamps)) {
+    d.streetLamps.push({ x, z, y0, inwardX, inwardZ, height });
+    return;
+  }
   const alongX = Math.abs(inwardX) > 0.5;
   d.cyl(x, y0, z, 0.155, 0.085, height, 5, { color: DetailColor.metal, mr: MR.metal }, false);
   const reach = 1.9;

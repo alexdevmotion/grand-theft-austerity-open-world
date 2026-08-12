@@ -20,6 +20,20 @@
 import * as THREE from 'three';
 import { PAL } from '../../render/materials';
 
+export interface LightSourceRef {
+  x: number;
+  z: number;
+}
+
+const HIDDEN_INSTANCE = new THREE.Matrix4().makeScale(0, 0, 0);
+
+function sourceMatches(source: LightSourceRef | null, x: number, z: number, radius: number): boolean {
+  if (!source) return false;
+  const dx = source.x - x;
+  const dz = source.z - z;
+  return dx * dx + dz * dz <= radius * radius;
+}
+
 /* ------------------------------------------------------------------ */
 /* Radial falloff texture                                              */
 /* ------------------------------------------------------------------ */
@@ -76,6 +90,8 @@ function radialTexture(size: number): THREE.DataTexture {
 export class GroundGlow {
   private readonly mats: THREE.Matrix4[] = [];
   private readonly cols: THREE.Color[] = [];
+  private readonly sources: Array<LightSourceRef | null> = [];
+  private readonly enabled: boolean[] = [];
   private readonly texture: THREE.DataTexture;
   readonly material: THREE.MeshBasicMaterial;
   mesh: THREE.InstancedMesh | null = null;
@@ -111,12 +127,17 @@ export class GroundGlow {
   }
 
   /** `radius` metres, `strength` scales the additive contribution. */
-  add(x: number, y: number, z: number, radius: number, color: THREE.Color, strength: number): void {
+  add(
+    x: number, y: number, z: number, radius: number, color: THREE.Color, strength: number,
+    source?: LightSourceRef,
+  ): void {
     this._q.setFromEuler(this._e);
     this._p.set(x, y, z);
     this._s.set(radius * 2, radius * 2, 1);
     this.mats.push(this._m.clone().compose(this._p, this._q, this._s));
     this.cols.push(color.clone().multiplyScalar(strength));
+    this.sources.push(source ? { ...source } : null);
+    this.enabled.push(true);
   }
 
   /**
@@ -135,6 +156,7 @@ export class GroundGlow {
     len: number, wid: number,
     dirX: number, dirZ: number,
     color: THREE.Color, strength: number,
+    source?: LightSourceRef,
   ): void {
     // The plane is built in XY and laid flat by a -90 deg X rotation, so its
     // local +Y maps to world -Z. Rolling about the (already-rotated) Z axis by
@@ -145,6 +167,8 @@ export class GroundGlow {
     this._s.set(wid, len, 1);
     this.mats.push(this._m.clone().compose(this._p, this._q, this._s));
     this.cols.push(color.clone().multiplyScalar(strength));
+    this.sources.push(source ? { ...source } : null);
+    this.enabled.push(true);
   }
 
   get count(): number {
@@ -183,6 +207,31 @@ export class GroundGlow {
     mesh.computeBoundingSphere();
     this.mesh = mesh;
     return mesh;
+  }
+
+  disableSourceNear(x: number, z: number, radius: number): number {
+    let disabled = 0;
+    for (let i = 0; i < this.sources.length; i++) {
+      if (!this.enabled[i] || !sourceMatches(this.sources[i], x, z, radius)) continue;
+      this.enabled[i] = false;
+      this.mesh?.setMatrixAt(i, HIDDEN_INSTANCE);
+      disabled++;
+    }
+    if (disabled && this.mesh) this.mesh.instanceMatrix.needsUpdate = true;
+    return disabled;
+  }
+
+  enableAllSources(): void {
+    if (!this.mesh) {
+      this.enabled.fill(true);
+      return;
+    }
+    for (let i = 0; i < this.enabled.length; i++) {
+      if (this.enabled[i]) continue;
+      this.enabled[i] = true;
+      this.mesh.setMatrixAt(i, this.mats[i]);
+    }
+    this.mesh.instanceMatrix.needsUpdate = true;
   }
 
   dispose(): void {
@@ -240,13 +289,20 @@ export class HeadGlow {
   private readonly pos: number[] = [];
   private readonly size: number[] = [];
   private readonly col: number[] = [];
+  private readonly sources: Array<LightSourceRef | null> = [];
+  private readonly enabled: boolean[] = [];
   private readonly uniforms = { uGain: { value: 1.0 } };
   mesh: THREE.Mesh | null = null;
 
-  add(x: number, y: number, z: number, radius: number, color: THREE.Color, strength: number): void {
+  add(
+    x: number, y: number, z: number, radius: number, color: THREE.Color, strength: number,
+    source?: LightSourceRef,
+  ): void {
     this.pos.push(x, y, z);
     this.size.push(radius, radius);
     this.col.push(color.r * strength, color.g * strength, color.b * strength);
+    this.sources.push(source ? { ...source } : null);
+    this.enabled.push(true);
   }
 
   get count(): number {
@@ -285,6 +341,29 @@ export class HeadGlow {
     return mesh;
   }
 
+  disableSourceNear(x: number, z: number, radius: number): number {
+    const size = this.mesh?.geometry.getAttribute('aSize');
+    let disabled = 0;
+    for (let i = 0; i < this.sources.length; i++) {
+      if (!this.enabled[i] || !sourceMatches(this.sources[i], x, z, radius)) continue;
+      this.enabled[i] = false;
+      size?.setXY(i, 0, 0);
+      disabled++;
+    }
+    if (disabled && size) size.needsUpdate = true;
+    return disabled;
+  }
+
+  enableAllSources(): void {
+    const size = this.mesh?.geometry.getAttribute('aSize');
+    for (let i = 0; i < this.enabled.length; i++) {
+      if (this.enabled[i]) continue;
+      this.enabled[i] = true;
+      size?.setXY(i, this.size[i * 2], this.size[i * 2 + 1]);
+    }
+    if (size) size.needsUpdate = true;
+  }
+
   /** Lamps burn brighter after dusk. */
   setGain(v: number): void {
     this.uniforms.uGain.value = v;
@@ -316,11 +395,12 @@ export interface LampSite {
  */
 export class LampLights {
   private readonly lights: THREE.PointLight[] = [];
-  private readonly sites: LampSite[] = [];
+  private readonly sites: Array<LampSite & { source: LightSourceRef | null; active: boolean }> = [];
   private readonly cam = new THREE.Vector3();
   private readonly order: number[] = [];
   private accum = 0;
   private gain = 1;
+  private readonly assigned: number[] = [];
 
   constructor(readonly size: number, parent: THREE.Object3D) {
     for (let i = 0; i < size; i++) {
@@ -329,11 +409,12 @@ export class LampLights {
       l.name = `props-lamp-${i}`;
       parent.add(l);
       this.lights.push(l);
+      this.assigned.push(-1);
     }
   }
 
-  register(site: LampSite): void {
-    this.sites.push(site);
+  register(site: LampSite, source?: LightSourceRef): void {
+    this.sites.push({ ...site, source: source ? { ...source } : null, active: true });
   }
 
   get siteCount(): number {
@@ -357,6 +438,7 @@ export class LampLights {
     const bestD: number[] = [];
     for (let i = 0; i < this.sites.length; i++) {
       const s = this.sites[i];
+      if (!s.active) continue;
       const dx = s.x - this.cam.x;
       const dz = s.z - this.cam.z;
       const dy = s.y - this.cam.y;
@@ -378,9 +460,11 @@ export class LampLights {
       const l = this.lights[i];
       if (i >= best.length) {
         l.intensity = 0;
+        this.assigned[i] = -1;
         continue;
       }
       const s = this.sites[best[i]];
+      this.assigned[i] = best[i];
       const d2 = bestD[i];
       l.position.set(s.x, s.y, s.z);
       l.color.copy(s.color);
@@ -391,9 +475,30 @@ export class LampLights {
     }
   }
 
+  disableSourceNear(x: number, z: number, radius: number): number {
+    let disabled = 0;
+    for (let i = 0; i < this.sites.length; i++) {
+      const site = this.sites[i];
+      if (!site.active || !sourceMatches(site.source, x, z, radius)) continue;
+      site.active = false;
+      disabled++;
+      for (let k = 0; k < this.assigned.length; k++) {
+        if (this.assigned[k] !== i) continue;
+        this.assigned[k] = -1;
+        this.lights[k].intensity = 0;
+      }
+    }
+    return disabled;
+  }
+
+  enableAllSources(): void {
+    for (const site of this.sites) site.active = true;
+  }
+
   dispose(): void {
     for (const l of this.lights) l.removeFromParent();
     this.lights.length = 0;
+    this.assigned.length = 0;
     this.sites.length = 0;
   }
 }

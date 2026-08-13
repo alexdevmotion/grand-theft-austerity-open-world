@@ -247,7 +247,11 @@ export class ProgressionSystem implements System, ProgressionService {
       if (Math.hypot(p.x - lm.position.x, p.z - lm.position.z) > r) continue;
       this.discoveredSet.add(id);
       this.addXp(DISCOVERY_XP, 'descoperire');
-      this.ctx.tryGet(Services.Hud)?.toast(`Descoperit: ${lm.name} · +${DISCOVERY_XP} XP`, 'good', 3600);
+      this.ctx.tryGet(Services.Hud)?.toast(
+        tp('Descoperit: {name} · +{gain} XP', { name: t(lm.name), gain: DISCOVERY_XP }),
+        'good',
+        3600,
+      );
     }
   }
 

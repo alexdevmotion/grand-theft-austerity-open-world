@@ -163,6 +163,45 @@ test('switching language moves the whole interface and then comes back', () => {
   expect(t('NICIUN PROGRES SALVAT')).toBe('NICIUN PROGRES SALVAT');
 });
 
+test('English covers every page of the pause menu and gameplay notices', () => {
+  const sources = [
+    'PAUZĂ',
+    'MENIU / SETĂRI',
+    'MENIU / COMENZI',
+    'B★ BUILDERSTAR GAMES — TRANSMISIUNE ÎNTRERUPTĂ',
+    'ESC ÎNAPOI · ↑ ↓ NAVIGARE · ← → MODIFICĂ · ENTER SELECTEAZĂ',
+    'REIA JOCUL',
+    'înapoi în București',
+    'SALVEAZĂ',
+    'SETĂRI',
+    'imagine, sunet, mouse',
+    'toate tastele',
+    'progres salvat',
+    'salvarea nu este disponibilă',
+    'scrie progresul în browser',
+    'nivel {level} · {lei} lei · {mins} min',
+    'Calitate imagine',
+    'Volum principal',
+    'Sensibilitate mouse',
+    'Inversează axa Y',
+    'NU',
+    'DA',
+    'ÎNAPOI',
+    'Citite direct din harta de input a jocului — nu dintr-o listă scrisă de mână.',
+    'BENZI CU ȚINTE — cauciucuri compromise',
+    'Radar Ministerial: viteză înregistrată',
+    'Tracțiune de urgență · mașina a ieșit din blocaj',
+    'Descoperit: {name} · +{gain} XP',
+  ];
+
+  try {
+    setLang('en');
+    for (const source of sources) expect(t(source)).not.toBe(source);
+  } finally {
+    setLang('ro');
+  }
+});
+
 test('selection skips a CONTINUE with nothing to continue', () => {
   const flags = [true, false, true, true, true];
   expect(stepSelection(0, 1, flags)).toBe(2);

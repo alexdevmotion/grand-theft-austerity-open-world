@@ -228,6 +228,13 @@ export const EN: Readonly<Record<string, string>> = {
   'Citite direct din harta de input a jocului — nu dintr-o listă scrisă de mână.':
     'Read straight out of the game’s input map — not from a hand-written list.',
 
+  /* Gameplay notices introduced after the original catalogue audit. */
+  'BENZI CU ȚINTE — cauciucuri compromise': 'SPIKE STRIP — tyres compromised',
+  'Radar Ministerial: viteză înregistrată': 'Ministry speed camera: speed recorded',
+  'Tracțiune de urgență · mașina a ieșit din blocaj':
+    'Emergency tow · vehicle freed from obstruction',
+  'Descoperit: {name} · +{gain} XP': 'Discovered: {name} · +{gain} XP',
+
   /* ================================================================== *
    * Walkthrough — src/ui/walkthroughSteps.ts, walkthrough.ts           *
    * ================================================================== */

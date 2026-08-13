@@ -84,7 +84,7 @@ function cabDoors(o: CabDoorOpts, b: GeoBuilder, g: GeoBuilder): DoorPart[] {
     shellGeo.translate(-hinge.x, -hinge.y, -hinge.z);
     glassGeo.translate(-hinge.x, -hinge.y, -hinge.z);
     out.push({
-      id: side < 0 ? 'frontLeft' : 'frontRight',
+      id: side > 0 ? 'frontLeft' : 'frontRight',
       side, row: 0, hinge,
       shell: shellGeo, glass: glassGeo,
       maxAngle: 1.05,
@@ -281,7 +281,7 @@ export function buildPanelVan(spec: VehicleSpec, rng: Rng): BodyBuild {
     trim: { color: BLACK_TRIM, rough: 0.62, metal: 0.12, coat: 0.35 },
     interior: lin(0x2a2630), glazed: true, seatY: floor + 0.42, seatZ: spec.length * 0.5 - 1.35,
   }, b, g);
-  const driver = cabDriver(spec, -hw * 0.45, floor + 0.42, spec.length * 0.5 - 1.35, spec.length * 0.5 - 0.86, floor + 1.14);
+  const driver = cabDriver(spec, hw * 0.45, floor + 0.42, spec.length * 0.5 - 1.35, spec.length * 0.5 - 0.86, floor + 1.14);
   return finish(b, g, anchors, doors, driver);
 }
 
@@ -336,7 +336,7 @@ export function buildAro(spec: VehicleSpec, rng: Rng): BodyBuild {
     spec, hw, z0: spec.length * 0.5 - 2.28, z1: spec.length * 0.5 - 1.20, y0: floor - 0.20, y1: floor + 1.16,
     paint, trim, interior: lin(0x2c2822), glazed: true, seatY: floor + 0.28, seatZ: spec.length * 0.5 - 1.72,
   }, b, g);
-  const driver = cabDriver(spec, -hw * 0.45, floor + 0.28, spec.length * 0.5 - 1.72, spec.length * 0.5 - 1.28, floor + 0.90);
+  const driver = cabDriver(spec, hw * 0.45, floor + 0.28, spec.length * 0.5 - 1.72, spec.length * 0.5 - 1.28, floor + 0.90);
   return finish(b, g, anchors, doors, driver);
 }
 
@@ -438,7 +438,7 @@ export function buildPickup(spec: VehicleSpec, rng: Rng): BodyBuild {
     spec, hw, z0: rsZ + 0.02, z1: wsBase - 0.04, y0: 0.32, y1: roof - 0.12,
     paint, trim, interior: lin(0x3a3040), glazed: true, seatY: 0.62, seatZ: nose - 1.72,
   }, b, g);
-  const driver = cabDriver(spec, -hw * 0.42, 0.62, nose - 1.72, nose - 1.42, belt - 0.06);
+  const driver = cabDriver(spec, hw * 0.42, 0.62, nose - 1.72, nose - 1.42, belt - 0.06);
 
   return finish(b, g, {
     headlights: [new THREE.Vector3(-(hw - 0.22), y(0.75), nose - 0.02), new THREE.Vector3(hw - 0.22, y(0.75), nose - 0.02)],
@@ -529,7 +529,7 @@ export function buildTruck(spec: VehicleSpec, rng: Rng): BodyBuild {
     spec, hw, z0: cabRear + 0.10, z1: nose - 0.42, y0: 1.06, y1: 2.86,
     paint, trim, interior: lin(0x2a2630), glazed: true, seatY: 1.62, seatZ: nose - 1.12,
   }, b, g);
-  const driver = cabDriver(spec, -hw * 0.45, 1.62, nose - 1.12, nose - 0.56, 2.30);
+  const driver = cabDriver(spec, hw * 0.45, 1.62, nose - 1.12, nose - 0.56, 2.30);
 
   return finish(b, g, {
     headlights: [new THREE.Vector3(-(hw - 0.4), y(1.1), nose - 0.02), new THREE.Vector3(hw - 0.4, y(1.1), nose - 0.02)],
@@ -608,7 +608,7 @@ export function buildBus(spec: VehicleSpec, rng: Rng): BodyBuild {
   });
   b.box(spec.width * 0.96, 0.10, 0.12, T(0, y(floor - 0.36), spec.length * 0.5 + 0.04), { color: CHROME_DULL, rough: 0.2, metal: 0.95, coat: 0.3 });
 
-  const driver = cabDriver(spec, -hw * 0.58, 1.10, spec.length * 0.5 - 1.55, spec.length * 0.5 - 1.05, 1.72);
+  const driver = cabDriver(spec, hw * 0.58, 1.10, spec.length * 0.5 - 1.55, spec.length * 0.5 - 1.05, 1.72);
   return finish(b, g, anchors, [], driver);
 }
 

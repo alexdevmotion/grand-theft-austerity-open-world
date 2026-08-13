@@ -507,12 +507,12 @@ function lowerBody(c: Ctx): DoorSlot[] {
   const slots: DoorSlot[] = [];
   if (d.doorRows >= 1) {
     for (const side of [-1, 1] as const) {
-      slots.push({ id: side < 0 ? 'frontLeft' : 'frontRight', side, row: 0, z0: d.frontDoorZ[0], z1: d.frontDoorZ[1], skin: new GeoBuilder(), glassB: new GeoBuilder() });
+      slots.push({ id: side > 0 ? 'frontLeft' : 'frontRight', side, row: 0, z0: d.frontDoorZ[0], z1: d.frontDoorZ[1], skin: new GeoBuilder(), glassB: new GeoBuilder() });
     }
   }
   if (d.doorRows >= 2) {
     for (const side of [-1, 1] as const) {
-      slots.push({ id: side < 0 ? 'rearLeft' : 'rearRight', side, row: 1, z0: d.rearDoorZ[0], z1: d.rearDoorZ[1], skin: new GeoBuilder(), glassB: new GeoBuilder() });
+      slots.push({ id: side > 0 ? 'rearLeft' : 'rearRight', side, row: 1, z0: d.rearDoorZ[0], z1: d.rearDoorZ[1], skin: new GeoBuilder(), glassB: new GeoBuilder() });
     }
   }
 
@@ -732,12 +732,12 @@ function interior(c: Ctx): void {
   // dashboard, with a faintly glowing instrument pack
   b.box(d.halfWidth * 1.62, 0.19, 0.30, T(0, c.y(d.belt - 0.09), d.wsBase - 0.20, 0.22, 0, 0), dashSurf);
   b.box(d.halfWidth * 1.62, 0.06, 0.22, T(0, c.y(d.belt - 0.20), d.wsBase - 0.31), plastic);
-  b.box(0.40, 0.12, 0.02, T(-d.halfWidth * 0.4, c.y(d.belt - 0.075), d.wsBase - 0.34), {
+  b.box(0.40, 0.12, 0.02, T(d.halfWidth * 0.4, c.y(d.belt - 0.075), d.wsBase - 0.34), {
     color: lin(0xffb060), rough: 0.4, metal: 0, uv: UV.dash, light: L.cabin,
   });
 
   // steering wheel (LHD) + column
-  const wx = -d.halfWidth * 0.42, wy = c.y(d.belt - 0.10), wz = d.wsBase - 0.46;
+  const wx = d.halfWidth * 0.42, wy = c.y(d.belt - 0.10), wz = d.wsBase - 0.46;
   b.torus(d.width * 0.098, 0.016, 5, 14, Math.PI * 2, T(wx, wy, wz, Math.PI / 2 - 0.42, 0, 0), { color: lin(0x171219), rough: 0.6, metal: 0.05 });
   for (let i = 0; i < 3; i++) {
     const a = (i / 3) * Math.PI * 2 + 0.4;
@@ -1217,7 +1217,7 @@ function buildDriver(c: Ctx): THREE.BufferGeometry {
   const floor = d.sill + 0.10;
   const cabinZ = (d.wsBase + d.rsBase) * 0.5;
   const sz = cabinZ + (d.wsBase - d.rsBase) * 0.16;
-  const sx = -d.halfWidth * 0.42;
+  const sx = d.halfWidth * 0.42;
   const hipY = floor + 0.30;
   const skin: Surf = { color: lin(0x8a6144), rough: 0.72, metal: 0 };
   const cloth: Surf = { color: lin(0x2b3348), rough: 0.88, metal: 0.02, uv: UV.fabric };

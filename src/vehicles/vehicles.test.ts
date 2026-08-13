@@ -164,3 +164,18 @@ test('the 1300 keeps rectangular lamps, fine slats and chrome bumpers', () => {
   expect(dacia.brightwork).toBe(true);
   expect(dacia.wheelStyle).toBe('hubcap');
 });
+
+test('vehicle door names and visible driver use the left-hand side', () => {
+  for (const id of ['dacia1300', 'logan', 'panelVan', 'roman']) {
+    const model = MODELS[id];
+    const build = model.build(0, id === 'dacia1300');
+    const frontLeft = build.doors?.find((door) => door.id === 'frontLeft');
+    const frontRight = build.doors?.find((door) => door.id === 'frontRight');
+
+    expect(frontLeft?.side).toBe(1);
+    expect(frontRight?.side).toBe(-1);
+    const driverBox = build.driver?.boundingBox;
+    expect(driverBox).toBeDefined();
+    expect((driverBox!.min.x + driverBox!.max.x) * 0.5).toBeGreaterThan(0);
+  }
+});

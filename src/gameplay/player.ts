@@ -325,10 +325,16 @@ const SEAT_RISE: Partial<Record<VehicleClass, number>> = {
   dacia: 0, sedan: 0, hatch: 0, police: 0, van: 0.29, truck: 0.49,
   bus: 0.33, tram: 0.05, scooter: 0.57,
 };
-/** Lateral seat position (matches the steering wheel in dacia.ts). */
+/**
+ * Lateral seat position. Vehicles face local +Z, so +X is their left side.
+ */
 const SEAT_X: Partial<Record<VehicleClass, number>> = {
-  dacia: -0.34, scooter: 0, bus: -0.62, truck: -0.55, tram: 0,
+  dacia: 0.34, scooter: 0, bus: 0.62, truck: 0.55, tram: 0,
 };
+
+export function driverSeatX(kind: VehicleClass): number {
+  return SEAT_X[kind] ?? 0.36;
+}
 
 class PlayerCharacter implements CharacterHandle {
   readonly id = 'player';
@@ -939,13 +945,13 @@ export class PlayerSystem implements System, PlayerService {
   private seatPoint(v: VehicleHandle, out: THREE.Vector3): THREE.Vector3 {
     const scale = HERO_HEIGHT / 1.75;
     const rise = SEAT_RISE[v.kind] ?? 0;
-    const sx = SEAT_X[v.kind] ?? -0.36;
+    const sx = driverSeatX(v.kind);
     return out.set(sx, rise - 0.44 * scale, 0.04).applyQuaternion(v.rotation).add(v.position);
   }
 
   /** World position the character stands at while working the driver's door. */
   private doorPoint(v: VehicleHandle, out: THREE.Vector3): THREE.Vector3 {
-    const sx = SEAT_X[v.kind] ?? -0.36;
+    const sx = driverSeatX(v.kind);
     const side = sx <= 0 ? -1 : 1;
     return out.set(sx + side * DOOR_STANDOFF, -0.42, 0.02).applyQuaternion(v.rotation).add(v.position);
   }
@@ -986,7 +992,7 @@ export class PlayerSystem implements System, PlayerService {
     if (idx >= 0) (v.occupants as string[]).splice(idx, 1);
 
     // Step out to the driver's side, clear of the body.
-    const side = new THREE.Vector3(-2.1, 0.4, 0).applyQuaternion(v.rotation);
+    const side = new THREE.Vector3(2.1, 0.4, 0).applyQuaternion(v.rotation);
     const p = v.position.clone().add(side);
     this.body.setNextKinematicTranslation({
       x: p.x,
@@ -1085,9 +1091,8 @@ export class PlayerSystem implements System, PlayerService {
     return {
       sit: THREE.MathUtils.clamp(sit, 0, 1),
       reach: Math.max(open, close * 0.9),
-      // The driver's door is on the character's LEFT of the seat (SEAT_X < 0),
-      // so the near arm is the left one going in and coming out.
-      side: (SEAT_X[v.kind] ?? -0.36) <= 0 ? 1 : -1,
+      // Mirror the reach with the door side so the outside arm works the handle.
+      side: driverSeatX(v.kind) <= 0 ? 1 : -1,
       closing: close > open,
     };
   }

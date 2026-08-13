@@ -484,7 +484,10 @@ export class TrafficGraph {
         const edge: LaneEdge = {
           index, from: a, to: b,
           ux, uz,
-          rx: uz, rz: -ux,
+          // Vehicles face local +Z, so their right is forward x up:
+          // (-uz, ux). Using the opposite normal put every car on the
+          // left-hand carriageway despite the lane contract above.
+          rx: -uz, rz: ux,
           span, lanes, rank,
           speed: RANK_SPEED[rank],
           axisX,

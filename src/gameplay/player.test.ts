@@ -21,6 +21,7 @@ import {
   bodyTravel,
   cameraTravel,
   bodyYawTarget,
+  driverSeatX,
   footSurface,
   playerSpawnFromPlace,
   travelBodyYaw,
@@ -29,6 +30,14 @@ import { PLACES } from '../content/places';
 import { CHARACTER_SKIN, capsuleRestHeight } from '../physics/physics';
 
 const DEG = Math.PI / 180;
+
+test('road vehicles place the driver on the front-left side', () => {
+  for (const kind of ['dacia', 'sedan', 'hatch', 'police', 'van', 'truck', 'bus'] as const) {
+    expect(driverSeatX(kind)).toBeGreaterThan(0);
+  }
+  expect(driverSeatX('scooter')).toBe(0);
+  expect(driverSeatX('tram')).toBe(0);
+});
 
 /** Shortest signed angle from `b` to `a`. */
 function delta(a: number, b: number): number {

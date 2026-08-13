@@ -155,6 +155,25 @@ function nearestPublishedTrack(
   };
 }
 
+describe('road traffic handedness', () => {
+  test('opposing cars occupy the right-hand side of the road', () => {
+    const graph = new TrafficGraph(city([
+      node(0, 0, 0, 2, [1]),
+      node(1, 0, 100, 2, [0]),
+    ], []));
+
+    const north = graph.edges[graph.edgeBetween(0, 1)];
+    const south = graph.edges[graph.edgeBetween(1, 0)];
+    const northLane = graph.lanePoint(north, 0, 0.5, new THREE.Vector3());
+    const southLane = graph.lanePoint(south, 0, 0.5, new THREE.Vector3());
+
+    // Facing north (+Z), the driver's right is -X. Facing south, it is +X.
+    expect(northLane.x).toBeLessThan(0);
+    expect(southLane.x).toBeGreaterThan(0);
+    expect(northLane.z).toBeCloseTo(southLane.z, 6);
+  });
+});
+
 describe('explicit tram routing', () => {
   test('a wide rank-2 road without rendered rails is never tram-routable', () => {
     const graph = new TrafficGraph(city([

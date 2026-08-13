@@ -49,6 +49,13 @@ function activePed(x: number, z: number): Ped {
   return p;
 }
 
+function resetPed(x = 0, z = 0): Ped {
+  const rng = new Rng('vehicle-strike-ped');
+  const p = new Ped();
+  p.reset('civilian', makeAppearance('civilian', rng), x, z, 0, 1.2, rng);
+  return p;
+}
+
 function minimumPairDistance(peds: readonly Ped[]): number {
   let minimum = Number.POSITIVE_INFINITY;
   for (let i = 0; i < peds.length; i++) {
@@ -61,6 +68,102 @@ function minimumPairDistance(peds: readonly Ped[]): number {
   }
   return minimum;
 }
+
+test('a boulevard-speed vehicle strike kills and launches a full-health pedestrian', () => {
+  const ped = resetPed();
+  const grid = new CrowdGrid();
+  const env = crowdEnv(grid, null);
+  const knockdowns: boolean[] = [];
+  env.onKnockdown = (_target, fatal) => knockdowns.push(fatal);
+  env.vehicles.add(0, 0, 0, 1, 13, 'sedan');
+  grid.rebuild([ped]);
+
+  grid.step(1 / 60, env);
+
+  expect(ped.health).toBe(0);
+  expect(ped.isAlive).toBe(false);
+  expect(ped.mode).toBe('down');
+  expect(ped.state).toBe('die');
+  expect(ped.vel.z).toBeGreaterThanOrEqual(2.5);
+  expect(ped.vel.z).toBeLessThanOrEqual(13);
+  expect(ped.vel.y).toBeGreaterThanOrEqual(2.2);
+  expect(ped.vel.y).toBeLessThanOrEqual(5);
+  expect(knockdowns).toEqual([true]);
+});
+
+test('an urban road-speed vehicle strike is fatal from full health', () => {
+  const ped = resetPed();
+  const grid = new CrowdGrid();
+  const env = crowdEnv(grid, null);
+  let fatal: boolean | null = null;
+  env.onKnockdown = (_ped, died) => { fatal = died; };
+  env.vehicles.add(0, 0, 0, 1, 10, 'urban-car');
+  grid.rebuild([ped]);
+
+  grid.step(1 / 60, env);
+
+  expect(ped.health).toBe(0);
+  expect(ped.state).toBe('die');
+  expect(fatal).toBe(true);
+});
+
+test('a 2 m/s vehicle contact does not strike or damage a pedestrian', () => {
+  const ped = resetPed();
+  const grid = new CrowdGrid();
+  const env = crowdEnv(grid, null);
+  const knockdowns: boolean[] = [];
+  env.onKnockdown = (_target, fatal) => knockdowns.push(fatal);
+  env.vehicles.add(0, 0, 0, 1, 2, 'slow-car');
+  grid.rebuild([ped]);
+
+  grid.step(1 / 60, env);
+
+  expect(ped.health).toBe(100);
+  expect(ped.mode).not.toBe('down');
+  expect(ped.vel.y).toBe(0);
+  expect(knockdowns).toEqual([]);
+});
+
+test('a 5 m/s vehicle strike knocks down and launches without reporting a death', () => {
+  const ped = resetPed();
+  const grid = new CrowdGrid();
+  const env = crowdEnv(grid, null);
+  const knockdowns: boolean[] = [];
+  env.onKnockdown = (_target, fatal) => knockdowns.push(fatal);
+  env.vehicles.add(0, 0, 0, 1, 5, 'moderate-car');
+  grid.rebuild([ped]);
+
+  grid.step(1 / 60, env);
+
+  expect(ped.health).toBeGreaterThan(75);
+  expect(ped.health).toBeLessThan(85);
+  expect(ped.isAlive).toBe(true);
+  expect(ped.mode).toBe('down');
+  expect(ped.state).toBe('ragdoll');
+  expect(ped.vel.z).toBeCloseTo(3.55, 6);
+  expect(ped.vel.y).toBeCloseTo(2.7, 6);
+  expect(knockdowns).toEqual([false]);
+});
+
+test('continued vehicle overlap cannot re-damage or re-report downed and dead pedestrians', () => {
+  for (const [speed, fatal] of [[5, false], [13, true]] as const) {
+    const ped = resetPed();
+    const grid = new CrowdGrid();
+    const env = crowdEnv(grid, null);
+    const knockdowns: boolean[] = [];
+    env.onKnockdown = (_target, died) => knockdowns.push(died);
+    env.vehicles.add(0, 0, 0, 1, speed, `overlap-${speed}`);
+    grid.rebuild([ped]);
+
+    grid.step(1 / 60, env);
+    const healthAfterStrike = ped.health;
+    for (let i = 0; i < 8; i++) grid.step(1 / 60, env);
+
+    expect(ped.health).toBe(healthAfterStrike);
+    expect(ped.isAlive).toBe(!fatal);
+    expect(knockdowns).toEqual([fatal]);
+  }
+});
 
 test('ordinary depenetration uses the open half-plane and retains safe roots in a closed corner', () => {
   const a = activePed(0.1, 0);
@@ -291,6 +394,141 @@ test('pedestrians moving toward the same point preserve a hard body separation',
 
   const distance = Math.hypot(a.position.x - b.position.x, a.position.z - b.position.z);
   expect(distance).toBeGreaterThanOrEqual(0.72);
+});
+
+test('a pedestrian cannot cross a thin building blocker between frame endpoints', () => {
+  const rng = new Rng('swept-scripted-ped');
+  const ped = new Ped();
+  ped.reset('civilian', makeAppearance('civilian', rng), 0, 0, Math.PI / 2, 1.2, rng);
+  ped.moveTo(new THREE.Vector3(4, 0, 0), 8);
+  const grid = new CrowdGrid();
+  const env = crowdEnv(grid, null);
+  env.spatial = testSpatial((x) => x >= 1.45 && x <= 1.55);
+  grid.rebuild([ped]);
+
+  grid.step(0.25, env);
+
+  expect(ped.position.x).toBeGreaterThan(0);
+  expect(ped.position.x).toBeLessThan(1.45);
+  expect(env.spatial.isBlocked(ped.position.x, ped.position.z)).toBe(false);
+});
+
+test('a downed pedestrian cannot tumble through a thin building blocker', () => {
+  const rng = new Rng('swept-downed-ped');
+  const ped = new Ped();
+  ped.reset('civilian', makeAppearance('civilian', rng), 0, 0, Math.PI / 2, 1.2, rng);
+  ped.knockDown(1, 0, 8);
+  const grid = new CrowdGrid();
+  const env = crowdEnv(grid, null);
+  env.spatial = testSpatial((x) => x >= 1.45 && x <= 1.55);
+  grid.rebuild([ped]);
+
+  grid.step(0.5, env);
+
+  expect(ped.position.x).toBeGreaterThan(0);
+  expect(ped.position.x).toBeLessThan(1.45);
+  expect(env.spatial.isBlocked(ped.position.x, ped.position.z)).toBe(false);
+});
+
+test('standing pedestrians separate from downed bodies without dragging the body', () => {
+  const rng = new Rng('downed-body-separation');
+  const downed = new Ped();
+  downed.reset('civilian', makeAppearance('civilian', rng), 0, 0, 0, 1.2, rng);
+  downed.knockDown(0, 0, 2);
+  const standing = activePed(0, 0);
+
+  new CrowdGrid().resolve([standing, downed], testSpatial(() => false), null, false);
+
+  expect(downed.position.x).toBeCloseTo(0, 8);
+  expect(downed.position.z).toBeCloseTo(0, 8);
+  expect(Math.hypot(
+    standing.position.x - downed.position.x,
+    standing.position.z - downed.position.z,
+  )).toBeGreaterThanOrEqual(0.72);
+});
+
+test('a downed body stays fixed when only it has a safe separation path', () => {
+  const rng = new Rng('downed-body-closed-separation');
+  const downed = new Ped();
+  downed.reset('civilian', makeAppearance('civilian', rng), 0, 0, 0, 1.2, rng);
+  downed.knockDown(0, 0, 2);
+  const standing = activePed(0, 0);
+
+  new CrowdGrid().resolve(
+    [standing, downed],
+    testSpatial(() => false),
+    null,
+    false,
+    (ped, fromX, _fromY, fromZ, dx, dz, result) => {
+      if (ped === standing) {
+        result.set(fromX, fromZ);
+        return 0;
+      }
+      result.set(fromX + dx, fromZ + dz);
+      return 1;
+    },
+  );
+
+  expect(downed.position.x).toBeCloseTo(0, 8);
+  expect(downed.position.z).toBeCloseTo(0, 8);
+  expect(standing.position.x).toBeCloseTo(0, 8);
+  expect(standing.position.z).toBeCloseTo(0, 8);
+});
+
+test('an upright pedestrian cannot stand inside the long axis of a downed body', () => {
+  const rng = new Rng('downed-horizontal-envelope');
+  const downed = new Ped();
+  downed.reset('civilian', makeAppearance('civilian', rng), 0, 0, 0, 1.2, rng);
+  downed.knockDown(0, 0, 2);
+  const standing = activePed(0, 0.78);
+
+  new CrowdGrid().resolve([downed, standing], testSpatial(() => false), null, false);
+
+  expect(standing.position.z).toBeGreaterThan(1.05);
+  expect(downed.position.x).toBeCloseTo(0, 8);
+  expect(downed.position.z).toBeCloseTo(0, 8);
+});
+
+test('two coincident downed bodies depenetrate deterministically', () => {
+  const rng = new Rng('downed-downed-envelope');
+  const a = new Ped();
+  const b = new Ped();
+  a.reset('civilian', makeAppearance('civilian', rng), 0, 0, 0, 1.2, rng);
+  b.reset('civilian', makeAppearance('civilian', rng), 0, 0, 0, 1.2, rng);
+  a.knockDown(0, 0, 2);
+  b.knockDown(0, 0, 2);
+
+  new CrowdGrid().resolve([a, b], testSpatial(() => false), null, false);
+
+  expect(Math.hypot(a.position.x - b.position.x, a.position.z - b.position.z)).toBeGreaterThanOrEqual(0.63);
+});
+
+test('dogs depenetrate from their owner, other pedestrians, other dogs, and the player', () => {
+  const owner = activePed(0, 0);
+  const other = activePed(0.2, 0);
+  owner.dog = {
+    x: 0, y: 0, z: 0, yaw: 0, phase: 0,
+    colour: new THREE.Color(), size: 1,
+  };
+  other.dog = {
+    x: 0, y: 0, z: 0, yaw: 0, phase: 0,
+    colour: new THREE.Color(), size: 1,
+  };
+
+  new CrowdGrid().publish(
+    [owner, other],
+    testSpatial(() => false),
+    new THREE.Vector3(0, 0, 0),
+    false,
+  );
+
+  for (const ped of [owner, other]) {
+    const dog = ped.dog!;
+    expect(Math.hypot(dog.x - owner.position.x, dog.z - owner.position.z)).toBeGreaterThanOrEqual(0.54);
+    expect(Math.hypot(dog.x - other.position.x, dog.z - other.position.z)).toBeGreaterThanOrEqual(0.54);
+    expect(Math.hypot(dog.x, dog.z)).toBeGreaterThanOrEqual(0.49);
+  }
+  expect(Math.hypot(owner.dog.x - other.dog.x, owner.dog.z - other.dog.z)).toBeGreaterThanOrEqual(0.35);
 });
 
 test('a crowd frame is equivalent per pedestrian id when the source list is reversed', () => {

@@ -1685,6 +1685,11 @@ export function streetLamp(
   height: number,
   y0 = 0.17,
 ): void {
+  d.collisionBox('street-lamp', x, y0 + height / 2, z, 0.34, height, 0.34);
+  if (d.addressableStreetLamps && Array.isArray(d.streetLamps)) {
+    d.streetLamps.push({ x, z, y0, inwardX, inwardZ, height });
+    return;
+  }
   const alongX = Math.abs(inwardX) > 0.5;
   d.cyl(x, y0, z, 0.155, 0.085, height, 5, { color: DetailColor.metal, mr: MR.metal }, false);
   const reach = 1.9;
@@ -1726,6 +1731,7 @@ export function parkedCar(
   const bodyMR: [number, number] = [0.35, rng.range(0.28, 0.55)];
   const L = 4.35;
   const W = 1.62;
+  d.collisionBox('parked-car', x, 0.86, z, L, 1.72, W, headingRad);
 
   // Lower body.
   d.box(x, 0.72, z, L, 0.72, W, headingRad, { color: body, mr: bodyMR });
@@ -1963,6 +1969,11 @@ export function planeTree(
     // read is most of what separates it from the poplar beside it.
     halfHK = 0.34;
   }
+
+  // The trunk is physical; the wind-animated crown remains visual so leaves
+  // above a roof cannot produce an invisible wall around the vehicle.
+  d.collisionBox('tree-trunk', x, 0.17 + trunkH / 2, z,
+    trunkR * 2.35, trunkH, trunkR * 2.35);
 
   /*
    * BARK. Authored DARK. A trunk is the one part of a tree with no translucency
@@ -2305,6 +2316,7 @@ export function planeTree(
 
 /** Concrete anti-ram bollard, as in the reference foreground. ~18 triangles. */
 export function bollard(d: DetailBuilder, x: number, z: number): void {
+  d.collisionBox('bollard', x, 0.67, z, 0.48, 1.0, 0.48);
   d.cyl(x, 0.17, z, 0.24, 0.19, 1.0, 6, { color: DetailColor.stone, mr: MR.stone });
 }
 
@@ -2356,6 +2368,8 @@ export function crowdBarrier(
     // A run of barriers is never straight — they get knocked and re-set.
     const lean = rot + rng.range(-0.05, 0.05);
     const mid = (t: number): [number, number] => [px + ux * panel * t, pz + uz * panel * t];
+    const [blockX, blockZ] = mid(0.5);
+    d.collisionBox('crowd-barrier', blockX, 0.75, blockZ, panel, 1.16, 0.62, lean);
     // Top and bottom rails, along the run.
     const [mx, mz] = mid(0.5);
     for (const y of [1.06, 0.42]) {
@@ -2373,6 +2387,7 @@ export function crowdBarrier(
 
 /** Litter bin. ~18 triangles. */
 export function wasteBin(d: DetailBuilder, x: number, z: number, rng: Rng): void {
+  d.collisionBox('waste-bin', x, 0.65, z, 0.68, 0.96, 0.68);
   d.cyl(x, 0.17, z, 0.28, 0.34, 0.96, 6, {
     color: rng.bool(0.5) ? DetailColor.metal : lin(0x2f4a34), mr: [0.4, 0.6],
   });

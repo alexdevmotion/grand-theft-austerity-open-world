@@ -13,6 +13,7 @@
  */
 
 import * as THREE from 'three';
+import type { StreetLampSlot } from '../environment/streetLampBatch';
 
 export interface Vec2 {
   x: number;
@@ -391,6 +392,15 @@ export interface DetailOpts {
   wind?: number;
 }
 
+/** Cheap physical proxy for one semantic piece of merged city dressing. */
+export interface DetailCollisionBox {
+  kind: string;
+  position: THREE.Vector3;
+  halfExtents: THREE.Vector3;
+  /** Detail geometry applies R_y(-rotationY); physics mirrors that transform. */
+  rotationY: number;
+}
+
 const WHITE: [number, number] = [0, 0.85];
 const NO_E = [0, 0, 0];
 
@@ -403,6 +413,12 @@ export class DetailBuilder {
   /** (translucency, wind sway amplitude) per vertex. */
   readonly fol: number[] = [];
   readonly idx: number[] = [];
+  /** Semantic blockers only; decorative sub-parts never add boxes themselves. */
+  readonly collisionBoxes: DetailCollisionBox[] = [];
+  /** Addressable lamps are instanced at bake instead of merged into this mesh. */
+  readonly streetLamps: StreetLampSlot[] = [];
+
+  constructor(readonly addressableStreetLamps = false) {}
 
   get triangles(): number {
     return this.idx.length / 3;
@@ -410,6 +426,20 @@ export class DetailBuilder {
 
   get isEmpty(): boolean {
     return this.idx.length === 0;
+  }
+
+  collisionBox(
+    kind: string,
+    cx: number, cy: number, cz: number,
+    sx: number, sy: number, sz: number,
+    rotationY = 0,
+  ): void {
+    this.collisionBoxes.push({
+      kind,
+      position: new THREE.Vector3(cx, cy, cz),
+      halfExtents: new THREE.Vector3(sx / 2, sy / 2, sz / 2),
+      rotationY,
+    });
   }
 
   private push(

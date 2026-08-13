@@ -339,11 +339,19 @@ export class HudSystem implements System, HudService {
     this.xpFlash = Math.max(0, this.xpFlash - dt * 2);
 
     const hp = player ? Math.round((player.health / Math.max(1, player.maxHealth)) * 100) : 100;
+    const vehicle = player?.inVehicle ?? null;
+    const vehicleHp = vehicle
+      ? Math.round((vehicle.health / Math.max(1, vehicle.maxHealth)) * 100)
+      : 100;
     this.statsEl.innerHTML =
       `<div class="row"><span class="lv">${tp('NIV {level}', { level })}</span>` +
       `<span class="lei">${num(Math.round(this.lei))} lei</span></div>` +
       `<div class="xp"><i style="width:${pct.toFixed(1)}%;opacity:${(0.65 + this.xpFlash * 0.35).toFixed(2)}"></i></div>` +
-      `<div class="hp"><i style="width:${hp}%"></i></div>`;
+      `<div class="hp"><i style="width:${hp}%"></i></div>` +
+      (vehicle
+        ? `<div class="vehicle-row"><span>CAROSERIE</span><b>${vehicleHp}%</b></div>` +
+          `<div class="vehicle-hp${vehicleHp <= 25 ? ' critical' : ''}"><i style="width:${vehicleHp}%"></i></div>`
+        : '');
   }
 
   dispose(): void {
@@ -439,6 +447,12 @@ const TEMPLATE = `
     .gta-stats .xp, .gta-stats .hp { margin-top:5px; height:3px; background:rgba(255,255,255,.14); }
     .gta-stats .xp i { display:block; height:100%; background:#c3a2ff; }
     .gta-stats .hp i { display:block; height:100%; background:#4ad6a0; }
+    .gta-stats .vehicle-row { display:flex; justify-content:space-between; margin-top:8px;
+      font-size:9px; font-weight:800; letter-spacing:.14em; text-shadow:0 2px 6px #000; }
+    .gta-stats .vehicle-row b { color:#ffb454; font-variant-numeric:tabular-nums; }
+    .gta-stats .vehicle-hp { margin-top:3px; height:4px; background:rgba(255,255,255,.14); }
+    .gta-stats .vehicle-hp i { display:block; height:100%; background:#ffb454; }
+    .gta-stats .vehicle-hp.critical i { background:#ff5a4a; }
   </style>
   <div class="gta-hud">
     <div class="gta-stars" id="gta-stars"><span class="off">☆☆☆☆☆</span></div>

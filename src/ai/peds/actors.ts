@@ -56,8 +56,8 @@ export function driveActor(
   shadowRadius: number,
   time: number,
 ): void {
-  // A car has just hit this person: hand off to the rig's own ragdoll and
-  // never touch the transform again — the sim owns it from here.
+  // A car has just hit this person: hand the impulse to the visual ragdoll.
+  // Its hips are anchored below to the single authoritative Rapier proxy.
   if (p.ragdollPending) {
     actor.ragdoll(p.ragdollPending);
     p.ragdollPending = null;
@@ -65,8 +65,8 @@ export function driveActor(
   }
   if (p.ragdolled) {
     actor.mesh.castShadow = distance < shadowRadius;
+    actor.anchorRagdollHips(p.position);
     actor.update(dt, ctx);
-    p.position.copy(actor.position);
     return;
   }
 

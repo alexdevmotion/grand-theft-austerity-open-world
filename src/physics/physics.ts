@@ -58,7 +58,12 @@ export const GROUP = {
   character: groups(CG.CHARACTER, ALL_SOLID | CG.SENSOR),
   player: groups(CG.PLAYER, ALL_SOLID | CG.SENSOR),
   prop: groups(CG.PROP, ALL_SOLID),
-  debris: groups(CG.DEBRIS, CG.STATIC | CG.TERRAIN),
+  // Fallen poles and other substantial debris remain part of the world: they
+  // settle on terrain/props and can be pushed by vehicles and characters.
+  debris: groups(
+    CG.DEBRIS,
+    CG.STATIC | CG.TERRAIN | CG.VEHICLE | CG.CHARACTER | CG.PLAYER | CG.PROP,
+  ),
   sensor: groups(CG.SENSOR, CG.PLAYER | CG.VEHICLE | CG.CHARACTER),
 } as const;
 

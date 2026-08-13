@@ -225,6 +225,14 @@ describe('the world exists', () => {
   });
 });
 
+describe('world boundary agreement', () => {
+  test('physics has no invisible floor outside the analytic playable world', () => {
+    const outside = HALF + 112;
+    expect(W.city.spatial.groundHeight(outside, 0)).toBe(Number.NEGATIVE_INFINITY);
+    expect(physicsGround(outside, 0, 20, 40)).toBeNull();
+  });
+});
+
 /* ================================================================== */
 /* 2. PROBE-GROUP CANARY                                               */
 /*                                                                     */
@@ -557,7 +565,14 @@ describe('winding', () => {
    * up is a new instance of the same bug class, which has now appeared five
    * times on this project; do not raise them to make a test pass.
    */
-  const BUDGET: Record<string, number> = { surface: 0, facade: 0.0001, detail: 0.001 };
+  const BUDGET: Record<string, number> = {
+    surface: 0,
+    facade: 0.0001,
+    detail: 0.001,
+    // Same verified template in every chunk; instancing only changes its
+    // transform and cannot justify any opposite-wound triangle.
+    'street-lamps-detail': 0,
+  };
 
   test('city geometry faces the way its normals claim', () => {
     const fam = new Map<string, { tris: number; agree: number; disagree: number }>();

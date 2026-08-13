@@ -241,3 +241,31 @@ export const React = {
   /** Root-to-root floor: player body + pedestrian shoulders. */
   playerSeparation: 0.9,
 } as const;
+
+export interface VehicleStrikeModel {
+  /** Hit points removed from a full-size pedestrian. */
+  readonly damage: number;
+  /** Planar launch speed in the vehicle's direction, metres/second. */
+  readonly horizontalSpeed: number;
+  /** Initial upward launch speed, metres/second. */
+  readonly verticalSpeed: number;
+}
+
+/**
+ * Calibrated saloon-on-pedestrian impact in the world's metre/second units.
+ * Vehicle mass is not present at the ambient `VehicleGrid` seam yet, so this
+ * intentionally models the representative 1320 kg sedan used by that path.
+ */
+export function vehicleStrikeModel(speed: number): VehicleStrikeModel | null {
+  if (!Number.isFinite(speed) || speed <= React.hitSpeed) return null;
+  const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+  // A representative car at urban road speed must cross the 100 HP fatal
+  // threshold requested by the crash model, while parking-speed contacts stay
+  // survivable. At 10 m/s (~36 km/h) this is ~101 HP; at 5 m/s it is ~20 HP.
+  const damage = clamp(1.08 * Math.max(0, speed * speed - React.hitSpeed * React.hitSpeed), 0, 140);
+  return {
+    damage,
+    horizontalSpeed: clamp(0.55 * speed + 0.8, 2.5, 13),
+    verticalSpeed: clamp(1.8 + 0.18 * speed, 2.2, 5),
+  };
+}

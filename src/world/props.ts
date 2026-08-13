@@ -40,6 +40,7 @@ import { WorldScale } from '../artDirection';
 import { PAL } from '../render/materials';
 import { Services, type CityService, type DistrictKind } from '../core/services';
 import { QUALITY, detectQuality, onQualityChange, type Quality } from '../render/renderer';
+import { GROUP, type PhysicsWorld } from '../physics/physics';
 
 import {
   HALF,
@@ -54,7 +55,13 @@ import {
 import { blockBounds, nodeX, nodeZ } from './city/roads';
 import { LANDMARK_VOIDS, PLAZAS } from './city/landmarks';
 
-import { PropBuilder, PropColor as C, createPropMaterials, type PropMaterialSet } from './props/kit';
+import {
+  PropBuilder,
+  PropColor as C,
+  createPropMaterials,
+  type PropCollisionProxy,
+  type PropMaterialSet,
+} from './props/kit';
 import {
   WALK_Y, atm, bench, bikeRack, busShelter, eScooter, kiosk, litterBin, marketStall,
   newsStand, phoneBox, roadSign, stoneBollard, streetNamePlate, trafficLight, tricolour,
@@ -90,6 +97,42 @@ const POOL_Y = 0.16;
 /** Tile edge in metres. Matches the city's chunk size so culling agrees. */
 const TILE_M = 368;
 const TILES = Math.ceil((gridBlocks * blockSize) / TILE_M) + 1;
+
+const PROXY_UP = new THREE.Vector3(0, 1, 0);
+const PROXY_HALF = new THREE.Vector3();
+const PROXY_CENTER = new THREE.Vector3();
+const PROXY_ROTATION = new THREE.Quaternion();
+
+type PropCollider = ReturnType<PhysicsWorld['addStaticBox']>;
+
+/** Materialise a builder's semantic proxies as cheap, static Rapier shapes. */
+export function registerPropCollisionProxies(
+  physics: PhysicsWorld,
+  proxies: readonly PropCollisionProxy[],
+): PropCollider[] {
+  const colliders: PropCollider[] = [];
+  for (const proxy of proxies) {
+    if (proxy.shape === 'box') {
+      PROXY_HALF.set(proxy.size[0] / 2, proxy.size[1] / 2, proxy.size[2] / 2);
+      PROXY_CENTER.set(proxy.center[0], proxy.center[1], proxy.center[2]);
+      // PropBuilder's authored Y rotation uses x'=x*cos+z*sin, the inverse of
+      // THREE/Rapier's positive-Y convention. This keeps proxy and mesh exact.
+      const rotation = Math.abs(proxy.rotationY) > 1e-8
+        ? PROXY_ROTATION.setFromAxisAngle(PROXY_UP, -proxy.rotationY)
+        : undefined;
+      colliders.push(physics.addStaticBox(PROXY_HALF, PROXY_CENTER, rotation, GROUP.prop));
+      continue;
+    }
+
+    const halfHeight = Math.max(0, (proxy.height - proxy.radius * 2) / 2);
+    const desc = physics.rapier.ColliderDesc.capsule(halfHeight, proxy.radius)
+      .setTranslation(proxy.center[0], proxy.center[1], proxy.center[2])
+      .setCollisionGroups(GROUP.prop)
+      .setFriction(0.9);
+    colliders.push(physics.world.createCollider(desc));
+  }
+  return colliders;
+}
 
 interface Tile {
   near: PropBuilder | null;
@@ -139,6 +182,8 @@ export class PropsSystem implements System {
   private flares = new HeadGlow();
   private lamps!: LampLights;
   private leaves!: LeafDrift;
+  private offPoleBroken: (() => void) | null = null;
+  private offGameStarted: (() => void) | null = null;
 
   private atlasMats: THREE.Material[] = [];
   private atlasTextures: THREE.Texture[] = [];
@@ -180,6 +225,20 @@ export class PropsSystem implements System {
 
     this.mats = createPropMaterials();
     this.lamps = new LampLights(5, this.root);
+    this.offPoleBroken = ctx.events.on('prop:broken', ({ kind, position }) => {
+      if (kind !== 'street-lamp') return;
+      // These effects were reconstructed from the same authored lamp base.
+      // Source tags make the match exact: a nearby kiosk or neighbouring lamp
+      // is never extinguished by a broad spatial radius.
+      this.pools.disableSourceNear(position.x, position.z, 0.45);
+      this.flares.disableSourceNear(position.x, position.z, 0.45);
+      this.lamps.disableSourceNear(position.x, position.z, 0.45);
+    });
+    this.offGameStarted = ctx.events.on('game:started', () => {
+      this.pools.enableAllSources();
+      this.flares.enableAllSources();
+      this.lamps.enableAllSources();
+    });
 
     const t0 = performance.now();
     this.buildTiles();
@@ -265,9 +324,14 @@ export class PropsSystem implements System {
   }
 
   private bake(q: Quality): void {
+    const physics = this.ctx.tryGet(Services.Physics);
     for (const t of this.tiles) {
       const add = (b: PropBuilder | null, label: string): THREE.Mesh | null => {
-        if (!b || b.isEmpty) return null;
+        if (!b) return null;
+        if (physics && b.collisionProxies.length) {
+          registerPropCollisionProxies(physics, b.collisionProxies);
+        }
+        if (b.isEmpty) return null;
         const mesh = new THREE.Mesh(b.build(), this.mats.solid);
         mesh.name = `${t.group.name}-${label}`;
         // Props CAST. A contact shadow is the only thing that puts an object on
@@ -401,6 +465,7 @@ export class PropsSystem implements System {
     // single strongest cue in the reference frame.
     for (const lt of lampT) {
       const [lx, lz] = P(lt, 1.15);
+      const source = { x: lx, z: lz };
       const headOut = 1.9;
       const hx = lx + ed.ox * headOut;
       const hz = lz + ed.oz * headOut;
@@ -408,7 +473,9 @@ export class PropsSystem implements System {
       // Pool radius tracks the street: a 42 m boulevard needs a 14 m pool or
       // the carriageway between the two kerb lines stays pitch dark.
       const poolR = ed.rank === 2 ? 8.5 : ed.rank === 1 ? 6.8 : 5.0;
-      this.pools.add(hx, POOL_Y, hz, poolR, PAL.sodiumLamp, ed.rank === 0 ? 0.85 : 1.05);
+      this.pools.add(
+        hx, POOL_Y, hz, poolR, PAL.sodiumLamp, ed.rank === 0 ? 0.85 : 1.05, source,
+      );
       // THE WET-ROAD SMEAR. A round pool under a lamp reads as damp tarmac; the
       // reference frame's road is a mirror, and a mirror turns every sodium
       // head into a 25 m vertical streak running down the carriageway toward
@@ -421,17 +488,17 @@ export class PropsSystem implements System {
       const outer = road * (ed.rank === 2 ? 0.34 : 0.28);
       this.pools.addStreak(
         hx + ed.ox * outer, POOL_Y - 0.005, hz + ed.oz * outer,
-        poolR * 3.0, poolR * 0.5, tanX, tanZ, PAL.sodiumLamp, 0.34,
+        poolR * 3.0, poolR * 0.5, tanX, tanZ, PAL.sodiumLamp, 0.34, source,
       );
       this.pools.addStreak(
         hx + ed.ox * 0.6, POOL_Y - 0.004, hz + ed.oz * 0.6,
-        poolR * 1.9, poolR * 0.26, tanX, tanZ, PAL.sodiumLamp, 0.30,
+        poolR * 1.9, poolR * 0.26, tanX, tanZ, PAL.sodiumLamp, 0.30, source,
       );
-      this.flares.add(hx, hy - 0.03, hz, 0.5, PAL.sodiumLamp, 1.1);
+      this.flares.add(hx, hy - 0.03, hz, 0.5, PAL.sodiumLamp, 1.1, source);
       this.lamps.register({
         x: hx, y: hy - 0.4, z: hz,
         color: PAL.sodiumLamp.clone(), intensity: 26, distance: 24,
-      });
+      }, source);
     }
 
     /* ---- kerb-side furniture ---- */
@@ -960,6 +1027,7 @@ export class PropsSystem implements System {
           const pz = z + (hd + 1.1);
           if (!this.blocked(px, pz)) {
             const b = this.near(px, pz);
+            b.addCollisionCapsule('street-name-pole', px, WALK_Y + 1.35, pz, 2.7, 0.06);
             b.cyl(px, WALK_Y, pz, 0.05, 0.045, 2.7, 5, { color: C.galv, mr: [0.8, 0.4] }, false);
             streetNamePlate(b, px, WALK_Y + 2.5, pz, -1, 0);
             streetNamePlate(b, px, WALK_Y + 2.2, pz, 0, -1);
@@ -1263,6 +1331,10 @@ export class PropsSystem implements System {
   }
 
   dispose(): void {
+    this.offPoleBroken?.();
+    this.offGameStarted?.();
+    this.offPoleBroken = null;
+    this.offGameStarted = null;
     this.root.traverse((o) => {
       const m = o as THREE.Mesh;
       if (m.isMesh) m.geometry.dispose();

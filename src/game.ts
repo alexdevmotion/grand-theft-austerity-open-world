@@ -30,6 +30,7 @@ import { SkySystem } from './render/sky';
 import { LightingSystem } from './render/lighting';
 import { CitySystem } from './world/city';
 import { PropsSystem } from './world/props';
+import { EnvironmentDamageSystem } from './world/environmentDamage';
 import { VehicleSystem } from './vehicles/vehicleSystem';
 import { TrafficSystem } from './ai/traffic';
 import { PedSystem } from './ai/peds';
@@ -106,6 +107,7 @@ export async function createGame(
     .add(new SkySystem())                 // 10
     .add(new LightingSystem())            // 12
     .add(new WeatherSystem())             // 14
+    .add(new EnvironmentDamageSystem())   // 18   breakable city props + bounded debris
     .add(new CitySystem())                // 20
     .add(new InteriorSystem())            // 25
     .add(new PropsSystem())               // 30

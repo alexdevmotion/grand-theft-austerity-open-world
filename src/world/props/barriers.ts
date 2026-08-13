@@ -16,6 +16,9 @@ import { WALK_Y } from './streetFurniture';
 const opt = (color: PropOpts['color'], mr: PropOpts['mr'], emissive?: number[]): PropOpts =>
   ({ color, mr, emissive });
 
+/** Rotation that maps a box's local X axis onto a world-space run. */
+const yawAlong = (dirX: number, dirZ: number): number => Math.atan2(-dirZ, dirX);
+
 /* ------------------------------------------------------------------ */
 /* Fencing                                                             */
 /* ------------------------------------------------------------------ */
@@ -42,6 +45,12 @@ export function barrierRun(
   const panel = 2.1;
   const steel = opt(C.steelPale, MR.metal);
   const alongX = Math.abs(dirX) > 0.5;
+  const runLength = panel * panels * Math.hypot(dirX, dirZ);
+  b.addCollisionBox(
+    'crowd-barrier',
+    x + dirX * panel * panels / 2, y0 + top / 2, z + dirZ * panel * panels / 2,
+    runLength, top, 0.7, yawAlong(dirX, dirZ),
+  );
   // Perpendicular, for the splayed foot.
   const qx = -dirZ;
   const qz = dirX;
@@ -153,11 +162,17 @@ export function trafficCone(b: PropBuilder, x: number, y: number, z: number, rng
   if (knocked) {
     // On its side.
     const yaw = rng.range(0, Math.PI * 2);
+    b.addCollisionBox(
+      'traffic-cone',
+      x + Math.sin(yaw) * 0.25, y + 0.1, z + Math.cos(yaw) * 0.25,
+      0.72, 0.2, 0.36, yaw + Math.PI / 2,
+    );
     b.tube(x, y + 0.12, z,
       x + Math.sin(yaw) * 0.5, y + 0.05, z + Math.cos(yaw) * 0.5, 0.1, 6, orange);
     b.box(x, y + 0.02, z, 0.36, 0.04, 0.36, yaw, opt(C.plasticDark, MR.plastic));
     return;
   }
+  b.addCollisionCapsule('traffic-cone', x, y + 0.325, z, 0.65, 0.18);
   b.box(x, y + 0.03, z, 0.36, 0.06, 0.36, rng.range(0, 1.5), opt(C.plasticDark, MR.plastic));
   b.cyl(x, y + 0.05, z, 0.15, 0.09, 0.3, 6, orange, false);
   b.cyl(x, y + 0.35, z, 0.09, 0.055, 0.14, 6, opt(C.hazardWhite, MR.plastic, emi(C.hazardWhite, 0.5)), false);
@@ -167,6 +182,7 @@ export function trafficCone(b: PropBuilder, x: number, y: number, z: number, rng
 /** Stack of wooden pallets. ~90 tris for three. */
 export function palletStack(b: PropBuilder, x: number, y: number, z: number, n: number, rng: Rng): void {
   const yaw = rng.range(0, Math.PI * 2);
+  b.addCollisionBox('pallet-stack', x, y + n * 0.075, z, 1.2, n * 0.15, 1.1, yaw);
   for (let i = 0; i < n; i++) {
     const py = y + i * 0.15;
     const jitter = rng.range(-0.05, 0.05);
@@ -190,6 +206,7 @@ export function skip(b: PropBuilder, x: number, y: number, z: number, yaw: numbe
   const shell = opt(rng.weighted([C.paintOrange, C.paintYellow, C.rust], [3, 2, 2]), MR.metalRough);
   const w = 3.2;
   const d = 1.7;
+  b.addCollisionBox('skip', x, y + 0.62, z, w, 1.24, d, yaw);
   b.openBox(x, y + 0.62, z, w, 1.24, d, yaw, shell);
   // Sloped ends read as a real skip rather than a crate.
   b.box(x, y + 0.06, z, w + 0.1, 0.12, d + 0.1, yaw, opt(C.steelDark, MR.metal));
@@ -212,6 +229,7 @@ export function skip(b: PropBuilder, x: number, y: number, z: number, yaw: numbe
 
 /** Sand / gravel pile with a shovel-shaped edge. */
 export function spoilHeap(b: PropBuilder, x: number, y: number, z: number, r: number, rng: Rng): void {
+  b.addCollisionBox('spoil-heap', x, y + r * 0.25, z, r * 1.8, r * 0.5, r * 1.6, 0);
   b.blob(x, y + r * 0.42, z, r, r * 0.5, r * 0.9,
     opt(rng.bool(0.5) ? C.cardboard : C.concreteDark, MR.stone), 0.45, 31);
 }
@@ -231,6 +249,12 @@ export function hoarding(
   const alongX = Math.abs(dirX) > 0.5;
   const panels = Math.max(1, Math.round(length / 2.4));
   const step = length / panels;
+  const runLength = length * Math.hypot(dirX, dirZ);
+  b.addCollisionBox(
+    'hoarding',
+    x + dirX * length / 2, WALK_Y + h / 2, z + dirZ * length / 2,
+    runLength, h, 0.15, yawAlong(dirX, dirZ),
+  );
   for (let i = 0; i < panels; i++) {
     const cx = x + dirX * (i + 0.5) * step;
     const cz = z + dirZ * (i + 0.5) * step;
@@ -261,6 +285,15 @@ export function scaffold(
   const px = -dirZ;
   const pz = dirX;
   const top = WALK_Y + lifts * lift;
+  const runLength = bay * bays * Math.hypot(dirX, dirZ);
+  const totalHeight = lifts * lift + 0.9;
+  b.addCollisionBox(
+    'scaffold',
+    x + dirX * bay * bays / 2 + px * depth / 2,
+    WALK_Y + totalHeight / 2,
+    z + dirZ * bay * bays / 2 + pz * depth / 2,
+    runLength, totalHeight, depth * Math.hypot(dirX, dirZ), yawAlong(dirX, dirZ),
+  );
 
   for (let i = 0; i <= bays; i++) {
     const sx = x + dirX * bay * i;
@@ -304,6 +337,7 @@ export function jerseyBarrier(
   b: PropBuilder, x: number, y: number, z: number, yaw: number, rng: Rng,
 ): void {
   const col = opt(rng.bool(0.25) ? C.hazardWhite : C.concrete, MR.stone);
+  b.addCollisionBox('jersey-barrier', x, y + 0.465, z, 0.62, 0.93, 2.0, yaw);
   b.box(x, y + 0.12, z, 0.62, 0.24, 2.0, yaw, col);
   b.box(x, y + 0.44, z, 0.4, 0.42, 2.0, yaw, col);
   b.box(x, y + 0.78, z, 0.26, 0.3, 2.0, yaw, col);
@@ -314,6 +348,7 @@ export function jerseyBarrier(
 
 /** Flashing amber roadworks lamp on a post. */
 export function warningLamp(b: PropBuilder, x: number, y: number, z: number): void {
+  b.addCollisionCapsule('warning-lamp', x, y + 0.535, z, 1.07, 0.1);
   b.cyl(x, y, z, 0.03, 0.03, 0.9, 4, opt(C.steelDark, MR.metal), false);
   b.blob(x, y + 0.96, z, 0.1, 0.11, 0.1,
     opt(C.paintOrange, MR.lamp, emi(C.paintOrange, 6.0)), 0, 5);

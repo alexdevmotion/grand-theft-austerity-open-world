@@ -100,6 +100,7 @@ export const EN: Readonly<Record<string, string>> = {
   'Se încarcă': 'Loading',
   'Meniu principal': 'Main menu',
   'Progres pornire joc': 'Game start progress',
+  'Comenzi': 'Controls',
   'NAVIGARE': 'NAVIGATE',
   'SELECTEAZĂ': 'SELECT',
   'ÎNAPOI': 'BACK',

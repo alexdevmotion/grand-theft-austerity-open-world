@@ -186,6 +186,7 @@ test('English covers every page of the pause menu and gameplay notices', () => {
     'Inversează axa Y',
     'NU',
     'DA',
+    'Comenzi',
     'ÎNAPOI',
     'Citite direct din harta de input a jocului — nu dintr-o listă scrisă de mână.',
     'BENZI CU ȚINTE — cauciucuri compromise',

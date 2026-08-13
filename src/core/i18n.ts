@@ -80,6 +80,17 @@ export function loadStoredLang(storage?: Pick<Storage, 'getItem'>): Lang | null 
 
 let current: Lang = loadStoredLang() ?? DEFAULT_LANG;
 
+function setDocumentLang(next: Lang): void {
+  // The test runner provides a partial `document` with no element tree.
+  const root = typeof document === 'undefined' ? null : document.documentElement;
+  if (root) root.lang = next;
+}
+
+// A stored English choice is loaded before anyone calls `setLang()`. Keep the
+// document metadata in sync on that path too, for screen readers and browser
+// hyphenation on reload.
+setDocumentLang(current);
+
 const listeners = new Set<(l: Lang) => void>();
 
 export function lang(): Lang {
@@ -97,6 +108,7 @@ export function locale(): string {
  * rebuild every page in the front-end.
  */
 export function setLang(next: Lang): void {
+  setDocumentLang(next);
   if (next === current) return;
   current = next;
   try {
@@ -104,13 +116,6 @@ export function setLang(next: Lang): void {
   } catch {
     /* private mode — the choice just does not survive the session */
   }
-  // `<html lang>` matters for screen readers and for the browser's own
-  // hyphenation. Guarded on `documentElement` rather than on `document`: the
-  // test runner provides a partial `document` with no element tree, and a
-  // language switch must not throw there — a throw here would leave `current`
-  // updated but every subscriber un-notified.
-  const root = typeof document === 'undefined' ? null : document.documentElement;
-  if (root) root.lang = next;
   for (const fn of [...listeners]) {
     try {
       fn(next);

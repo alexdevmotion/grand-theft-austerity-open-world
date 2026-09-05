@@ -91,6 +91,52 @@ export class TrafficAgent {
     return this.vehicle.kind;
   }
 
+  /** Keep the permanent way extending after its driver leaves. The vehicle
+   * owns this route-only callback; it never runs NPC controls or reservations. */
+  handoverRailRoute(): void {
+    if (this.kind !== 'tram' || !this.vehicle.setRailPath) return;
+    const graph = this.graph;
+    const vehicle = this.vehicle;
+    const predecessors = new Map<number, number>();
+    for (const edge of graph.edges) {
+      if (edge.tramStraight >= 0 && !predecessors.has(edge.tramStraight)) {
+        predecessors.set(edge.tramStraight, edge.index);
+      }
+    }
+    let current = this.edge;
+    const points = (): Array<{ x: number; z: number }> => {
+      const behind = predecessors.get(current);
+      const edges = behind === undefined ? [current] : [behind, current];
+      let tail = current;
+      for (let i = 0; i < 2; i++) {
+        tail = graph.edges[tail].tramStraight;
+        if (tail < 0) break;
+        edges.push(tail);
+      }
+      return edges.flatMap((index, i) => [
+        ...(i ? graph.laneJoinPath(graph.edges[edges[i - 1]], TRAM_LANE, graph.edges[index], TRAM_LANE) ?? [] : []),
+        ...(graph.lanePath(graph.edges[index], TRAM_LANE) ?? []),
+      ]);
+    };
+    const scratch = new THREE.Vector3();
+    const distance = (edge: number): number => graph.closestLanePoint(
+      graph.edges[edge], TRAM_LANE, vehicle.position.x, vehicle.position.z, scratch,
+    ).distance;
+    vehicle.setRailPath!(points(), () => {
+      const ahead = graph.edges[current].tramStraight;
+      const behind = predecessors.get(current);
+      const here = distance(current);
+      if (ahead >= 0 && distance(ahead) + 0.1 < here) {
+        // Reversing through a merge retraces the track we arrived on.
+        predecessors.set(ahead, current);
+        current = ahead;
+      } else if (behind !== undefined && distance(behind) + 0.1 < here) {
+        current = behind;
+      } else return null;
+      return points();
+    });
+  }
+
   private e(i: number): LaneEdge {
     return this.graph.edges[i];
   }
@@ -211,6 +257,7 @@ export class TrafficAgent {
     }
     this.wps = wps;
     this.wi = 0;
+    if (this.kind === 'tram') this.vehicle.setRailPath?.(wps);
   }
 
   /* ------------------------------------------------------------------ */
@@ -220,8 +267,7 @@ export class TrafficAgent {
   /** Advance the polyline cursor and return the signed cross-track error. */
   private track(px: number, pz: number): number {
     let cross = 0;
-    let guard = 0;
-    while (this.wi < this.wps.length - 1 && guard++ < 8) {
+    while (this.wi < this.wps.length - 1) {
       const w = this.wps[this.wi];
       const t = ((px - w.x) * w.hx + (pz - w.z) * w.hz) / Math.max(0.2, w.len);
       if (t > 1) { this.wi++; continue; }
@@ -296,7 +342,7 @@ export class TrafficAgent {
   bid(junctions: JunctionControl): void {
     if (this.mood === 'pulledOver' || this.retire) return;
     const e = this.e(this.edge);
-    const d = this.distanceToJunction() - 1.4;
+    const d = this.distanceToJunction() - footprint(this.kind)[0] - 1.4;
     if (d > 34 || d < -2) return;
     junctions.bid(e.to, this.id, bidScore(e.rank, d, Math.abs(this.vehicle.speed)));
   }
@@ -323,6 +369,8 @@ export class TrafficAgent {
     let px = v.position.x;
     let pz = v.position.z;
     const speed = v.speed;
+    const halfLen = footprint(this.kind)[0];
+    const guidedTram = this.kind === 'tram' && !!v.setRailPath;
 
     /* ---- advance the route when we cross into the next edge ---- */
     if (this.plan.length) {
@@ -332,8 +380,10 @@ export class TrafficAgent {
       const ax = n.ex + n.rx * off;
       const az = n.ez + n.rz * off;
       const along = (px - ax) * n.ux + (pz - az) * n.uz;
-      if (along > -0.5) {
-        if (this.heldNode >= 0) { junctions.release(this.heldNode, this.id); this.heldNode = -1; }
+      const lateral = Math.abs((px - ax) * n.rx + (pz - az) * n.rz);
+      // Crossing an infinite entry plane is insufficient on turns: an entire
+      // incoming lane can already lie beyond it, far from the next street.
+      if (along > -0.5 && lateral < 4 && this.distanceToJunction() < 1) {
         this.edge = this.plan.shift()!;
         this.lane = this.planLanes.shift()!;
         this.replan(false);
@@ -343,6 +393,15 @@ export class TrafficAgent {
       return;
     }
     const e = this.e(this.edge);
+    if (this.heldNode >= 0) {
+      const along = (px - e.ex) * e.ux + (pz - e.ez) * e.uz;
+      if (e.from === this.heldNode && along > halfLen + 1) {
+        junctions.release(this.heldNode, this.id);
+        this.heldNode = -1;
+      } else {
+        junctions.refresh(this.heldNode, this.id);
+      }
+    }
 
     /* ---- path ---- */
     let cross = this.track(px, pz);
@@ -352,7 +411,7 @@ export class TrafficAgent {
     const tramLost = this.kind === 'tram' && (
       Math.abs(cross) > 2 || this.laneError > THREE.MathUtils.degToRad(12)
     );
-    if (tramLost || Math.abs(cross) > 22) {
+    if (!guidedTram && (tramLost || Math.abs(cross) > 22)) {
       this.reanchorTime += dt;
       if (this.reanchorTime > (this.kind === 'tram' ? 0.25 : 0.5)) {
         this.reanchorTime = 0;
@@ -388,7 +447,6 @@ export class TrafficAgent {
     }
     const absSpeed = Math.abs(speed);
     const look = THREE.MathUtils.clamp(5.5 + absSpeed * 0.85, 6, 26);
-    const pathHeading = this.lookahead(px, pz, look, _a);
 
     /* ---- speed budget ---- */
     const roadLimit = this.classLimit(e);
@@ -402,7 +460,6 @@ export class TrafficAgent {
     }
 
     // Car in front.
-    const halfLen = footprint(this.vehicle.kind)[0];
     const lead = findLead(field, this.id, px, pz, this.driver.heading, halfLen,
       Math.max(16, absSpeed * 2.6 + 12), 1.5);
     let leadGap = Infinity;
@@ -421,21 +478,27 @@ export class TrafficAgent {
     }
 
     /* ---- junction ---- */
-    const dJunc = this.distanceToJunction() - 1.4;
+    const dJunc = this.distanceToJunction() - halfLen - 1.4;
     let mustStop = false;
-    if (dJunc > -1.5 && dJunc < 70 && this.mood !== 'pulledOver') {
+    let stoppedBySignal = false;
+    const crossing = this.heldNode === e.to && dJunc < 0;
+    if (!crossing && this.distanceToJunction() > -halfLen && dJunc < 70 && this.mood !== 'pulledOver') {
       const sig = junctions.signal(e.to, e.axisX);
       const stopDist = (speed * speed) / (2 * this.driver.tuning.brake);
       if (sig === 'red') mustStop = true;
       else if (sig === 'amber' && dJunc > stopDist * 0.85 + 1.5) mustStop = true;
-      else if (!junctions.hasLight(e.to)) {
-        // Unsignalled: yield unless we hold or win the node.
-        if (this.heldNode !== e.to && !junctions.mayEnter(e.to, this.id, this.edge)) mustStop = true;
-      }
+      stoppedBySignal = mustStop;
+      // Reservations also protect a green phase from a vehicle still clearing
+      // the box, and separate opposing turns within the same signal phase.
+      if (!mustStop && this.heldNode !== e.to && !junctions.mayEnter(e.to, this.id, this.edge)) mustStop = true;
       // Never enter a junction we cannot clear.
       if (!mustStop && lead.obstacle && leadGap < 4 && dJunc < 6) mustStop = true;
 
       if (mustStop) {
+        if (this.heldNode === e.to && dJunc >= 0) {
+          junctions.release(this.heldNode, this.id);
+          this.heldNode = -1;
+        }
         target = Math.min(target, approachSpeed(0, Math.max(0, dJunc), this.driver.tuning.brake));
       } else if (dJunc < 16) {
         // Refresh every step: a claim that lapses mid-crossing lets someone
@@ -446,7 +509,7 @@ export class TrafficAgent {
     }
 
     /* ---- panic / pull over ---- */
-    if (this.panicTime > 0) {
+    if (this.panicTime > 0 && !guidedTram) {
       this.panicTime -= dt;
       if (this.mood === 'cruise') {
         this.mood = 'panic';
@@ -492,13 +555,17 @@ export class TrafficAgent {
         this.lane = to;
         this.laneChangeCooldown = 4.5;
         this.rebuildWaypoints();
-        this.track(px, pz);
+        cross = this.track(px, pz);
       } else {
         this.laneChangeCooldown = 1.2;
       }
     } else if (this.indicator === -1 || this.indicator === 1) {
       if (Math.abs(cross) < 0.9) this.indicator = 0;
     }
+
+    // Route rebuilding uses the shared point scratch space, so sample the
+    // actual aim after any lane change or pull-over has rebuilt the path.
+    const pathHeading = this.lookahead(px, pz, look, _a);
 
     /* ---- reaction to the player ---- */
     if (leadIsPlayer && leadGap < 16) {
@@ -510,8 +577,10 @@ export class TrafficAgent {
       }
       // Swerve: nudge the aim point away from whichever side the player is on.
       const dodge = lead.lateral > 0 ? -1 : 1;
-      _a.x += this.driver.forwardZ * dodge * Math.min(2.4, 14 / Math.max(2, leadGap));
-      _a.z -= this.driver.forwardX * dodge * Math.min(2.4, 14 / Math.max(2, leadGap));
+      if (!guidedTram) {
+        _a.x += this.driver.forwardZ * dodge * Math.min(2.4, 14 / Math.max(2, leadGap));
+        _a.z -= this.driver.forwardX * dodge * Math.min(2.4, 14 / Math.max(2, leadGap));
+      }
     }
 
     /* ---- impatience: horn at whatever is blocking us ---- */
@@ -527,18 +596,23 @@ export class TrafficAgent {
     }
 
     this.stopReason = mustStop
-      ? (junctions.hasLight(e.to) ? 'light' : 'giveWay')
+      ? (stoppedBySignal ? 'light' : 'giveWay')
       : target < 1 ? 'queue' : 'go';
 
     // Kerb-side offset while pulled over / panicking.
     // The steering controller uses positive cross-track to the left.
     const extraCross = -this.pullOverSide * 1.7;
+    if (guidedTram && !this.plan.length) {
+      const remaining = this.distanceToJunction() - halfLen;
+      target = Math.min(target, approachSpeed(0, Math.max(0, remaining - 0.25), this.driver.tuning.brake));
+      if (remaining < 0.6 && absSpeed < 0.3) this.retire = true;
+    }
     this.lastTargetSpeed = target;
 
     this.driver.drive(dt, _a.x, _a.z, target, pathHeading, {
       crossTrack: cross - extraCross,
       emergency,
-      allowReverse: this.kind !== 'tram',
+      allowReverse: this.kind !== 'tram' && !mustStop && !lead.obstacle,
     });
     this.applyLights();
   }

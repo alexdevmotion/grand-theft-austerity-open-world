@@ -429,6 +429,8 @@ export interface BoardPose {
   side: number;
   /** Pull-shut rather than pull-open — the reach starts inboard. */
   closing: boolean;
+  /** Both hands work the lock or brace and pull an occupied driver. */
+  action?: 'pull' | 'lockpick';
 }
 
 type Internal =
@@ -1236,6 +1238,18 @@ export class AnimationController {
         out.setEuler(fore, 0.75 * sit + 0.35 * stand, sgn * 0.18, 0);
         out.setEuler(hand, -0.10, 0, 0);
         this.grip[side] = 0.35 * sit;
+      }
+    }
+
+    if (b.action) {
+      const picking = b.action === 'lockpick';
+      const wrist = picking ? Math.sin(this.clock * 42) * 0.12 : 0;
+      out.setEuler(BI.chest, picking ? 0.20 : 0.08 + reach * 0.24, 0, 0);
+      for (const left of [true, false]) {
+        const sign = left ? 1 : -1;
+        out.setEuler(left ? BI.upperArmL : BI.upperArmR, picking ? 0.65 : 1.1 * reach, sign * -0.15, sign * -0.18);
+        out.setEuler(left ? BI.forearmL : BI.forearmR, picking ? 1.1 : 1.5 * (1 - reach) + 0.3, 0, 0);
+        out.setEuler(left ? BI.handL : BI.handR, wrist, 0, sign * 0.1);
       }
     }
 

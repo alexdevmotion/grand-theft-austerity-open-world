@@ -163,7 +163,7 @@ export class DebugSystem implements System {
 
         pos.y += 1;
         const handle = v.spawn(kind as never, pos, heading, { faction: 'player' });
-        p.enterVehicle(handle);
+        p.enterVehicle(handle, true);
       },
       setInput: (i) => {
         Object.assign(this.synthetic, i);

@@ -205,6 +205,11 @@ export interface VehicleHandle extends Damageable {
   readonly speed: number;
   readonly seats: number;
   readonly occupants: ReadonlyArray<string>;
+  /** Ambient driver, separate from player/passenger ownership. Empty parked cars have none. */
+  npcDriver?: PedArchetype | null;
+  /** Prevent AI control and streaming removal during an entry interaction. */
+  entryReserved?: boolean;
+  locked?: boolean;
   /** -1..1 */
   setControls(throttle: number, steer: number, handbrake: boolean): void;
   teleport(position: Vector3, headingRad: number): void;
@@ -214,11 +219,13 @@ export interface VehicleHandle extends Damageable {
 }
 
 export interface VehicleService {
-  spawn(kind: VehicleClass, position: Vector3, headingRad: number, opts?: { colorSeed?: number; faction?: Faction }): VehicleHandle;
+  /** Ambient traffic must fit its exact lane slot; never relocate a blocked spawn. */
+  trySpawn?(kind: VehicleClass, position: Vector3, headingRad: number, opts?: { colorSeed?: number; faction?: Faction; npcDriver?: PedArchetype }): VehicleHandle | null;
+  spawn(kind: VehicleClass, position: Vector3, headingRad: number, opts?: { colorSeed?: number; faction?: Faction; npcDriver?: PedArchetype }): VehicleHandle;
   despawn(id: string): void;
   get(id: string): VehicleHandle | undefined;
   readonly all: ReadonlyArray<VehicleHandle>;
-  /** Nearest vehicle within `radius` that has a free seat. */
+  /** Nearest slow, unwrecked vehicle whose driver seat can be taken. */
   nearestEnterable(p: Vector3, radius: number): VehicleHandle | undefined;
 }
 
@@ -268,6 +275,8 @@ export interface PedMeleeHit {
 
 export interface PedService {
   spawn(archetype: PedArchetype, position: Vector3, headingRad: number): CharacterHandle;
+  /** Pull an ambient driver into the crowd, then let them flee. */
+  ejectDriver(archetype: PedArchetype, seat: Vector3, exit: Vector3, headingRad: number, duration: number): CharacterHandle;
   despawn(id: string): void;
   get(id: string): CharacterHandle | undefined;
   readonly all: ReadonlyArray<CharacterHandle>;
@@ -288,7 +297,8 @@ export interface PlayerService extends Damageable {
   readonly position: Vector3;
   readonly inVehicle: VehicleHandle | null;
   readonly isOnFoot: boolean;
-  enterVehicle(v: VehicleHandle): void;
+  /** Scripted placement can explicitly bypass the nearby entry interaction. */
+  enterVehicle(v: VehicleHandle, instant?: boolean): void;
   exitVehicle(): void;
   teleport(p: Vector3, headingRad?: number): void;
   respawn(): void;

@@ -34,7 +34,8 @@ import { prof } from '../characters/profile';
 import { CG, probeGroups, type PhysicsWorld } from '../physics/physics';
 import { TRAM_LANE, TrafficGraph, laneSpawnRange } from './traffic/roadGraph';
 import { JunctionControl } from './traffic/junctions';
-import { SensorField, footprint } from './traffic/sensors';
+import { SensorField, footprint, headingOf } from './traffic/sensors';
+import { TrafficVisibility } from './traffic/streaming';
 import { TrafficAgent } from './traffic/agent';
 import type { ControllableVehicle } from './traffic/driver';
 
@@ -100,10 +101,9 @@ export class TrafficSystem implements System, TrafficService {
   private readonly probe = new THREE.Vector3();
   private edgeScratch: number[] = [];
   private edgeWeights: number[] = [];
-  /** Seconds of unrestricted spawning after a camera cut. */
+  /** Faster refill after a camera cut, still restricted to hidden positions. */
   private warpRefill = 0;
-  /** Cosine of the camera's horizontal half-FOV — the real "on screen" test. */
-  private cosHalfFov = 0.75;
+  private readonly visibility = new TrafficVisibility();
 
   /** Global panic, set by the police during a chase. */
   private panicCentre = new THREE.Vector3();
@@ -209,13 +209,10 @@ export class TrafficSystem implements System, TrafficService {
 
     ctx.camera.getWorldPosition(this.focus);
     ctx.camera.getWorldDirection(this.camForward);
-    // Only the ground-plane component matters for "is this spawn on screen".
+    this.visibility.update(ctx.camera);
+    // Ground-plane direction biases incoming traffic toward the player.
     this.camForward.y = 0;
     if (this.camForward.lengthSq() > 1e-6) this.camForward.normalize();
-    // Horizontal half-FOV from the vertical FOV and the current aspect.
-    const vHalf = THREE.MathUtils.degToRad(ctx.camera.fov) * 0.5;
-    const hHalf = Math.atan(Math.tan(vHalf) * ctx.camera.aspect);
-    this.cosHalfFov = Math.cos(Math.min(1.35, hHalf + 0.12));
     this.junctions.update(dt);
 
     if (this.panicTimer > 0) {
@@ -257,13 +254,14 @@ export class TrafficSystem implements System, TrafficService {
       },
     };
     tp = prof.begin();
-    for (const s of this.slots) s.agent.update(dt, this.field, this.junctions, horn);
+    for (const s of this.slots) {
+      if (s.vehicle.entryReserved) s.vehicle.setControls(0, 0, true);
+      else s.agent.update(dt, this.field, this.junctions, horn);
+    }
     prof.add('traffic.drive', tp);
 
-    // A camera cut (debug framing, respawn, a mission jump) invalidates every
-    // "do not appear on screen" rule — the whole frame just changed anyway, so
-    // refill the new location immediately instead of trickling in behind the
-    // player over the next ten seconds.
+    // Refill quickly after a camera cut, while retaining visibility checks:
+    // the following frames are already visible to the player.
     const jump = this.lastFocus.distanceToSquared(this.focus);
     this.warpRefill = Math.max(0, this.warpRefill - dt);
     if (jump > 60 * 60) this.warpRefill = 1.2;
@@ -337,16 +335,16 @@ export class TrafficSystem implements System, TrafficService {
       s.distance = v.position.distanceTo(this.focus);
 
       // The player can steal an ambient car — hand it over and forget it.
-      if (v.id === playerVehicleId || v.occupants.length > 0) {
+      if (v.id === playerVehicleId || v.occupants.length > 0 || v.npcDriver === null) {
+        if (v.kind === 'tram') s.agent.handoverRailRoute();
         this.release(s);
         continue;
       }
-      if (s.agent.retire && s.distance > 60) { this.remove(s, true); continue; }
-      if (s.distance > 340) { this.remove(s, true); continue; }
-      if (v.isWrecked && s.distance > 120) { this.remove(s, true); continue; }
-      // A wreck blocking a junction in front of the player stays; one that has
-      // been sitting far away for a while does not.
-      if (s.agent.age > 300 && s.distance > 220) { this.remove(s, true); continue; }
+      const removable = (s.agent.retire && s.distance > 60) || s.distance > 340 ||
+        (v.isWrecked && s.distance > 120) || (s.agent.age > 300 && s.distance > 220);
+      if (removable && this.visibility.hidden(v.position, headingOf(v), v.kind, (p) => this.occluded(p))) {
+        this.remove(s, true);
+      }
     }
   }
 
@@ -407,25 +405,17 @@ export class TrafficSystem implements System, TrafficService {
       const d = Math.hypot(this.probe.x - this.focus.x, this.probe.z - this.focus.z);
       if (d < 34 || d > 195) continue;
 
-      if (this.warpRefill <= 0) {
-        const toX = (this.probe.x - this.focus.x) / d;
-        const toZ = (this.probe.z - this.focus.z) / d;
-        const facing = toX * this.camForward.x + toZ * this.camForward.z;
-        const onScreen = facing > this.cosHalfFov;
+      const heading = Math.atan2(edge.ux, edge.uz);
+      const gh = city.spatial.groundHeight(this.probe.x, this.probe.z);
+      this.probe.y = Number.isFinite(gh) ? Math.max(0, gh) : 0;
+      if (!this.visibility.hidden(this.probe, heading, kind, (p) => this.occluded(p))) continue;
 
-        // Traffic that appears in front of you is the single most obvious tell
-        // that a city is fake, so a spawn inside the frustum has to earn its
-        // place: either a building is between it and the camera, or it is far
-        // enough down the road to be buried in aerial haze.
-        if (onScreen && d < 110 && !this.occluded(this.probe)) continue;
-        if (facing > 0.2 && d < 44) continue;
-
-        // Anything seeded ahead should be COMING TOWARD us. Without this the
-        // near foreground is permanently starved: everything spawned up the
-        // road drives away from the camera and never enters the shot.
-        if (facing > 0.3 && edge.ux * this.camForward.x + edge.uz * this.camForward.z > 0.2) {
-          if (this.rng.bool(0.82)) continue;
-        }
+      const facing = ((this.probe.x - this.focus.x) * this.camForward.x +
+        (this.probe.z - this.focus.z) * this.camForward.z) / d;
+      if (facing > 0.2 && d < 44) continue;
+      // Bias hidden spawns ahead to approach the camera and enter the street.
+      if (facing > 0.3 && edge.ux * this.camForward.x + edge.uz * this.camForward.z > 0.2) {
+        if (this.rng.bool(0.82)) continue;
       }
 
       // Never on top of the player.
@@ -441,14 +431,16 @@ export class TrafficSystem implements System, TrafficService {
       });
       if (blocked) continue;
 
-      const heading = Math.atan2(edge.ux, edge.uz);
-      const gh = city.spatial.groundHeight(this.probe.x, this.probe.z);
-      this.probe.y = Number.isFinite(gh) ? Math.max(0, gh) : 0;
-
-      const handle = this.vehicles.spawn(kind, this.probe, heading, {
+      const handle = this.vehicles.trySpawn?.(kind, this.probe, heading, {
         colorSeed: this.rng.int(1, 4096),
         faction: 'civilian',
-      }) as ControllableVehicle;
+        npcDriver: 'civilian',
+      }) as ControllableVehicle | null | undefined;
+      // A blocked lane is skipped; relocating a spawn strands its driver off
+      // the route (and can move it out of the cover checked above).
+      if (!handle) continue;
+      // Subsequent spawns in this same burst must see the new vehicle.
+      this.field.addVehicle(handle, false);
       handle.setIndicator?.(0);
 
       const agent = new TrafficAgent(handle, graph, edge.index, lane, this.rng.fork(handle.id));
@@ -477,7 +469,7 @@ export class TrafficSystem implements System, TrafficService {
   /** True when a building stands between the camera and this spawn point. */
   private occluded(p: THREE.Vector3): boolean {
     if (!this.phys) return false;
-    _ray.set(p.x - this.focus.x, 1.2 - this.focus.y, p.z - this.focus.z);
+    _ray.copy(p).sub(this.focus);
     const dist = _ray.length();
     if (dist < 2) return false;
     _ray.divideScalar(dist);

@@ -171,14 +171,18 @@ export function findLead(
     const along = dx * fx + dz * fz;
     if (along <= 0 || along > range) return;
     const lat = dx * rx + dz * rz;
-    // Widen the corridor with distance so a car three lanes over at 30 m does
-    // not brake us, but one drifting into our lane at 6 m does.
-    const widen = halfCorridor + o.halfWidth * 0.9;
+    // Project the complete oriented body onto our corridor. A bus crossing
+    // sideways occupies its length across our lane, not just its width.
+    const alignment = Math.cos(o.heading - heading);
+    const sideways = Math.abs(Math.sin(o.heading - heading));
+    const projectedWidth = o.halfWidth * Math.abs(alignment) + o.halfLength * sideways;
+    const projectedLength = o.halfLength * Math.abs(alignment) + o.halfWidth * sideways;
+    const widen = halfCorridor + projectedWidth;
     if (Math.abs(lat) > widen) return;
-    const gap = along - selfHalfLength - o.halfLength;
+    const gap = along - selfHalfLength - projectedLength;
     if (gap < _lead.gap) {
       _lead.gap = gap;
-      _lead.speed = o.speed * Math.max(0, Math.cos(o.heading - heading));
+      _lead.speed = o.speed * alignment;
       _lead.obstacle = o;
       _lead.lateral = lat;
     }

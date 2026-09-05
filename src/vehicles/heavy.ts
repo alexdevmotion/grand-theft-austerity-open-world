@@ -16,7 +16,7 @@ import { Rng } from '../core/rng';
 import { Palette } from '../artDirection';
 import {
   BLACK_TRIM, CHROME_DULL, CABIN_SHADOW, DARK_PLASTIC, GLASS, L, LAMP_WHITE, LENS_AMBER,
-  LENS_CLEAR, LENS_RED, RUBBER, lin, buildCarBody, car,
+  LENS_CLEAR, LENS_RED, RUBBER, lin, buildCarBody, car, aperture,
   type BodyAnchors, type BodyBuild, type DoorPart, type VehicleSpec,
 } from './carkit';
 
@@ -336,15 +336,15 @@ export function buildAro(spec: VehicleSpec, rng: Rng): BodyBuild {
         for (let k = 0; k < 12; k++) {
           b.box(0.14, 0.008, 0.018, T(side * (hw + 0.018), y(0.367), -0.92 + k * 0.145), trim);
         }
-        // Fixed cargo-side pane closes the gap behind the rear passenger door.
-        const V = (h: number, z: number) => new THREE.Vector3(side * 0.857, y(h), z);
-        const a = V(1.27, -1.91), bb = V(1.27, -1.17);
-        const c = V(1.85, -1.17), e = V(1.85, -1.91);
-        if (side > 0) g.quad(e, c, bb, a, { color: GLASS, rough: 0.05 });
-        else g.quad(a, bb, c, e, { color: GLASS, rough: 0.05 });
-        for (const zz of [-1.95, -1.13]) b.box(0.055, 0.64, 0.055, T(side * 0.858, y(1.56), zz), paint);
-        // Drip rails, straight steel gutters instead of decorative roof bars.
-        b.box(0.035, 0.022, 2.88, T(side * 0.847, y(d.height - 0.045), -0.61), steel);
+        // The fixed cargo window follows the same rounded aperture and
+        // roof tumblehome as the passenger doors.
+        aperture(g, b, (u, v) => {
+          const across = side > 0 ? 1 - u : u;
+          return new THREE.Vector3(side * THREE.MathUtils.lerp(d.hwBelt - .022, d.hwTop - .008, v),
+            y(THREE.MathUtils.lerp(d.belt + .048, d.height - .126, v)),
+            THREE.MathUtils.lerp(-1.92, -1.18, across));
+        }, { color: GLASS, rough: .045, uv: UV.glassGrime }, paint, trim);
+
       }
       // Tailgate-mounted spare: wheel axis is longitudinal, not vertical.
       b.box(0.34, 0.34, 0.13, T(0.34, y(1.10), tail - 0.055), steel);
@@ -358,8 +358,8 @@ export function buildAro(spec: VehicleSpec, rng: Rng): BodyBuild {
       b.box(0.14, 0.045, 0.035, T(-0.42, y(1.13), tail - 0.084), steel);
       // Raised centre pressing and paired retaining catches on the bonnet.
       b.loft([
-        { z: 1.00, hw: 0.55, yTop: y(1.262), yBottom: y(1.22), rTop: 0.018, rBottom: 0.006 },
-        { z: nose - 0.14, hw: 0.52, yTop: y(1.245), yBottom: y(1.20), rTop: 0.018, rBottom: 0.006 },
+        { z: 1.00, hw: 0.55, yTop: y(1.262), yBottom: y(1.22), rTop: 0.018, rBottom: 0.006, crown: .014 },
+        { z: nose - 0.14, hw: 0.52, yTop: y(1.245), yBottom: y(1.20), rTop: 0.018, rBottom: 0.006, crown: .014 },
       ], paint);
       for (const side of [-1, 1]) b.box(0.026, 0.095, 0.045, T(side * (hw + 0.008), y(1.17), nose - 0.44), steel);
     },

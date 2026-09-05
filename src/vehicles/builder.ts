@@ -63,6 +63,10 @@ export interface Station {
   /** Corner radius at the top / bottom of the section. */
   rTop: number;
   rBottom: number;
+  /** Pressed panel crown at the centre of the top surface. */
+  crown?: number;
+  /** Inward tuck at the lower sill, in metres. */
+  sillInset?: number;
 }
 
 /** Number of perimeter samples produced by `outline` (last duplicates first). */
@@ -211,6 +215,33 @@ export class GeoBuilder {
     return this.add(cachedBox(w, h, d), m, s);
   }
 
+  /** Closed pressed / padded form with rounded edges on all three axes. */
+  roundedBox(w: number, h: number, d: number, radius: number, m: THREE.Matrix4 | null, s: Surf): this {
+    const r = Math.min(radius, w * .49, h * .49, d * .49);
+    const shape = new THREE.Shape();
+    const x = w / 2 - r, y = h / 2 - r;
+    // The bevel supplies the corner radius; the inset polygon keeps the final
+    // dimensions exact instead of inflating a box by twice its bevel size.
+    shape.moveTo(-x, -y); shape.lineTo(x, -y); shape.lineTo(x, y);
+    shape.lineTo(-x, y); shape.closePath();
+    const geo = new THREE.ExtrudeGeometry(shape, {
+      depth: d - 2 * r, bevelEnabled: true, bevelThickness: r,
+      bevelSize: r, bevelSegments: 4, steps: 1, curveSegments: 4,
+    });
+    geo.translate(0, 0, -d / 2 + r);
+    const uv = geo.getAttribute('uv');
+    let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+    for (let i = 0; i < uv.count; i++) {
+      minU = Math.min(minU, uv.getX(i)); maxU = Math.max(maxU, uv.getX(i));
+      minV = Math.min(minV, uv.getY(i)); maxV = Math.max(maxV, uv.getY(i));
+    }
+    for (let i = 0; i < uv.count; i++) uv.setXY(i,
+      (uv.getX(i) - minU) / Math.max(.001, maxU - minU),
+      (uv.getY(i) - minV) / Math.max(.001, maxV - minV));
+    this.add(geo, m, s); geo.dispose();
+    return this;
+  }
+
   /** Box spanning `from` → `to` with cross-section `w` x `d`. See `span`. */
   strut(from: THREE.Vector3, to: THREE.Vector3, w: number, d: number, s: Surf): this {
     return this.add(cachedBox(1, 1, 1), span(from, to, w, d, _strutM), s);
@@ -247,6 +278,7 @@ export class GeoBuilder {
       capRear?: boolean;
       vScale?: number;
       route?: (cx: number, cy: number, cz: number) => GeoBuilder | null;
+      omit?: (cx: number, cy: number, cz: number) => boolean;
     },
   ): this {
     const n = stations.length;
@@ -256,6 +288,14 @@ export class GeoBuilder {
     for (let i = 0; i < n; i++) {
       const st = stations[i];
       outline(st.hw, st.yBottom, st.yTop, st.rTop, st.rBottom, _outA);
+      for (let k = 0; k < _outA.length; k += 2) {
+        const x = _outA[k], y = _outA[k + 1];
+        const h = Math.max(.001, st.yTop - st.yBottom);
+        const t = THREE.MathUtils.clamp((y - st.yBottom) / h, 0, 1);
+        _outA[k] = x * (1 - (st.sillInset ?? 0) / st.hw * (1 - t) ** 2);
+        const shoulder = THREE.MathUtils.smoothstep(y, st.yTop - st.rTop, st.yTop);
+        _outA[k + 1] = y + (st.crown ?? 0) * (1 - (x / st.hw) ** 2) * shoulder;
+      }
       rings.push(_outA.slice());
     }
     // u by arc length of the first ring
@@ -288,6 +328,8 @@ export class GeoBuilder {
         D.set(rj[k * 2], rj[k * 2 + 1], zj);
         // Skip degenerate slivers.
         if (A.distanceToSquared(B) < 1e-9 && D.distanceToSquared(C) < 1e-9) continue;
+        if (opts?.omit?.((A.x + B.x + C.x + D.x) * .25,
+          (A.y + B.y + C.y + D.y) * .25, (zi + zj) * .5)) continue;
         let target: GeoBuilder = this;
         if (opts?.route) {
           const cx = (A.x + B.x + C.x + D.x) * 0.25;
@@ -307,6 +349,7 @@ export class GeoBuilder {
   smoothQuad(
     a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3, d: THREE.Vector3,
     u0: number, u1: number, v0: number, v1: number, s: Surf,
+    uvCorners?: readonly [number, number, number, number, number, number, number, number],
   ): void {
     // Face normal of the whole quad (averaged) so adjacent strips agree.
     _n.set(0, 0, 0);
@@ -318,12 +361,13 @@ export class GeoBuilder {
     _n.add(new THREE.Vector3().crossVectors(e1, e2));
     _n.normalize();
     const nx = _n.x, ny = _n.y, nz = _n.z;
-    this.vertex(a.x, a.y, a.z, nx, ny, nz, u0, v0, s);
-    this.vertex(b.x, b.y, b.z, nx, ny, nz, u1, v0, s);
-    this.vertex(c.x, c.y, c.z, nx, ny, nz, u1, v1, s);
-    this.vertex(a.x, a.y, a.z, nx, ny, nz, u0, v0, s);
-    this.vertex(c.x, c.y, c.z, nx, ny, nz, u1, v1, s);
-    this.vertex(d.x, d.y, d.z, nx, ny, nz, u0, v1, s);
+    const uv = uvCorners ?? [u0, v0, u1, v0, u1, v1, u0, v1];
+    this.vertex(a.x, a.y, a.z, nx, ny, nz, uv[0], uv[1], s);
+    this.vertex(b.x, b.y, b.z, nx, ny, nz, uv[2], uv[3], s);
+    this.vertex(c.x, c.y, c.z, nx, ny, nz, uv[4], uv[5], s);
+    this.vertex(a.x, a.y, a.z, nx, ny, nz, uv[0], uv[1], s);
+    this.vertex(c.x, c.y, c.z, nx, ny, nz, uv[4], uv[5], s);
+    this.vertex(d.x, d.y, d.z, nx, ny, nz, uv[6], uv[7], s);
   }
 
   private cap(ring: number[], z: number, dir: number, s: Surf): void {

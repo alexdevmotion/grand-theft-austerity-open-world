@@ -94,7 +94,10 @@ vec3 viewPositionFrom(const in vec2 uv, const in float d, const in float viewZ) 
 
 void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth, out vec4 outputColor) {
   outputColor = inputColor;
-  if (uWetness < 0.01 || depth >= 1.0) return;
+  // Damp concrete has a rough material reflection, not a screen-space mirror.
+  // Running the ray marcher on the default dry-day film creates isolated
+  // black hit/miss pixels around every pedestrian and railing.
+  if (uIntensity <= 0.0 || uWetness < 0.38 || depth >= 1.0) return;
 
   float viewZ = getViewZ(depth);
   vec3 viewPos = viewPositionFrom(uv, depth, viewZ);
@@ -208,9 +211,11 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth,
   float edgeFade = edge.x * edge.y;
   float distFade = 1.0 - smoothstep(0.55, 1.0, rayT);
 
-  float k = uIntensity * uWetness * groundW * wetMask * edgeFade * distFade * mix(0.12, 1.0, fres);
+  float k = uIntensity * smoothstep(0.38, 0.85, uWetness) * groundW * wetMask * edgeFade * distFade * mix(0.12, 1.0, fres);
   k = clamp(k, 0.0, 0.72);
 
+  // Invalid/depth-discontinuous samples must preserve the shaded ground.
+  if (!(k > 0.0) || !(refl.r >= 0.0) || !(refl.g >= 0.0) || !(refl.b >= 0.0)) return;
   outputColor = vec4(mix(inputColor.rgb, refl, k), inputColor.a);
 }
 `;
@@ -503,9 +508,9 @@ export class PostFXSystem implements System, RenderService {
       // locality) and more correct here: this AO exists to seat kerbs, window
       // reveals and street furniture into their surroundings, not to darken
       // whole building faces, which is the low sun's job.
-      ao.configuration.aoRadius = 1.4;
+      ao.configuration.aoRadius = 0.65;
       ao.configuration.distanceFalloff = 1.2;
-      ao.configuration.intensity = 2.6;
+      ao.configuration.intensity = 1.35;
       /*
        * Half res with depth-aware upsampling, unconditionally.
        *

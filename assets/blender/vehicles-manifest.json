@@ -4,97 +4,97 @@
     "dacia1300": {
       "parts": 14,
       "doors": 4,
-      "triangles": 16824
+      "triangles": 22838
     },
     "dacia1300.hero": {
       "parts": 14,
       "doors": 4,
-      "triangles": 16844
+      "triangles": 24180
     },
     "dacia1310": {
       "parts": 14,
       "doors": 4,
-      "triangles": 12588
+      "triangles": 20362
     },
     "dacia1310break": {
       "parts": 14,
       "doors": 4,
-      "triangles": 12696
+      "triangles": 19938
     },
     "oltcit": {
       "parts": 10,
       "doors": 2,
-      "triangles": 12342
+      "triangles": 19404
     },
     "supernova": {
       "parts": 14,
       "doors": 4,
-      "triangles": 15652
+      "triangles": 20238
     },
     "sandero": {
       "parts": 14,
       "doors": 4,
-      "triangles": 11324
+      "triangles": 15824
     },
     "duster": {
       "parts": 14,
       "doors": 4,
-      "triangles": 11492
+      "triangles": 15992
     },
     "logan": {
       "parts": 14,
       "doors": 4,
-      "triangles": 15780
+      "triangles": 20396
     },
     "loganTaxi": {
       "parts": 14,
       "doors": 4,
-      "triangles": 16164
+      "triangles": 20780
     },
     "sedanModern": {
       "parts": 14,
       "doors": 4,
-      "triangles": 11348
+      "triangles": 15878
     },
     "ministry": {
       "parts": 14,
       "doors": 4,
-      "triangles": 11436
+      "triangles": 15966
     },
     "aro24": {
       "parts": 14,
       "doors": 4,
-      "triangles": 15180
+      "triangles": 21162
     },
     "dacia1304": {
       "parts": 10,
       "doors": 2,
-      "triangles": 9128
+      "triangles": 9192
     },
     "panelVan": {
       "parts": 10,
       "doors": 2,
-      "triangles": 10118
+      "triangles": 10182
     },
     "roman": {
       "parts": 12,
       "doors": 2,
-      "triangles": 13192
+      "triangles": 13288
     },
     "ratb": {
       "parts": 8,
       "doors": 0,
-      "triangles": 14286
+      "triangles": 14382
     },
     "tram": {
       "parts": 14,
       "doors": 0,
-      "triangles": 24758
+      "triangles": 24950
     },
     "escooter": {
       "parts": 4,
       "doors": 0,
-      "triangles": 1304
+      "triangles": 1960
     }
   }
 }

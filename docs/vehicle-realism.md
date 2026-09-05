@@ -20,9 +20,22 @@ The vehicle builders remain editable runtime geometry. No photograph is used as 
 - Tires use 32 circumference segments with molded sidewall rings, valves and stamped steel-wheel ventilation details. Geometry remains cached and shares the existing material buckets.
 - Corrosion concentrates along underside seams. Modern clean-paint atlas cells no longer receive automatic rust blooms, and hero rust decals sit on metal beside the arches instead of covering rotating tires.
 
+## Runtime shape rebuild — 5 September
+
+The first realism pass still read as a box-shaped prototype in the driving camera. This revision replaces its dominant surfaces, not just its colours:
+
+- The Dacia roof is now a thin sheet with a transverse and longitudinal crown. Its narrower roofline and more raked backlight follow the reference silhouette.
+- Front, rear, side and ARO cargo panes have rounded apertures, continuous rubber seals, thin brightwork and actual side-window tumblehome. Opening doors retain their own glazing and frames.
+- Bonnet and boot have pressed-panel crowns; the lower body tucks into the sills. Fender flanges follow the real wheel opening. Inner wing discs and interior door cards sit behind the outer skin instead of obscuring tires or protruding through doors.
+- Original 1300 rectangular headlamps have rounded reflector housings and fluted lenses; its accessory lamps remain hero-only. The early 1310 uses four round headlights. The original 1300 rear apron is painted rather than a large black rectangle.
+- Seats have padded cushions, rounded backrests, vinyl bolsters and stitched channels. The cabin is open below its roof rather than capped by a painted belt-height surface.
+- Wheels have continuous curved tire shoulders, pressed-steel dishes, small domed chrome hubcaps, recessed slots and rolled rim lips. Paint retains a clearcoat lobe, while the hero's repairs use smaller decals and thin tape.
+
+The 1300 is approximately 23,000 triangles including all four wheels, with cached geometry and unchanged render buckets. This remains an authored parametric reconstruction; it is not a scanned or factory-CAD vehicle.
+
 ## Verification boundary
 
-CPU tests cover the paint colour-space regression, ARO bonnet/roof separation and four doors, finite geometry for every model, a 30,000-triangle body ceiling, existing Dacia silhouette contracts, damage and vehicle placement/lifecycle. Lighting, transparency sorting and perceived realism require the main task's browser review. Alpha-blended glazing is an efficient approximation; this pass does not add ray-traced transmission or photogrammetry.
+CPU tests cover the paint colour-space regression, ARO bonnet/roof separation and four doors, finite geometry for every model, a 30,000-triangle complete vehicle ceiling including driver and all wheels, roof crown, window taper, wheel occlusion, open cabin volume, existing Dacia silhouette contracts, damage and vehicle placement/lifecycle. Lighting, transparency sorting and perceived realism require the main task's browser review. Alpha-blended glazing is an efficient approximation; this pass does not add ray-traced transmission or photogrammetry.
 
 ## Editable Blender workshop
 
@@ -37,4 +50,4 @@ This creates `assets/blender/vehicles.blend`: all 18 fleet models plus the hero 
 
 The `paint`, `chrome`, `rubber`, `glass`, `interior` and `lamp` materials retain linear vertex colour, roughness, metalness and clearcoat attributes. Atlas UVs and eight lamp-channel weights are preserved for authoring. The canvas-generated runtime atlas is not baked into this Blender file, so microtexture and decal appearance differ. Regeneration overwrites the workshop: save hand-edited variants under another filename.
 
-To export selected models, append their IDs, for example `bun tools/blender/export-vehicles.ts dacia1300 aro24`. Add `-- --render` to the Blender command for an optional overview render. The generated `tools/blender/input/vehicles.json` is an intermediate (~80 MB for the whole fleet); the compressed Blender file is about 5 MB. `assets/blender/vehicles-manifest.json` lists part, door and triangle counts, including wheels. Blender edits are not automatically imported into the running game.
+To export selected models, append their IDs, for example `bun tools/blender/export-vehicles.ts dacia1300 aro24`. Add `-- --render` to the Blender command for an optional overview render. The generated `tools/blender/input/vehicles.json` is an intermediate (generated for the whole fleet); the compressed Blender file is compressed. `assets/blender/vehicles-manifest.json` lists part, door and triangle counts, including wheels. Blender edits are not automatically imported into the running game.

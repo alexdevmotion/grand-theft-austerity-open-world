@@ -104,7 +104,7 @@ export const Grade = {
   vignetteDarkness: 0.32,
   vignetteOffset: 0.24,
   chromaticAberration: 0.00018,
-  filmGrain: 0.009,
+  filmGrain: 0.0015,
 } as const;
 
 /** Aerial perspective: warm horizon haze, cool distant shade. */

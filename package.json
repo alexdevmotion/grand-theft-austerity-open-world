@@ -14,7 +14,9 @@
     "audio:sync": "node tools/sync-audio.mjs",
     "assets:cast": "bun tools/blender/export-cast.ts && blender --background --threads 2 --python tools/blender/build-cast.py && blender --background --threads 2 --python tools/blender/fit-anatomical-cast.py",
     "assets:vehicles": "bun tools/blender/export-vehicles.ts && blender --background --threads 2 --python tools/blender/build-vehicles.py",
-    "assets:buildings": "bun tools/blender/export-buildings.ts && blender --background --threads 2 --python tools/blender/build-buildings.py"
+    "assets:buildings": "bun tools/blender/export-buildings.ts && blender --background --threads 2 --python tools/blender/build-buildings.py",
+    "assets:body": "python3 tools/blender/cook-body.py",
+    "assets:bodies": "bun tools/blender/export-bodies.ts && blender --background --threads 2 --python tools/blender/build-bodies.py"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "0.19.3",

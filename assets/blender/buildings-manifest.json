@@ -1,14 +1,14 @@
 {
   "blender": "5.2.1 LTS",
-  "source_sha256": "9bc40d95d1b6d7a057c4d89ceb57db67aa864b5af8d58beebc3644067187e4a7",
+  "source_sha256": "308400ed3cc1889563fced87f94e76d8df48097bdc54962708866a248808b9b4",
   "units": "metres",
   "coordinate_transform": "Three (x,y,z) to Blender (x,-z,y)",
   "models": {
     "socialist-bloc": {
       "parts": {
         "facade": {
-          "vertices": 20,
-          "triangles": 10,
+          "vertices": 1200,
+          "triangles": 600,
           "materials": 8,
           "attributes": [
             ".select_vert",
@@ -34,8 +34,8 @@
           ]
         },
         "detail": {
-          "vertices": 2940,
-          "triangles": 1550,
+          "vertices": 12040,
+          "triangles": 6118,
           "materials": 1,
           "attributes": [
             ".select_vert",
@@ -62,8 +62,8 @@
     "builders-house": {
       "parts": {
         "facade": {
-          "vertices": 40,
-          "triangles": 20,
+          "vertices": 836,
+          "triangles": 418,
           "materials": 8,
           "attributes": [
             ".select_vert",
@@ -89,8 +89,8 @@
           ]
         },
         "detail": {
-          "vertices": 49774,
-          "triangles": 27920,
+          "vertices": 52870,
+          "triangles": 29468,
           "materials": 1,
           "attributes": [
             ".select_vert",

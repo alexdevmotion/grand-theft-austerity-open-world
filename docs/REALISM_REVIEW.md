@@ -1,68 +1,75 @@
-# Realism pass — 5 September 2026
+# Visible realism overhaul — 5 September 2026
 
-The current direction is natural Romanian urban lighting, worn communist-era
-vehicles and more restrained anatomy. The main characters remain fictional
-composites; photographs guide their proportions rather than becoming textures.
+This pass replaces the main characters' segmented bodies, rebuilds the vehicle
+surfaces, and adds real architectural depth and scanned street materials. The
+matched comparison uses the previous release, `e52d055`, and the current built
+preview at the same camera positions, quality and afternoon lighting. Pedestrians
+and traffic move independently between captures.
 
-## Implemented
+[Open the interactive before-and-after comparison](realism-comparison.html).
 
-- Blender 5.2.1 LTS installed and verified headlessly. Reproducible cast, vehicle
-  and building workshop commands are in `BLENDER.md`.
-- Four real portraits fitted and visually checked: Agatinei, Bolojan, Nedea and
-  Dan. All three playable/story head identities use these fits. A CC0 MakeHuman
-  anatomical base now provides proper lips, nostrils, ears and eyelid topology,
-  fitted through 31 controls per character and subdivided in Blender.
-- Three anatomical heads and blink shape keys are cooked into the runtime.
-  Their original UVs carry locally bundled CC0 male skin detail. Pupil visibility,
-  corneal highlights, skin shading, brows, lashes, beard and hairline were corrected. Acceleration/braking posture and pivot steps improved.
-- Dacia proportions/brightwork and ARO utility body rebuilt or refined. Glazing,
-  paint, aged clearcoat, wheels and corrosion use the scene lighting.
-- Natural sky/key/fill and grading replace the strong magenta cast. Apartment
-  windows vary in occupancy/colour; concrete has restrained weathering. Thin
-  foliage replaces solid canopy lobes and wind now runs before projection.
+## What changed in the running game
 
-## Verified locally
+- **Main cast:** continuous anatomical shoulders, hips, limbs and hands replace
+  disconnected primitives. Authored skin weights transfer to the existing rig.
+  Jacket, suit and tee silhouettes, garment layers, collars, lapels, seams and
+  shoes distinguish the three characters. The photo-fitted heads from the earlier
+  release remain attached to these new bodies.
+- **Cars:** Dacia 1300/1310 and ARO bodies have crowned panels, curved roofs,
+  inset glazing, wheel arches, model-specific lamps, grilles, bumpers, mirrors
+  and padded seats. Full driveable models remain below 30,000 triangles including
+  their wheels and driver. Parked cars across the city are now detailed Dacias
+  with round tyres and period colours, replacing the box placeholders.
+- **World:** windows and shopfronts are cut into the walls with actual jambs and
+  reveals. Deep balconies have rails, side walls and varied enclosures. Sills,
+  downpipes and entrance details cast shadows. Original CC0 Poly Haven asphalt,
+  concrete and paving maps provide colour, normal and roughness detail, with
+  bundled provenance and a procedural fallback.
+- **Presentation:** trees and shrubs use thin leaves instead of solid polygon
+  crowns. Compact ground rings and overhead indicators replace tall marker
+  beams. Reduced film grain and a higher night fill keep dark streets readable.
+  Reduced ambient occlusion avoids heavy dirty outlines. Dry streets no
+  longer run the wet reflection raymarch that produced floating black marks.
+- **Stability:** quality changes preserve live shadow uniforms for cached shaders.
+  Left-side drivers and right-hand traffic remain the driving convention.
+- **Blender:** regenerated vehicles and buildings match runtime geometry. A new
+  full-body workshop contains all three complete rigs, Blink and walk actions;
+  see [BLENDER.md](BLENDER.md) for reproducible commands and editing limits.
 
-- Production build and typecheck passed. Vite still reports a large bundle
-  warning (approximately 12.83 MB JavaScript before gzip, 4.24 MB gzipped).
-- Full suite: 680 tests passed, zero failures, 60,687 assertions across 58 files
-  after anatomical heads, skin textures, hair and paint changes. The final neck
-  seam adjustment passed all three anatomical tests (78 assertions), and the
-  regenerated fallback workshop passed seven sculpt tests (7,112 assertions).
-- Reopened Blender files verified: three fitted anatomical heads with Blink and photo controls,
-  six fallback sculpt meshes and assembly parts, nineteen vehicle variants with wheels/door pivots, three architectural
-  collections with eight runtime meshes.
-- Built preview rendered all three identities and a profile view, plus local
-  street/landmark/day/night/rain captures. Screenshots are under
-  `tools/out/anatomical-final/` for the current cast and
-  `tools/out/realism-final/` for the environment and pristine Dacia. Earlier
-  diagnostic portraits show superseded procedural geometry.
-- In the built preview, the Dacia moved approximately 78 m from the broadcast
-  plaza road spawn, collided and remained driveable; braking stopped it. Exit
-  returned to on-foot mode, then sprint input moved the player approximately
-  104 m. These are short control checks, not a campaign playthrough.
-- Final built-preview blink replay observed 14 closing frames and 506 open
-  frames with zero lash-visibility mismatches; browser page errors were empty.
-- One shared Chrome test session was used and closed after verification. Observed high-quality screenshot
-  samples ranged roughly 29–57 fps across views; this is not a controlled frame
-  pacing benchmark and does not establish a steady 60 fps.
+## Verification
 
-The first combined development screenshot/drive harness was interrupted by HMR
-when another asset changed. Its partial driving output is not a passing test;
-subsequent control checks used the static built preview.
+The complete suite passes: **721 tests, zero failures**. Typecheck and production
+build pass. The test run uses a 30-second timeout for the full-city setup hook;
+its assertions are unchanged. An earlier run timed out while browser rendering
+was competing for resources. The final run was isolated from browser rendering.
+The JavaScript bundle remains large: approximately 13.47 MB, 4.45 MB gzipped.
 
-## Remaining limits
+Vehicle and building Blender workshops were regenerated and reopened. The body
+workshop compares 432 skinned pose samples against the runtime with a maximum
+position error of 2.23 micrometres.
 
-These are fitted anatomical reconstructions, not scanned digital doubles or a
-GTA VI-level asset set. Close-up hair, clothing, crowd models and facial acting
-remain the largest fidelity limits. Generic skin detail is not the photographed
-person's skin. Bundle size also needs a later streaming/asset compression pass. Vehicles and buildings have native
-Blender authoring exports, but their manual Blender edits do not yet cook back
-into the game; the cast has reproducible geometry/Blink cook scripts, but arbitrary manual
-sculpts still require explicitly exporting through that pipeline.
+The built preview completed a high → medium → low → high → ultra → high cycle
+without fatal errors or newly captured page/console errors. Short RAF samples
+were 59.3–60.6 fps on the test machine; these are not a broad hardware benchmark.
+The Dacia moved 17.2 m during the throttle interval, and sprint moved 13.9 m.
+Left-side exit offsets were 1.75 m and 1.80 m at two vehicle headings, followed
+by successful re-entry. Six moving traffic samples were on the right of their
+road centreline. These are control checks, not a campaign playthrough.
+The final grain/night-fill tuning passed another 18 rendering tests and build.
 
-The secondary source review is in `gameplay-story-review.md`: physical server
-cargo, speaker-aware performances, mission vehicle matching and dialogue timing
-are the most useful next immersion work. No campaign rewrite was made.
+Visual review remains necessary: numeric
+geometry checks alone did not catch the garment overlap defects found during
+this pass's browser captures.
 
-Changes are local. Nothing was committed, pushed or deployed.
+## Limits
+
+This is still a browser game with authored, relatively low-detail assets. It is
+not a GTA VI-quality photorealistic world or a set of scanned digital doubles.
+Close-up hair, facial acting, crowd anatomy, interiors and repeated architecture
+remain visible limits. Skin detail is generic CC0 material, not the photographed
+person's skin. Native Blender materials approximate the runtime shaders, and
+manual workshop edits do not automatically cook back into the game.
+
+The secondary [gameplay and story review](gameplay-story-review.md) identifies
+cargo handling, speaker-aware performances, mission vehicle matching and dialogue
+timing as remaining immersion work. This pass does not rewrite the campaign.

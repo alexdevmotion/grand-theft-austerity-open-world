@@ -46,6 +46,21 @@ anatomical reconstruction guided by sparse photo landmarks, not a scan or a
 validated digital double. Unobserved anatomy and likeness still require visual
 review and, where needed, manual sculpting.
 
+## Full bodies and animation
+
+`bun run assets:body` cooks the CC0 HM08 body and authored joint weights into
+`src/characters/generated/anatomical-body.json`. All three main characters use
+this continuous anatomy in the existing runtime skeleton, with separate fitted
+clothing, hands, shoes and garment layers.
+
+`bun run assets:bodies` exports the actual runtime assemblies to
+`assets/blender/bodies.blend`. It includes three bodies with their fitted heads,
+42-bone armatures, skin weights, UVs, Blink shape keys and 60-frame walk actions.
+The manifest records topology and 432 Blender-versus-runtime pose probes; the
+maximum error in the current export is 2.23 micrometres. Source modules are kept
+as Blender Text blocks. This is an editable workshop; arbitrary manual Blender
+changes are not automatically imported into the game. Rebuilding overwrites it.
+
 ## Vehicles and buildings
 
 `bun run assets:vehicles` builds `assets/blender/vehicles.blend` from the actual

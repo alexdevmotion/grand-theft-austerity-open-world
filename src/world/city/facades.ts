@@ -10,9 +10,8 @@
  * Everything written here goes into the caller's per-chunk builders, so a
  * whole district still costs three draw calls.
  *
- * Triangle discipline: the shell is quads (a 60 m tower is ~10 triangles); all
- * of the cost is in the detail pass, which is therefore budgeted per building
- * and tapers with distance from the hero area.
+ * Street-facing shells have bounded recessed openings. Upper/back walls stay
+ * single quads; balconies and roof silhouettes use the shared detail batch.
  */
 
 import * as THREE from 'three';
@@ -33,6 +32,8 @@ import {
 import type { DistrictSpec } from './districts';
 import { FacadeStyle } from './materials';
 import { isSimpleRing } from './osm';
+import { articulatedExtrusion, hippedRoof } from './architecture';
+import { appendParkedDacia } from './parkedDacia';
 
 /* ------------------------------------------------------------------ */
 /* Palette for the detail pass                                         */
@@ -354,7 +355,7 @@ export function buildBuilding(
     // Street wall, then one or two setback masses above it.
     const shoulderFloors = Math.max(2, Math.round(floors * rng.range(0.35, 0.6)));
     topOfBase = groundH + shoulderFloors * floorH;
-    f.extrude(base, 0, topOfBase, 0, p, { roof: true });
+    articulatedExtrusion(f, d, base, 0, topOfBase, 0, p, { tier, front: { x: site.fx, z: site.fz } });
     corniceAndParapet(d, site, base, topOfBase, style, tier, rng, true);
 
     const inset1 = rng.range(2.4, 5.5);
@@ -375,7 +376,7 @@ export function buildBuilding(
       roofscape(d, t1, h, tier, rng, spec, site, style, identity);
     }
   } else {
-    f.extrude(base, 0, h, 0, p);
+    articulatedExtrusion(f, d, base, 0, h, 0, p, { tier, front: { x: site.fx, z: site.fz } });
     corniceAndParapet(d, site, base, h, style, tier, rng, true);
     roofscape(d, base, h, tier, rng, spec, site, style, identity);
   }
@@ -416,24 +417,8 @@ export function buildBuilding(
 
   /* ---------------- balconies ---------------- */
 
-  /*
-   * BALCONIES RUN AT TIER 1 AS WELL AS TIER 2, and that is the whole answer to
-   * "one building species only".
-   *
-   * `detailTier` is keyed to distance from the hero crossroads, not to the
-   * camera — the city is baked once and the player then walks all over it. At
-   * the old thresholds every articulation pass in this file was tier-2 only,
-   * so outside a 420 m bubble around Builders House EVERY building in the game
-   * was a bare extruded box with a shader on it, whatever its style. Magheru,
-   * Calea Victoriei and the whole old town sit outside that bubble. A reviewer
-   * walking the city therefore correctly reported one species: past 420 m
-   * there genuinely was only one.
-   *
-   * Balcony slabs are the cheapest silhouette an apartment block has — 24
-   * triangles a floor, and they are what breaks the elevation against the sky —
-   * so they now run wherever the building is drawn with any detail at all,
-   * with a smaller budget out in the mid field.
-   */
+  // Stacked bays retain a coherent vertical structure through both detailed
+  // tiers. Pane and railing geometry stays in the chunk's shared detail batch.
   if (tier >= 1 && (style === FacadeStyle.bulevard || style === FacadeStyle.cartier)) {
     balconies(d, site, groundH, floorH, Math.min(floors, 12), tier, rng);
   }
@@ -871,6 +856,8 @@ function roofscape(
   };
   const sacred = /church|cathedral|chapel|biseric|catedral|capel|manastir/.test(identity);
   const monumental = sacred || /atene|palat|primari|muze|teatr|opera/.test(identity);
+  if (!monumental && style === FacadeStyle.centruVechi && rng.fork('hipped-roof').bool(0.72)
+    && hippedRoof(d, fp, top)) return;
   const heavy = !monumental && rng.bool(spec.roofPlant);
   let ru = 0;
   let rv = 0;
@@ -1044,6 +1031,23 @@ function entrance(
     const [px, pz] = local(site, u + s * wide * 0.42, front - proj * 0.78);
     d.cyl(px, 0, pz, 0.14, 0.12, canopyY, 5, { color: DetailColor.metal, mr: MR.metal }, false);
   }
+  // Framed entry set behind its surround. Its glazing is opaque and batched;
+  // the public interiors retain their own separate accessible doorway shells.
+  const doorW = Math.min(wide * 0.53, 2.6), doorH = Math.min(canopyY - 0.22, 2.8);
+  const [doorX, doorZ] = local(site, u, front - 0.06);
+  d.box(doorX, doorH / 2 + 0.12, doorZ, doorW, doorH, 0.06, rot,
+    { color: DetailColor.glassDark, mr: [0, 0.32] });
+  for (const side of [-1, 1]) {
+    const [x, z] = local(site, u + side * (doorW / 2 + 0.10), front - 0.16);
+    d.box(x, doorH / 2 + 0.12, z, 0.20, doorH + 0.20, 0.30, rot,
+      { color: DetailColor.concrete, mr: MR.concrete });
+  }
+  const [postX, postZ] = local(site, u, front - 0.115);
+  d.box(postX, doorH / 2 + 0.12, postZ, 0.065, doorH, 0.065, rot,
+    { color: DetailColor.metalPale, mr: MR.metal });
+  const [handleX, handleZ] = local(site, u + 0.17, front - 0.20);
+  d.box(handleX, 1.2, handleZ, 0.035, 0.40, 0.07, rot,
+    { color: DetailColor.metalPale, mr: MR.metal });
   // Steps.
   const [sx1, sz1] = local(site, u, front - 0.9);
   d.box(sx1, 0.12, sz1, wide * 0.8, 0.24, 1.8, rot, {
@@ -1327,6 +1331,22 @@ function boltedOn(
     });
   }
 
+  // Rainwater stacks, with elbows and wall straps. These thin vertical
+  // silhouettes break the repeated horizontal slabs at street distance.
+  for (const side of [-1, 1]) {
+    const u = side * span * 0.46;
+    const [x, z] = local(site, u, front - 0.17);
+    d.cyl(x, 0.32, z, 0.065, 0.065, top - 0.32, 6,
+      { color: DetailColor.metal, mr: [0.35, 0.65] }, false);
+    const [outX, outZ] = local(site, u, front - 0.39);
+    d.tube(x, 0.50, z, outX, 0.20, outZ, 0.065, 5,
+      { color: DetailColor.metal, mr: [0.35, 0.65] });
+    if (tier === 2) for (let y = 1.8; y < top; y += floorH * 2) {
+      d.box(x, y, z, 0.17, 0.045, 0.24, rot,
+        { color: DetailColor.rust, mr: MR.rough });
+    }
+  }
+
   // Facade-mounted dishes: on the parapet of a balcony or bolted to the wall.
   const nDish = tier === 2 ? (bloc ? rng.int(1, 5) : rng.int(0, 3)) : rng.int(0, 2);
   for (let i = 0; i < nDish; i++) {
@@ -1353,52 +1373,57 @@ function balconies(
   tier: 0 | 1 | 2,
   rng: Rng,
 ): void {
-  const span = site.w;
   const front = -site.d / 2;
-  const bays = Math.max(1, Math.floor(span / 4.2));
-  const proj = 1.25;
-  // Mid-field blocks get a thinner scatter of the same slabs rather than none
-  // at all: what has to survive out there is the BROKEN ELEVATION, not the
-  // count. See the note at the call site.
-  let budget = tier === 2 ? 11 : 6;
-
-  for (let fl = 1; fl < floors && budget > 0; fl += 1) {
-    const y = groundH + fl * floorH;
-    for (let b = 0; b < bays && budget > 0; b += 2) {
-      if (!rng.bool(0.7)) continue;
-      const t = (b + 0.5) / bays - 0.5;
-      const bw = (span / bays) * 0.86;
-      // Slab.
-      const [bx, bz] = local(site, t * span, front - proj / 2);
-      d.box(bx, y + 0.09, bz, bw, 0.18, proj, site.rot, {
-        color: DetailColor.concrete, mr: MR.concrete,
-      });
-      /*
-       * GLAZED-IN LOGGIAS, and every one of them glazed by a different owner.
-       *
-       * Enclosing your balcony in whatever joinery was going that year is the
-       * defining act of a Romanian bloc, and the reason no two bays on one
-       * elevation match: white PVC, brown aluminium, raw timber, or still
-       * open with a concrete parapet. Picking ONE glazing colour per building
-       * put a manufactured grid back on the facade that the real thing has
-       * never had.
-       */
-      const enclosure = rng.next();
-      const [px, pz] = local(site, t * span, front - proj * 0.95);
-      d.box(
-        px, y + 0.6, pz, bw, 1.05, 0.1, site.rot,
-        enclosure < 0.30 ? { color: DetailColor.glassDark, mr: MR.glass }
-          : enclosure < 0.44 ? { color: lin(0xc8c4b8), mr: [0, 0.55] }
-            : enclosure < 0.54 ? { color: lin(0x4a3524), mr: [0.1, 0.6] }
-              : { color: DetailColor.concreteDark, mr: MR.concrete },
-      );
-      // Enclosed loggias have a frame across them and a lit room behind.
-      if (enclosure < 0.30) {
-        const [mx, mz] = local(site, t * span, front - proj * 1.0);
-        d.box(mx, y + 0.6, mz, bw * 0.04, 1.0, 0.04, site.rot,
-          { color: lin(0xc8c4b8), mr: [0, 0.55] });
+  const stacks = Math.max(1, Math.min(tier === 2 ? 3 : 2, Math.floor(site.w / 10)));
+  const count = Math.min(floors, tier === 2 ? 8 : 6);
+  const width = Math.min(3.5, site.w / stacks * 0.64);
+  const depth = 1.55;
+  const concrete = { color: DetailColor.concrete, mr: MR.concrete };
+  const metal = { color: DetailColor.metal, mr: MR.metal };
+  const box = (u: number, y: number, v: number, w: number, h: number, dep: number, o: DetailOpts): void => {
+    const [x, z] = local(site, u, v);
+    d.box(x, y, z, w, h, dep, site.rot, o);
+  };
+  // Stack first, then floor: every bay reads as a load-bearing vertical unit.
+  // The old floor-first budget spent every balcony on the first few storeys.
+  for (let stack = 0; stack < stacks; stack++) {
+    const u = ((stack + 0.5) / stacks - 0.5) * site.w;
+    for (let fl = 0; fl < count; fl++) {
+      const y = groundH + fl * floorH;
+      box(u, y, front - depth / 2, width + 0.18, 0.20, depth + 0.12, concrete);
+      const infill = rng.next();
+      const railZ = front - depth + 0.07;
+      // Real side cheeks leave a shadowed room-sized cavity, not a shelf.
+      for (const side of [-1, 1]) {
+        box(u + side * (width / 2 - 0.055), y + 0.57, front - depth / 2,
+          0.11, 1.04, depth, concrete);
       }
-      budget--;
+      if (infill < 0.36 && tier === 2) {
+        const joinery = { color: infill < 0.16 ? lin(0xb3b0a6) : lin(0x5c4939), mr: MR.paint };
+        box(u, y + 0.50, railZ, width, 0.78, 0.10,
+          { color: DetailColor.concreteDark, mr: MR.concrete });
+        // Opaque glazing stays in the detail batch. Recessed panes sit behind
+        // proud joinery, with separate side panes and a top weather cap.
+        box(u, y + 1.69, railZ + 0.075, width - 0.10, 1.48, 0.045,
+          { color: DetailColor.glassDark, mr: [0, 0.28] });
+        for (const t of [-0.5, -1 / 6, 1 / 6, 0.5]) {
+          box(u + t * (width - 0.06), y + 1.69, railZ, 0.055, 1.56, 0.075, joinery);
+        }
+        for (const h of [0.93, 2.45]) box(u, y + h, railZ, width, 0.06, 0.10, joinery);
+      } else {
+        if (infill < 0.70) {
+          box(u, y + 0.47, railZ, width - 0.12, 0.68, 0.095,
+            { color: infill < 0.5 ? DetailColor.concreteDark : lin(0x817b6d), mr: MR.concrete });
+        }
+        box(u, y + 1.04, railZ, width, 0.055, 0.065, metal);
+        const posts = tier === 2 ? 5 : 3;
+        for (let j = 0; j < posts; j++) {
+          box(u + (j / (posts - 1) - 0.5) * (width - 0.10), y + 0.60,
+            railZ, 0.035, 0.88, 0.045, metal);
+        }
+      }
+      if (fl === count - 1) box(u, y + floorH - 0.06, front - depth / 2,
+        width + 0.18, 0.16, depth + 0.12, concrete);
     }
   }
 }
@@ -1711,61 +1736,29 @@ export function streetLamp(
 }
 
 /**
- * A parked car at the kerb — boxy 1970s Dacia 1300 proportions, mismatched
- * panels and a chrome bumper, exactly like the hero car in the reference.
- * Static dressing only; the vehicle system owns anything that drives.
- * ~110 triangles.
+ * Static Dacia 1300 dressing with curved steel, raked glass and real wheels.
+ * A cached low-detail template is appended to the chunk's existing batch;
+ * the vehicle system owns anything that drives.
  */
 export function parkedCar(
   d: DetailBuilder,
   x: number, z: number,
   headingRad: number,
   rng: Rng,
+  groundY = 0,
 ): void {
   const body = rng.weighted(
-    [PAL.daciaYellow, lin(0x9aa3ad), lin(0x6d2f33), lin(0x2f4a6d), lin(0x8d8b7a), PAL.daciaPurple],
-    [3, 2, 1.4, 1.6, 1.2, 0.8],
+    [lin(0xc5bd9e), lin(0x87969b), lin(0x85554e), lin(0x536b77), lin(0xbebdb2), lin(0xa4aa92)],
+    [2, 2, 1.4, 1.6, 2, 1],
   );
-  const beat = rng.bool(0.3);
-  const panel = beat ? PAL.daciaPurple : body;
-  const bodyMR: [number, number] = [0.35, rng.range(0.28, 0.55)];
+  const beat = rng.bool(0.07);
+  const panel = beat ? lin(0x91978d) : body;
+  const roughness = rng.range(0.38, 0.57);
   const L = 4.35;
   const W = 1.62;
-  d.collisionBox('parked-car', x, 0.86, z, L, 1.72, W, headingRad);
+  d.collisionBox('parked-car', x, groundY + 0.86, z, L, 1.72, W, headingRad);
 
-  // Lower body.
-  d.box(x, 0.72, z, L, 0.72, W, headingRad, { color: body, mr: bodyMR });
-  // One mismatched wing/door panel.
-  if (beat) {
-    d.box(
-      x + Math.cos(headingRad) * -0.9, 0.74, z - Math.sin(headingRad) * -0.9,
-      1.5, 0.68, W + 0.03, headingRad, { color: panel, mr: [0.25, 0.62] },
-    );
-  }
-  // Greenhouse, set back from the nose — the boxy Dacia profile.
-  d.box(x - Math.cos(headingRad) * 0.18, 1.36, z + Math.sin(headingRad) * 0.18,
-    L * 0.5, 0.62, W * 0.92, headingRad, { color: DetailColor.glassDark, mr: MR.glass });
-  // Roof.
-  d.box(x - Math.cos(headingRad) * 0.18, 1.68, z + Math.sin(headingRad) * 0.18,
-    L * 0.5, 0.06, W * 0.94, headingRad, { color: body, mr: bodyMR });
-  // Chrome bumpers.
-  for (const s of [1, -1]) {
-    d.box(
-      x + Math.cos(headingRad) * s * L * 0.49, 0.56, z - Math.sin(headingRad) * s * L * 0.49,
-      0.14, 0.17, W * 0.98, headingRad, { color: lin(0xb9c0c6), mr: [0.95, 0.2] },
-    );
-  }
-  // Headlight band — two round lamps read as one bar at parked-car distance.
-  d.box(
-    x + Math.cos(headingRad) * L * 0.47, 0.86, z - Math.sin(headingRad) * L * 0.47,
-    0.09, 0.24, W * 0.86, headingRad, { color: lin(0xd8dce0), mr: [0.6, 0.12] },
-  );
-  // Wheels, as one slab per side (the inboard faces are never visible).
-  for (const sx of [0.32, -0.32]) {
-    const wx = x + Math.cos(headingRad) * L * sx;
-    const wz = z - Math.sin(headingRad) * L * sx;
-    d.box(wx, 0.31, wz, 0.62, 0.6, W + 0.12, headingRad, { color: lin(0x18161c), mr: [0.1, 0.85] });
-  }
+  appendParkedDacia(d, x, z, headingRad, body, panel, roughness, groundY);
 }
 
 /* ------------------------------------------------------------------ */

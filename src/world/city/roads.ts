@@ -51,6 +51,8 @@ const CAMBER = 0.09;
 const TRAM_GAUGE = 1.435;
 
 export interface ChunkSink {
+  /** Raised landmark decks override the road ribbon beneath them. */
+  groundHeight?(x: number, z: number): number | undefined;
   surf(x: number, z: number): SurfaceBuilder;
   detail(x: number, z: number): DetailBuilder;
   facade(x: number, z: number): FacadeBuilder;
@@ -782,7 +784,9 @@ function dressOsmEdge(
       const cz = sz + uz * t + pz * side * (e.width / 2 - 2.0);
       parkedCar(
         sink.detail(cx, cz), cx, cz,
-        Math.atan2(ux, uz) + (side > 0 ? Math.PI : 0) + rng.range(-0.03, 0.03), rng,
+        Math.atan2(-uz, ux) + (side > 0 ? Math.PI : 0) + rng.range(-0.03, 0.03), rng,
+        sink.groundHeight?.(cx, cz) ?? (e.width > 0
+          ? OSM_CAMBER * (1 - (1 - 4 / e.width) ** 2) : KERB_H),
       );
     }
   }
@@ -1231,7 +1235,8 @@ function dressBlock(
         const cx = px + ed.ox * 2.1;
         const cz = pz + ed.oz * 2.1;
         const heading = ed.alongX ? 0 : Math.PI / 2;
-        parkedCar(sink.detail(cx, cz), cx, cz, heading + rng.range(-0.03, 0.03), rng);
+        parkedCar(sink.detail(cx, cz), cx, cz, heading + rng.range(-0.03, 0.03), rng,
+          sink.groundHeight?.(cx, cz) ?? CAMBER * (1 - (1 - 4.2 / ROAD_WIDTH[ed.rank]) ** 2));
       }
     }
   }

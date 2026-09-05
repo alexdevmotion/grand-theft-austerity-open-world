@@ -393,7 +393,7 @@ export class LightingSystem implements System {
     });
     this.sun = this.csm.lights[0];
     this.csm.registerScene(ctx.scene, true);
-    Materials.onMaterialCreated((m) => this.csm.setupMaterial(m));
+    // The init listener resolves this.csm dynamically, so it already targets the replacement.
   }
 
   /* ---------------- weather / sun ---------------- */
@@ -580,7 +580,7 @@ const HEMI_GAIN = 0.52;
 const KEY_MIN_ELEVATION_DEG = 8.0;
 
 /** Night floors, as fractions of the daytime fill. Silhouettes must survive. */
-const NIGHT_FILL_SCALE = 0.42;
+const NIGHT_FILL_SCALE = 0.62;
 const NIGHT_ENV_SCALE = 0.85;
 
 /** Seconds between IBL refreshes while the clock is running. */

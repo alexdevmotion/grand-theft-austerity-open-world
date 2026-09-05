@@ -167,46 +167,47 @@ function paintBody(g: CanvasRenderingContext2D, rect: UVRect, battered: boolean)
 
     if (battered) {
       // Rust blooms with a darker core and a feathered halo.
-      for (let i = 0; i < 26; i++) {
+      for (let i = 0; i < 14; i++) {
         // Corrosion starts at the underside seams, not in giant blooms
         // across the roof. The loft UV seam is on the bottom of the body.
         const edge = rng.bool(0.5) ? 0 : w;
         const x = edge === 0 ? rng.range(0, w * 0.19) : rng.range(w * 0.81, w);
         const y = rng.range(0, h);
-        const r = rng.range(3, 18);
+        const r = rng.range(2, 9);
         rustBlob(c, rng, x, y, r);
       }
-      // Mud spatter.
-      for (let i = 0; i < 900; i++) {
-        const x = rng.range(0, w);
+      // Sparse road spray on lower flanks only. Uniform spots across the
+      // whole atlas made every roof and bonnet resemble pitted camouflage.
+      for (let i = 0; i < 160; i++) {
+        const x = rng.bool(.5) ? rng.range(0, w * .24) : rng.range(w * .76, w);
         const y = rng.range(0, h);
-        const s = rng.range(0.6, 2.6);
-        c.fillStyle = `rgba(48,36,28,${rng.range(0.06, 0.3)})`;
+        const s = rng.range(0.35, 1.25);
+        c.fillStyle = `rgba(48,36,28,${rng.range(0.04, 0.16)})`;
         c.beginPath();
         c.arc(x, y, s, 0, Math.PI * 2);
         c.fill();
       }
       // Key scratches and panel creases.
-      for (let i = 0; i < 46; i++) {
+      for (let i = 0; i < 12; i++) {
         c.strokeStyle = `rgba(${rng.bool(0.5) ? '250,246,235' : '54,42,34'},${rng.range(0.08, 0.34)})`;
         c.lineWidth = rng.range(0.6, 2.2);
         c.beginPath();
-        let x = rng.range(0, w);
+        let x = rng.bool(.5) ? rng.range(0, w * .22) : rng.range(w * .78, w);
         let y = rng.range(0, h);
         c.moveTo(x, y);
         const seg = rng.int(2, 5);
         for (let s = 0; s < seg; s++) {
-          x += rng.range(-40, 40);
-          y += rng.range(-16, 16);
+          x += rng.range(-14, 14);
+          y += rng.range(-8, 8);
           c.lineTo(x, y);
         }
         c.stroke();
       }
     } else {
-      for (let i = 0; i < 250; i++) {
+      for (let i = 0; i < 35; i++) {
         const x = rng.range(0, w);
         const y = rng.range(0, h);
-        c.fillStyle = `rgba(60,52,46,${rng.range(0.03, 0.14)})`;
+        c.fillStyle = `rgba(60,52,46,${rng.range(0.015, 0.04)})`;
         c.fillRect(x, y, rng.range(0.7, 2), rng.range(0.7, 2));
       }
     }
@@ -427,8 +428,8 @@ function paintTread(g: CanvasRenderingContext2D): void {
     c.fillRect(0, 0, w, h);
     c.fillStyle = 'rgba(40,40,46,0.35)';
     c.fillRect(0, 0, w, h);
-    for (let i = 0; i < 26; i++) {
-      const y = (i / 26) * h;
+    for (let i = 0; i < 14; i++) {
+      const y = (i / 14) * h;
       c.fillStyle = 'rgba(8,8,10,0.85)';
       c.fillRect(0, y, w, h * 0.014);
       c.save();

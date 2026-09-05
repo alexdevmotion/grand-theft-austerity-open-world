@@ -40,3 +40,24 @@ After subdivision, `sourceIndices` records the nearest original control vertex
 for provenance, not a one-to-one topology identity. Original fitting control IDs
 remain exact in the `correspondences` field. The emitted mesh and Blink array use
 identical vertex ordering; UV seam duplicates retain matching positions/normals.
+
+## Runtime body and authored skin weights
+
+`rig.game_engine.json` and `weights.game_engine.json` are CC0 rig asset data from
+the same upstream revision, downloaded 2026-09-05:
+
+- https://github.com/makehumancommunity/mpfb2/blob/437dd513888a92399d1d3200d2e80859fae55abc/src/mpfb/data/rigs/standard/rig.game_engine.json
+- https://github.com/makehumancommunity/mpfb2/blob/437dd513888a92399d1d3200d2e80859fae55abc/src/mpfb/data/rigs/standard/weights.game_engine.json
+
+The weight file explicitly declares `license: CC0`; the shared upstream asset
+license covers the rig data. No addon code is copied.
+
+Run `python3 tools/blender/cook-body.py` to reproduce
+`src/characters/generated/anatomical-body.json`. This preserves 7,112 native
+body vertices and their source IDs, with 14,124 triangles. It excludes the head
+and the feet enclosed by shoes. Joint-helper positions and authored weights are
+retained, with the third finger phalanx merged into the game's distal bone.
+The runtime `tailoredBody.ts` transfers this bind pose onto the existing game rig,
+bridges skin contours with garment drape, and adds actual garment panels. This
+body is used by all three named characters; crowd bodies keep their smaller mesh
+and receive the same seated garment details and separate shoe soles.

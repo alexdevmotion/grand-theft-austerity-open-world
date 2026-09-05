@@ -1,0 +1,40 @@
+{
+  "blender": "5.2.1 LTS",
+  "input_sha256": "068ff894b0e7f35e23606cb2f8ba7cc28c54d4145fe5dbcc03df4ecaff943e73",
+  "contract": "Runtime vertices, UVs, skin weights and sampled walk; native shader approximation.",
+  "casts": {
+    "player": {
+      "body_vertices": 11226,
+      "body_triangles": 16987,
+      "parts": 11,
+      "bones": 42,
+      "walk_frames": 60,
+      "pose_probe_count": 144,
+      "max_pose_error_metres": 2.2282219093427234e-06,
+      "blink_shape_key": "Blink",
+      "height_scale": 1.0314285714285714
+    },
+    "nicusor": {
+      "body_vertices": 15501,
+      "body_triangles": 18661,
+      "parts": 10,
+      "bones": 42,
+      "walk_frames": 60,
+      "pose_probe_count": 144,
+      "max_pose_error_metres": 8.085167387873254e-07,
+      "blink_shape_key": "Blink",
+      "height_scale": 1.022857142857143
+    },
+    "ally": {
+      "body_vertices": 11020,
+      "body_triangles": 16941,
+      "parts": 11,
+      "bones": 42,
+      "walk_frames": 60,
+      "pose_probe_count": 144,
+      "max_pose_error_metres": 8.409590160562076e-07,
+      "blink_shape_key": "Blink",
+      "height_scale": 1.0285714285714287
+    }
+  }
+}

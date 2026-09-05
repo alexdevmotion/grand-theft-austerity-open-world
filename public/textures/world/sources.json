@@ -1,0 +1,97 @@
+{
+  "license": "CC0-1.0",
+  "licenseUrl": "https://polyhaven.com/license",
+  "provider": "Poly Haven",
+  "maps": [
+    {
+      "asset": "asphalt_02",
+      "kind": "Diffuse",
+      "metres": 3,
+      "source": "https://polyhaven.com/a/asphalt_02",
+      "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/asphalt_02/asphalt_02_diff_1k.jpg",
+      "file": "asphalt_02_Diffuse.jpg",
+      "sha256": "1aa5ce99f58a625c71d48cfc3e68b65ca85ccb00f39e045c0a928608a0ea25ed",
+      "bytes": 731707
+    },
+    {
+      "asset": "asphalt_02",
+      "kind": "nor_gl",
+      "metres": 3,
+      "source": "https://polyhaven.com/a/asphalt_02",
+      "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/asphalt_02/asphalt_02_nor_gl_1k.jpg",
+      "file": "asphalt_02_nor_gl.jpg",
+      "sha256": "42a1c381b53204e83a982db2864479a30bc127bbdeebb1006f8ee51bff099df3",
+      "bytes": 1240122
+    },
+    {
+      "asset": "asphalt_02",
+      "kind": "arm",
+      "metres": 3,
+      "source": "https://polyhaven.com/a/asphalt_02",
+      "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/asphalt_02/asphalt_02_arm_1k.jpg",
+      "file": "asphalt_02_arm.jpg",
+      "sha256": "56bd8e591a3db579846fcb5185f60b0651e0bd4ea85c3529c339e6746243c9cf",
+      "bytes": 296770
+    },
+    {
+      "asset": "concrete_wall_006",
+      "kind": "Diffuse",
+      "metres": 2,
+      "source": "https://polyhaven.com/a/concrete_wall_006",
+      "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_wall_006/concrete_wall_006_diff_1k.jpg",
+      "file": "concrete_wall_006_Diffuse.jpg",
+      "sha256": "fea247dd085cd05d8deb335234c834764d622029da351f8bcc8913935316bacd",
+      "bytes": 769415
+    },
+    {
+      "asset": "concrete_wall_006",
+      "kind": "nor_gl",
+      "metres": 2,
+      "source": "https://polyhaven.com/a/concrete_wall_006",
+      "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_wall_006/concrete_wall_006_nor_gl_1k.jpg",
+      "file": "concrete_wall_006_nor_gl.jpg",
+      "sha256": "4ff16bb96fc2df3ef71d22007151aff1d8bf7cb10a493d3f8e973213a99dd428",
+      "bytes": 1195078
+    },
+    {
+      "asset": "concrete_wall_006",
+      "kind": "arm",
+      "metres": 2,
+      "source": "https://polyhaven.com/a/concrete_wall_006",
+      "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/concrete_wall_006/concrete_wall_006_arm_1k.jpg",
+      "file": "concrete_wall_006_arm.jpg",
+      "sha256": "b5ab58c363e1802611c30bc456066d32b3f9b9697fb73d6acc983b8390a662ac",
+      "bytes": 963446
+    },
+    {
+      "asset": "pavement_01",
+      "kind": "Diffuse",
+      "metres": 1.5,
+      "source": "https://polyhaven.com/a/pavement_01",
+      "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/pavement_01/pavement_01_diff_1k.jpg",
+      "file": "pavement_01_Diffuse.jpg",
+      "sha256": "5555990f88822fe44eb44a67f5abda2c9425c143aad72962a826fcad53954318",
+      "bytes": 436555
+    },
+    {
+      "asset": "pavement_01",
+      "kind": "nor_gl",
+      "metres": 1.5,
+      "source": "https://polyhaven.com/a/pavement_01",
+      "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/pavement_01/pavement_01_nor_gl_1k.jpg",
+      "file": "pavement_01_nor_gl.jpg",
+      "sha256": "5c6210015db8aad8b9e417228f4ccba6d1c7bb7322058c1a9699609101dabc38",
+      "bytes": 507750
+    },
+    {
+      "asset": "pavement_01",
+      "kind": "arm",
+      "metres": 1.5,
+      "source": "https://polyhaven.com/a/pavement_01",
+      "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/pavement_01/pavement_01_arm_1k.jpg",
+      "file": "pavement_01_arm.jpg",
+      "sha256": "bd39a34436c3e9fd94a4b16e7f1516290f0982f153e56728c5f014e1e601cfb0",
+      "bytes": 194468
+    }
+  ]
+}

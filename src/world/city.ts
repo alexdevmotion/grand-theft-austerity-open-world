@@ -184,9 +184,10 @@ export class CitySystem implements System, CityService {
 
     const t0 = performance.now();
     this.importBucharest();
-    this.generateStreets();
     this.generateBlocks();
     this.generateLandmarks();
+    // Street dressing must see the raised decks that overlap road ribbons.
+    this.generateStreets();
     this.bake();
     this.binNodes();
     const ms = performance.now() - t0;
@@ -297,6 +298,7 @@ export class CitySystem implements System, CityService {
 
   private get sink() {
     return {
+      groundHeight: (x: number, z: number) => this.slabTopAt(x, z) ?? undefined,
       surf: (x: number, z: number) => this.chunkFor(x, z).surface,
       detail: (x: number, z: number) => this.chunkFor(x, z).detail,
       facade: (x: number, z: number) => this.chunkFor(x, z).facade,

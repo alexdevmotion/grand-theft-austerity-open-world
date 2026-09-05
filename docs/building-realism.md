@@ -4,8 +4,8 @@
 
 | Collection | Runtime source | Editable meshes | Triangles |
 | --- | --- | ---: | ---: |
-| `socialist-bloc` | `buildBuilding` with `DISTRICTS.cartier`, a 46 × 13 m plot and nine storeys | 2 | 1,560 |
-| `builders-house` | `buildBuildersHouse` | 3 | 27,942 |
+| `socialist-bloc` | `buildBuilding` with `DISTRICTS.cartier`, a 46 × 13 m plot and nine storeys | 2 | 6,718 |
+| `builders-house` | `buildBuildersHouse` | 3 | 29,888 |
 | `parliament` | `buildParliament` | 3 | 39,190 |
 
 The bloc is a representative runtime archetype. The landmark constructors are the ones used by the game. Their workshop seeds reproduce the same export deterministically; this is not a dump of a running city save.
@@ -37,7 +37,7 @@ blender -b -t 2 --python tools/blender/build-buildings.py -- --verify
 
 Export writes ignored intermediate JSON to `tools/blender/input/buildings.json`. Build writes the `.blend` and `assets/blender/buildings-manifest.json`. **Rebuilding replaces the workshop file; save manual edits under a different filename first.**
 
-Verification reopens the saved file and checks the source hash, every vertex and triangle, material slots, custom normals, metre UVs, detail colours/PBR values, asset collections, camera and lighting. Coordinate tolerance is 0.00005 m after float conversion. It also checks that no material uses an image texture.
+Verification reopens the saved file and checks the source hash, every vertex and triangle, material slots, custom normals, metre UVs, detail colours/PBR values, asset collections, camera and lighting, plus exact retained runtime source text. Coordinate tolerance is 0.00005 m after float conversion. It also checks that no material uses an image texture.
 
 For an optional Cycles overview render while rebuilding:
 
@@ -47,8 +47,8 @@ blender -b -t 2 --python tools/blender/build-buildings.py -- --render
 
 ## Material and runtime boundary
 
-Detail colour and PBR attributes feed Blender's Principled shader directly. Facade and ground materials are editable Blender-node approximations: windows, frame bands, recessed bump and weathering provide a useful authoring view, but they are **not a pixel-identical port of the browser's GLSL**. The original facade, landmark and material TypeScript sources are retained as Blender text blocks for comparison. Runtime wind data is retained as attributes; it is not animated in this workshop.
+Detail colour and PBR attributes feed Blender's Principled shader directly. Facade and ground materials are editable Blender-node approximations: windows, frame bands, recessed bump and weathering provide a useful authoring view, but they are **not a pixel-identical port of the browser's GLSL**. The original facade, landmark, architectural opening, parked Dacia and material TypeScript sources are retained as Blender text blocks for comparison. The refreshed meshes include the street-facing window recesses, sills, stacked balconies and Builders House entry geometry used by the browser game. Runtime wind data is retained as attributes; it is not animated in this workshop.
 
 This is an authoring export. Saving edits in Blender does not alter the browser game. A building mesh/material cook and import path still needs to be implemented before Blender changes can replace the runtime geometry. No runtime construction, palette or gameplay files were changed to create this workshop.
 
-Validated with Blender 5.2.1 LTS: three asset collections, eight runtime meshes, 111,638 vertices and 68,692 triangles, plus the separate workshop ground.
+Validated with Blender 5.2.1 LTS: three asset collections, eight runtime meshes, 125,810 vertices and 75,796 triangles, plus the separate workshop ground.

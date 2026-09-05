@@ -108,7 +108,7 @@ export interface Appearance {
   /**
    * Named cast member. When set, the low-poly skull, nose, ears and hair are
    * left out of the body mesh and a full landmark-fitted head is attached to
-   * the head bone instead (`face/heroHead.ts`). Four people, never the crowd.
+   * the head bone instead (`face/heroHead.ts`). Three people, never the crowd.
    */
   cast?: CastId;
   /**
@@ -421,53 +421,14 @@ export const HERO_APPEARANCE: Appearance = {
   headwear: 'none',
   accessory: 'sitePass',
   colors: {
-    /* The NECK is this colour and the FACE is `CAST.player.skin`, and they were
-     * two different men: 0xc9976f against 0x8b6d53 is 29% brighter and a good
-     * deal more orange, so the neck rendered as a pale column under a dark
-     * bearded jaw and read as "the collar sits too low" long before anyone
-     * measured the collar. It does sit too low — see `collarUp` — but the value
-     * mismatch was doing at least as much of the damage. Held a little lighter
-     * than the face on purpose: a neck genuinely is, because it spends its life
-     * shaded by the jaw and gets less sun than a forehead. */
     skin: 0x8d6d53,
     hair: 0x2b2119,
-    /* HE WAS A CUTOUT.
-     *
-     * Measured against the shipped build: backlit on the plaza at 19:24 his
-     * torso rendered at luma 15/255 while the pavement under him sat at 56 and
-     * a pedestrian in a nearly identical navy suit read at 40+. Replacing his
-     * material with plain 0.5 grey lit him perfectly, which rules the lighting
-     * rig out — the fault was entirely here.
-     *
-     * 0x1c2230 is 0.012/0.016/0.030 in linear reflectance. That is not "dark
-     * navy", it is the albedo of charcoal: one to three percent of the light
-     * that lands on it comes back, so no amount of sky fill can put form on it
-     * and he collapses to a silhouette the moment the sun is not square on his
-     * chest. Real dark denim measures 4-7%.
-     *
-     * BUT ALBEDO IS ONLY HALF OF IT, and it is the smaller half. The pedestrian
-     * he was losing to wears `OUTER_COLORS[0] = 0x1b1f2b` — the same colour to
-     * within a hair. What that pedestrian had and he did not was a SUIT, whose
-     * style sets roughness 0.66, against a jacket sitting on the 0.86 default.
-     * At 0.86 there is no specular lobe worth the name, so with the sun behind
-     * him the only light reaching the camera was diffuse off 1% albedo, which
-     * is nothing. Lower roughness on the garment styles below is the real fix;
-     * it buys a grazing rim off the sky and costs nothing in full sun.
-     *
-     * So these are held to ~1.35x the old values — 2.4x and 1.8x were both
-     * tried and both read as pale grey-blue in open sun, because the tone curve
-     * at this exposure is very compressive down here and a small change in
-     * albedo is a large change on screen. He is still the darkest figure on the
-     * street, which is what the reference frame wants. Do not move either the
-     * colours or the roughness without re-shooting BOTH the backlit and the
-     * sunlit plaza: either frame on its own will point you the wrong way.
-     */
-    top: 0x1d212b,
-    outer: 0x232a3c,
-    legs: 0x252b39,
-    shoes: 0x282219,
+    top: 0x363b41,
+    outer: 0x303d50,
+    legs: 0x3d4651,
+    shoes: 0x493729,
     accent: 0x7b3fd4,
-    detail: 0x2c2832,
+    detail: 0x29272b,
   },
   face: HERO_FACE,
   // Just enough to catch the eye at dusk; any more and AgX burns the violet
@@ -505,9 +466,9 @@ export const NICUSOR_APPEARANCE: Appearance = {
     skin: 0xd7ac8a,
     hair: 0x3b2f24,
     top: 0xd8dce4,
-    outer: 0x1b1f2b,
-    legs: 0x1b1f2b,
-    shoes: 0x14141a,
+    outer: 0x343a47,
+    legs: 0x2f3541,
+    shoes: 0x27282a,
     accent: 0x6d7d8c,
     detail: 0x2a2530,
   },
@@ -543,12 +504,12 @@ export const ALLY_APPEARANCE: Appearance = {
   colors: {
     skin: 0xc99873,
     hair: 0x2a2018,
-    top: 0x0e0e11,
-    outer: 0x0e0e11,
-    legs: 0x232a38,
-    shoes: 0x14141a,
+    top: 0x2b2d33,
+    outer: 0x2b2d33,
+    legs: 0x344154,
+    shoes: 0xc5c1b7,
     accent: 0xc0392b,
-    detail: 0x2a2530,
+    detail: 0x514737,
   },
   face: {
     ...HERO_FACE,
@@ -916,6 +877,10 @@ function slotStyles(a: Appearance): Record<number, ColumnStyle> {
     // Dark fabric keeps its dye colour on shoulders. Mixing 10% white into
     // its atlas was painting a broad grey highlight independent of lighting.
     for (const slot of [SLOT.TOP, SLOT.OUTER, SLOT.LEGS]) {
+      // Native garment geometry carries its own folds and edges. Full-width
+      // atlas bands would paint a pale ring around every knee and sleeve.
+      styles[slot].bands = [];
+      styles[slot].grain = .025;
       styles[slot].shadeTop = 1.01;
       styles[slot].shadeBottom = 0.92;
       styles[slot].metalness = 0;
@@ -928,6 +893,7 @@ function slotStyles(a: Appearance): Record<number, ColumnStyle> {
 export interface AppearanceTextures {
   map: THREE.CanvasTexture;
   mra: THREE.CanvasTexture;
+  bump: THREE.CanvasTexture;
   emissive: THREE.CanvasTexture | null;
   dispose(): void;
 }
@@ -994,6 +960,27 @@ export function buildAppearanceTextures(a: Appearance): AppearanceTextures {
   mra.minFilter = THREE.LinearFilter;
   mra.magFilter = THREE.LinearFilter;
 
+  // Woven warp/weft sits in the garment atlas, so cloth receives a small
+  // physical bump response without adding a highlight to its base colour.
+  const bumpSize = a.cast ? 512 : 128;
+  const bumpSlot = bumpSize / 16;
+  const { c: bc, g: bg } = makeCanvas(bumpSize, bumpSize);
+  bg.fillStyle = '#808080'; bg.fillRect(0, 0, bumpSize, bumpSize);
+  for (const slot of [SLOT.TOP, SLOT.OUTER, SLOT.LEGS]) {
+    const left = slot * bumpSlot;
+    for (let y = 0; y < bumpSize; y += 2) {
+      for (let x = 0; x < bumpSlot; x += 2) {
+        const value = 118 + ((x / 2 + y / 2) % 2) * 22 + Math.floor(rng.next() * 10);
+        bg.fillStyle = `rgb(${value},${value},${value})`;
+        bg.fillRect(left + x, y, 2, 1);
+      }
+    }
+  }
+  const bump = new THREE.CanvasTexture(bc);
+  bump.colorSpace = THREE.NoColorSpace;
+  bump.minFilter = THREE.LinearMipmapLinearFilter;
+  bump.magFilter = THREE.LinearFilter;
+
   /* emissive — only the accent column glows */
   let emissive: THREE.CanvasTexture | null = null;
   if (a.glow > 0.01) {
@@ -1013,10 +1000,12 @@ export function buildAppearanceTextures(a: Appearance): AppearanceTextures {
   return {
     map,
     mra,
+    bump,
     emissive,
     dispose() {
       map.dispose();
       mra.dispose();
+      bump.dispose();
       emissive?.dispose();
     },
   };

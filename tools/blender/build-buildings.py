@@ -14,6 +14,10 @@ from mathutils import Vector
 
 ROOT = Path(__file__).resolve().parents[2]
 INPUT = ROOT / 'tools/blender/input/buildings.json'
+RUNTIME_SOURCES = [
+    'src/world/city/materials.ts', 'src/world/city/facades.ts', 'src/world/city/landmarks.ts',
+    'src/world/city/architecture.ts', 'src/world/city/parkedDacia.ts',
+]
 source = json.loads(INPUT.read_text())
 
 if '--verify' in sys.argv:
@@ -55,6 +59,8 @@ if '--verify' in sys.argv:
             verified[asset['id']]['meshes'] += 1
             verified[asset['id']]['vertices'] += len(mesh.vertices)
             verified[asset['id']]['triangles'] += len(mesh.polygons)
+    for relative in RUNTIME_SOURCES:
+        assert bpy.data.texts[relative].as_string() == (ROOT / relative).read_text()
     assert bpy.context.scene.camera
     assert bpy.context.scene.unit_settings.system == 'METRIC'
     assert len([o for o in bpy.data.objects if o.type == 'LIGHT']) >= 1
@@ -261,7 +267,7 @@ for asset in source['assets']:
             'attributes': list(obj.data.attributes.keys())}
 
 # Retain the authoritative source shader beside the editable approximation.
-for relative in ['src/world/city/materials.ts', 'src/world/city/facades.ts', 'src/world/city/landmarks.ts']:
+for relative in RUNTIME_SOURCES:
     block = bpy.data.texts.new(relative)
     block.write((ROOT / relative).read_text())
 readme = bpy.data.texts.new('READ ME - Building workshop')

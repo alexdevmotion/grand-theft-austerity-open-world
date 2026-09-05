@@ -429,6 +429,8 @@ export interface BoardPose {
   side: number;
   /** Pull-shut rather than pull-open — the reach starts inboard. */
   closing: boolean;
+  /** Both hands work the lock or brace and pull an occupied driver. */
+  action?: 'pull' | 'lockpick';
 }
 
 type Internal =
@@ -486,6 +488,7 @@ export class AnimationController {
   private phase = 0;
   private speed = 0;
   private smoothSpeed = 0;
+  private accelerationLean = 0;
   private grounded = true;
   private turnRate = 0;
   private lean = 0;
@@ -646,6 +649,10 @@ export class AnimationController {
 
     // Speed smoothing keeps the gait blend from chattering on stick noise.
     const k = 1 - Math.exp(-11 * dt);
+    // The trunk moves into an acceleration and checks back when braking.
+    // Use the filtered speed error so input jitter cannot shake the spine.
+    const acceleration = clamp((this.speed - this.smoothSpeed) * 11, -8, 8);
+    this.accelerationLean += (acceleration * 0.012 - this.accelerationLean) * (1 - Math.exp(-8 * dt));
     this.smoothSpeed += (this.speed - this.smoothSpeed) * k;
     this.lean += (this.turnRate - this.lean) * (1 - Math.exp(-7 * dt));
 
@@ -721,7 +728,8 @@ export class AnimationController {
   }
 
   private emitFootfalls(p0: number, p1: number, delta: number): void {
-    if (!this.onFootfall || this.locoWeight < 0.12 || !this.grounded || delta <= 0) return;
+    const pivotWeight = Math.min(1, Math.abs(this.turnStepRate) * 0.42);
+    if (!this.onFootfall || Math.max(this.locoWeight, pivotWeight) < 0.12 || !this.grounded || delta <= 0) return;
     const crossed = (target: number): boolean => {
       const a = p0 % 1;
       const b = a + delta;
@@ -811,7 +819,7 @@ export class AnimationController {
     // In-place turning: no travel, but the feet still have to step round.
     const turnStep = THREE.MathUtils.clamp(Math.abs(this.turnStepRate) * 0.42, 0, 1) * (1 - w);
     const latDrive = strafe * lat + (turnStep > 0 ? Math.sign(this.turnStepRate) * turnStep : 0);
-    const cycle = Math.max(w, turnStep * 0.75);
+    const cycle = Math.max(w, turnStep);
 
     /* ---- this person's stride ----
      *
@@ -848,15 +856,20 @@ export class AnimationController {
       const isSore = side === st.limpSide;
       const sore = isSore ? st.limp : 0;
       // Stance is cut short on the sore side and lengthened on the sound one.
-      const duty = g.duty + (isSore ? -0.09 : 0.06) * st.limp;
+      const duty = g.duty + (0.58 - g.duty) * turnStep + (isSore ? -0.09 : 0.06) * st.limp;
 
       const swingC = Math.cos(TAU * lp);
+      // The idle gait has zero leg amplitude. A pivot therefore needs its own
+      // small clearance step; advancing phase alone leaves both boots stuck.
+      const pivotLift = lobe(lp, 0.78, 0.13) * turnStep;
       const thighPitch = g.thighBias * (back ? -0.4 : 1)
         + thighA * (1 - sore * 0.30) * swingC * w * sag * (back ? -1 : 1)
+        + pivotLift * 0.26
         + idleW * (0.02 + shift * sgn * 0.03);
       const kneeFlex = g.kneeBase
         + (g.kneeLoad * lobe(lp, 0.14, 0.11) + g.kneeSwing * (1 - sore * 0.45) * lobe(lp, 0.76, 0.135)) * cycle
           * Math.max(sag, lat * 0.55, turnStep)
+        + pivotLift * 0.52
         + idleW * (0.02 - shift * sgn * 0.05);
       const anklePitch =
         (-ankPush * (1 - sore * 0.5) * lobe(lp, duty - 0.03, 0.075) + g.ankLift * lobe(lp, 0.86, 0.13)) * w * sag
@@ -866,7 +879,7 @@ export class AnimationController {
       // Lateral channel. +Z rotation swings the tip to the character's RIGHT,
       // so travelling LEFT (strafe > 0) needs a negative term. One leg reaches
       // out while the other closes up — that is a side-step.
-      const abduct = -latDrive * (thighA * 0.72) * swingC * Math.max(cycle, turnStep);
+      const abduct = -latDrive * (thighA * 0.72 + turnStep * 0.16) * swingC * cycle;
 
       // Stance/swing plant weight for foot IK.
       const planted = lp < duty ? 1 : 0;
@@ -898,14 +911,15 @@ export class AnimationController {
     // Pelvis/chest counter-rotation belongs to a forward gait; a side-step has
     // almost none of it, and a backpedal has it reversed.
     const twist = w * fwd;
-    const pelvisYaw = -g.pelvisYaw * st.swagger * Math.cos(TAU * p) * twist;
+    const pivotYaw = Math.sign(this.turnStepRate) * turnStep;
+    const pelvisYaw = -g.pelvisYaw * st.swagger * Math.cos(TAU * p) * twist - pivotYaw * 0.08;
     const pelvisRoll = -g.hipRoll * Math.cos(TAU * p) * w * sag + idleW * shift * 0.03
       // The unsupported hip drops away from the sore leg (Trendelenburg).
       + limpLoad * 0.20 * limpSgn;
     const leanIn = THREE.MathUtils.clamp(this.lean * 0.09, -0.16, 0.16) * Math.min(1, this.smoothSpeed / 3);
     // Forward lean follows travel: leaning FORWARD while backing up is the
     // single loudest tell that a backpedal is a mis-used forward clip.
-    const bodyLean = g.lean * fwd;
+    const bodyLean = (g.lean + this.accelerationLean) * fwd;
     // Lean into the side-step, the way anyone carrying their weight sideways does.
     const sideLean = -strafe * lat * 0.16 * w;
     /* The trunk pitches twice a cycle: it is thrown forward as the body vaults
@@ -926,7 +940,7 @@ export class AnimationController {
      * The trunk also side-bends over the loaded leg, opposite the pelvic drop,
      * which is what keeps the head over the feet.
      */
-    const chestYaw = g.chestYaw * st.swagger * Math.cos(TAU * (p - 0.12)) * twist;
+    const chestYaw = g.chestYaw * st.swagger * Math.cos(TAU * (p - 0.12)) * twist + pivotYaw * 0.14;
     const trunkBend = -pelvisRoll * 0.42 - limpLoad * 0.16 * limpSgn;
     const stoop = st.stoop * sag;
     out.setEuler(
@@ -1224,6 +1238,18 @@ export class AnimationController {
         out.setEuler(fore, 0.75 * sit + 0.35 * stand, sgn * 0.18, 0);
         out.setEuler(hand, -0.10, 0, 0);
         this.grip[side] = 0.35 * sit;
+      }
+    }
+
+    if (b.action) {
+      const picking = b.action === 'lockpick';
+      const wrist = picking ? Math.sin(this.clock * 42) * 0.12 : 0;
+      out.setEuler(BI.chest, picking ? 0.20 : 0.08 + reach * 0.24, 0, 0);
+      for (const left of [true, false]) {
+        const sign = left ? 1 : -1;
+        out.setEuler(left ? BI.upperArmL : BI.upperArmR, picking ? 0.65 : 1.1 * reach, sign * -0.15, sign * -0.18);
+        out.setEuler(left ? BI.forearmL : BI.forearmR, picking ? 1.1 : 1.5 * (1 - reach) + 0.3, 0, 0);
+        out.setEuler(left ? BI.handL : BI.handR, wrist, 0, sign * 0.1);
       }
     }
 

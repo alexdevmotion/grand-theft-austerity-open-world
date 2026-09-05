@@ -1,4 +1,5 @@
 import { createGame } from './game';
+import { t } from './core/i18n';
 
 const canvas = document.getElementById('viewport') as HTMLCanvasElement;
 const boot = document.getElementById('boot')!;
@@ -8,7 +9,7 @@ const fatal = document.getElementById('fatal')!;
 
 function showFatal(err: unknown): void {
   const msg = err instanceof Error ? `${err.message}\n\n${err.stack ?? ''}` : String(err);
-  fatal.textContent = `GRAND THEFT AUSTERITY — eroare fatală\n\n${msg}`;
+  fatal.textContent = `${t('GRAND THEFT AUSTERITY — eroare fatală')}\n\n${msg}`;
   (fatal as HTMLElement).style.display = 'block';
   boot.classList.add('hidden');
   console.error(err);
@@ -34,11 +35,15 @@ const STATUS_LINES: Record<string, string> = {
 };
 
 async function boot_() {
+  // `index.html` ships the Romanian status line so the card is never blank
+  // before the bundle parses. Restate it now that the stored language is known.
+  bootStatus.textContent = t('SE ÎNCARCĂ BUCUREȘTIUL…');
+
   try {
     const game = await createGame(canvas, (done, total, name) => {
       const pct = Math.round((done / Math.max(1, total)) * 100);
       (bootFill as HTMLElement).style.width = `${pct}%`;
-      bootStatus.textContent = STATUS_LINES[name] ?? name.toUpperCase();
+      bootStatus.textContent = t(STATUS_LINES[name] ?? name.toUpperCase());
     });
 
     (window as unknown as { __GAME__: unknown }).__GAME__ = game;

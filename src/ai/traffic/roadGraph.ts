@@ -315,8 +315,8 @@ function matchingTramPath(
     const direction = ux * bestRail.ux + uz * bestRail.uz >= 0 ? 1 : -1;
     path.push({
       t,
-      x: bestX + bestRail.uz * direction * TRAM_OFFSET,
-      z: bestZ - bestRail.ux * direction * TRAM_OFFSET,
+      x: bestX - bestRail.uz * direction * TRAM_OFFSET,
+      z: bestZ + bestRail.ux * direction * TRAM_OFFSET,
       ux: bestRail.ux * direction,
       uz: bestRail.uz * direction,
     });
@@ -380,8 +380,8 @@ function tramPathIsClear(
 function oppositeTramPath(path: ReadonlyArray<TramPathPoint>): TramPathPoint[] {
   return path.map((point) => ({
     ...point,
-    x: point.x - point.uz * TRAM_OFFSET * 2,
-    z: point.z + point.ux * TRAM_OFFSET * 2,
+    x: point.x + point.uz * TRAM_OFFSET * 2,
+    z: point.z - point.ux * TRAM_OFFSET * 2,
   }));
 }
 
@@ -473,9 +473,9 @@ export class TrafficGraph {
         const ez = na.position.z + uz * trimFrom;
         const xx = nb.position.x - ux * trimTo;
         const xz = nb.position.z - uz * trimTo;
-        const matchedRail = matchingTramPath(ex, ez, xx, xz, ux, uz, uz, -ux, rails);
+        const matchedRail = matchingTramPath(ex, ez, xx, xz, ux, uz, -uz, ux, rails);
         const tramPath = matchedRail !== null &&
-          tramCorridorIsClear(city, ex, ez, xx, xz, uz, -ux, matchedRail.offset) &&
+          tramCorridorIsClear(city, ex, ez, xx, xz, -uz, ux, matchedRail.offset) &&
           tramPathIsClear(city, tracks, matchedRail.path) &&
           tramPathIsClear(city, tracks, oppositeTramPath(matchedRail.path))
           ? matchedRail
@@ -484,7 +484,8 @@ export class TrafficGraph {
         const edge: LaneEdge = {
           index, from: a, to: b,
           ux, uz,
-          rx: uz, rz: -ux,
+          // In Y-up space, forward cross up points to the driver's right.
+          rx: -uz, rz: ux,
           span, lanes, rank,
           speed: RANK_SPEED[rank],
           axisX,

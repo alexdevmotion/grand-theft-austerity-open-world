@@ -191,6 +191,7 @@ describe('emitters whose winding matches their normals', () => {
     // was most of why street trees read as sticks with white hairs on them.
     ['DetailBuilder.tube (vertical)', () => det((b) => b.tube(0, 0, 0, 0, 4, 0, 0.3, 8, DO))],
     ['DetailBuilder.tube (skew)', () => det((b) => b.tube(0, 0, 0, 2, 4, 1, 0.3, 8, DO))],
+    ['DetailBuilder.leafSpray (both sides)', () => det((b) => b.leafSpray(0, 3, 0, 0.7, 0.5, 0.7, DO, 7, 8))],
     ['DetailBuilder.blob', () => det((b) => b.blob(0, 0, 0, 2, 2, 2, DO, 0.2, 7, 2, 0.2, 8))],
     ['DetailBuilder.ring', () => det((b) => b.ring(-5, -5, 5, 5, 0, 0.5, 1, DO))],
     ['DetailBuilder.ringPoly (CW)', () => det((b) => b.ringPoly(CW, 0, 0.5, 1, DO))],

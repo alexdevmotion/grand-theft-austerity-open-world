@@ -35,7 +35,8 @@
       const cz = p[2] + Math.cos(ax) * dist;
       D.setCamera(cx, y + 0.06, cz, p[0], y - 0.02, p[2], fov);
       // Face the camera and hold it there.
-      api.yaw = Math.atan2(cx - p[0], cz - p[2]);
+      // Keep the actor facing the key while the camera orbits for the profile.
+      api.yaw = Math.atan2(s.x / L, s.z / L);
       if (!api.pinned) {
         api.pinned = true;
         const tick = () => {

@@ -29,24 +29,24 @@ const ACT1: MissionDef = {
   id: 'act1_evacuare',
   act: 1,
   title: 'Ordin de Evacuare',
-  brief: 'Ministerul sigilează Casa Constructorilor.',
+  brief: 'Ministerul sigilează Casa Builderilor.',
   startAt: at(PLACES.buildersForecourt),
-  startLabel: 'Vorbește cu constructorii',
+  startLabel: 'Vorbește cu builderii',
   rewardXp: 320,
   rewardLei: 900,
   objectives: [
     {
       id: 'brief',
-      title: 'Vorbește cu constructorii',
+      title: 'Vorbește cu builderii',
       hint: 'Ministerul a lipit ordinul pe ușă.',
-      trigger: { kind: 'interact', at: at(PLACES.buildersForecourt), label: 'Vorbește cu constructorii', radius: 3.6 },
+      trigger: { kind: 'interact', at: at(PLACES.buildersForecourt), label: 'Vorbește cu builderii', radius: 3.6 },
       onFoot: true,
       xp: 40,
       sayAt: 'complete',
       say: [
-        { speaker: 'Constructor', text: 'Ilie! Au sigilat clădirea. Ordin de evacuare, semnat azi-dimineață.', delayMs: 200, ms: 4200 },
+        { speaker: 'Builder', text: 'Ilie! Au sigilat clădirea. Ordin de evacuare, semnat azi-dimineață.', delayMs: 200, ms: 4200 },
         { speaker: 'Ilie', text: 'La naiba, iar o luăm de la capăt.', delayMs: 4400, ms: 3600 },
-        { speaker: 'Constructor', text: 'Serverul comunității e încă înăuntru. Dacă îl iau ei, s-a terminat.', delayMs: 8100, ms: 4600 },
+        { speaker: 'Builder', text: 'Serverul comunității e încă înăuntru. Dacă îl iau ei, s-a terminat.', delayMs: 8100, ms: 4600 },
       ],
     },
     {
@@ -72,7 +72,7 @@ const ACT1: MissionDef = {
       xp: 60,
       sayAt: 'enter',
       say: [
-        { speaker: 'Radio', text: 'Ministerul De-Accelerării Naționale anunță o operațiune de ordine în zona Casa Constructorilor.', delayMs: 400, ms: 5200 },
+        { speaker: 'Radio', text: 'Ministerul De-Accelerării Naționale anunță o operațiune de ordine în zona Casa Builderilor.', delayMs: 400, ms: 5200 },
       ],
     },
     {
@@ -196,7 +196,7 @@ const ACT3: MissionDef = {
       xp: 90,
       sayAt: 'enter',
       say: [
-        { speaker: 'Georgescu', text: 'Constructorii independenți destabilizează națiunea. Statul construiește singur.', delayMs: 500, ms: 5200 },
+        { speaker: 'Georgescu', text: 'Builderii independenți destabilizează națiunea. Statul construiește singur.', delayMs: 500, ms: 5200 },
         { speaker: 'Ilie', text: 'Omul ăsta n-a pus o cărămidă în viața lui.', delayMs: 5600, ms: 3800 },
       ],
     },
@@ -248,7 +248,7 @@ const ACT4: MissionDef = {
   objectives: [
     {
       id: 'return',
-      title: 'Întoarce-te la Casa Constructorilor',
+      title: 'Întoarce-te la Casa Builderilor',
       hint: 'Cinci stele. Tot orașul te caută.',
       trigger: { kind: 'reach', at: at(PLACES.buildersForecourt), radius: 40 },
       stars: 5,
@@ -274,9 +274,9 @@ const ACT4: MissionDef = {
     },
     {
       id: 'enter',
-      title: 'Intră în Casa Constructorilor',
+      title: 'Intră în Casa Builderilor',
       hint: 'Pe ușa pietonală. Mașina rămâne afară.',
-      trigger: { kind: 'interact', at: at(LOBBY_DOOR_OUTSIDE), label: 'Intră în Casa Constructorilor', radius: 4.0 },
+      trigger: { kind: 'interact', at: at(LOBBY_DOOR_OUTSIDE), label: 'Intră în Casa Builderilor', radius: 4.0 },
       onFoot: true,
       timeLimit: 180,
       xp: 160,
@@ -287,15 +287,15 @@ const ACT4: MissionDef = {
     },
     {
       id: 'liberate',
-      title: 'Eliberează Casa Constructorilor',
+      title: 'Eliberează Casa Builderilor',
       hint: 'La recepție, în hol.',
-      trigger: { kind: 'interact', at: at(LOBBY_RECEPTION), label: 'Eliberează Casa Constructorilor', radius: 4.6 },
+      trigger: { kind: 'interact', at: at(LOBBY_RECEPTION), label: 'Eliberează Casa Builderilor', radius: 4.6 },
       onFoot: true,
       xp: 400,
       sayAt: 'complete',
       say: [
         { speaker: 'Ilie', text: 'Aprindeți luminile. Deschideți ușile. Chemați pe toată lumea.', delayMs: 500, ms: 4600 },
-        { speaker: 'Constructor', text: 'S-a întors! Puneți muzica!', delayMs: 5200, ms: 3800 },
+        { speaker: 'Builder', text: 'S-a întors! Puneți muzica!', delayMs: 5200, ms: 3800 },
       ],
     },
   ],

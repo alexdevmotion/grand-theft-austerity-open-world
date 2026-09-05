@@ -1,0 +1,46 @@
+{
+  "sourcePage": "https://static.makehumancommunity.org/assets/assetpacks/makehuman_system_assets.html",
+  "archiveURL": "https://files.makehumancommunity.org/asset_packs/makehuman_system_assets/makehuman_system_assets_cc0.zip",
+  "archiveBytes": 280737770,
+  "archiveLastModified": "2024-04-14T13:28:46Z",
+  "downloadDate": "2026-09-05",
+  "license": "CC0-1.0",
+  "method": "HTTPS byte-range ZIP extraction with zipfile CRC verification; selected members unchanged",
+  "downloadedBytes": 7411844,
+  "entries": [
+    {
+      "archivePath": "skins/middleage_caucasian_male/middleage_caucasian_male.mhmat",
+      "file": "middleage_caucasian_male.mhmat",
+      "bytes": 1469,
+      "sha256": "113326b7670cb273610314b91e2597b228711adf5f0666660b16fef269bfbe72",
+      "zipCRC32": "5ffbf2b0"
+    },
+    {
+      "archivePath": "skins/middleage_caucasian_male/middleage_lightskinned_male_diffuse.png",
+      "file": "middleage_lightskinned_male_diffuse.png",
+      "bytes": 3668589,
+      "sha256": "3f94f3f6a5cab92dedf5cce392a87332312fc435f1cb44c6e7b897daef9a5fbb",
+      "zipCRC32": "6520dca9",
+      "width": 2048,
+      "height": 2048,
+      "runtimePath": "public/textures/characters/middleage_lightskinned_male_diffuse.png"
+    },
+    {
+      "archivePath": "skins/young_caucasian_male/young_caucasian_male.mhmat",
+      "file": "young_caucasian_male.mhmat",
+      "bytes": 1462,
+      "sha256": "6eda60b07ff2afbde078a2535ef3913593d84e9de92b2eb76c30f396a181fe2e",
+      "zipCRC32": "dc98b0ac"
+    },
+    {
+      "archivePath": "skins/young_caucasian_male/young_lightskinned_male_diffuse.png",
+      "file": "young_lightskinned_male_diffuse.png",
+      "bytes": 3693828,
+      "sha256": "862a26e335e958b70534cb5f0d7c47ef30ab148a56c42b3e9da969cf76f12963",
+      "zipCRC32": "e723c591",
+      "width": 2048,
+      "height": 2048,
+      "runtimePath": "public/textures/characters/young_lightskinned_male_diffuse.png"
+    }
+  ]
+}

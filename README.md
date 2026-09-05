@@ -37,7 +37,7 @@ That is the same premise and campaign spine as the [five-to-eight-minute hackath
 ## The city
 
 - **A Bucharest-shaped open world.** Real road topology, tram lines, parks, squares and landmark footprints are curated from OpenStreetMap, then rendered as an authored, procedural city rather than a photogrammetry dump.
-- **Bucharest atmosphere.** Wet boulevards, overhead tram wires, battered facades, warm shopfronts, political posters, sodium streetlights, autumn trees and a violent magenta-orange sky.
+- **Bucharest atmosphere.** Wet boulevards, overhead tram wires, battered facades, warm shopfronts, political posters, sodium streetlights, autumn trees and natural golden-hour lighting.
 - **Characters with a point of view.** Ilie Bolojan-Agatinei, George Georgescu, Alex Need-Aid, Nicușor LAN, builders, inspectors and street crowds inhabit the same satirical fiction as the original.
 - **Free-roam systems.** On-foot movement and melee, arcade driving, traffic, trams, police response, five Crisis Stars, vehicle damage, side activities, progression and persistent saves.
 - **A real game map.** Rotating minimap, north-up full map, landmarks, activities, mission markers, custom waypoints and routes calculated over the live road graph.
@@ -97,7 +97,7 @@ bun run shot
 
 ## How it is built
 
-TypeScript, Vite and three.js render the game in WebGL2; Rapier powers physics; the city, characters, vehicles, weather, missions, UI and audio are independent systems joined through typed service contracts. See [the architecture notes](docs/ARCHITECTURE.md), [story spine](docs/STORY.md), [visual target](docs/VISUAL_TARGET.md) and [likeness/landmark brief](docs/LIKENESS.md).
+TypeScript, Vite and three.js render the game in WebGL2; Rapier powers physics; the city, characters, vehicles, weather, missions, UI and audio are independent systems joined through typed service contracts. See [the architecture notes](docs/ARCHITECTURE.md), [story spine](docs/STORY.md), [visual target](docs/VISUAL_TARGET.md) and [likeness/landmark brief](docs/LIKENESS.md). Editable cast, vehicle and building workshops are documented in [the Blender workflow](docs/BLENDER.md).
 
 ## Origin and credits
 

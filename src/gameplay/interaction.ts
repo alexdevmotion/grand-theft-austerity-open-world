@@ -31,6 +31,7 @@ import * as THREE from 'three';
 import type { GameContext, System } from '../core/engine';
 import { CG, probeGroups, type PhysicsWorld } from '../physics/physics';
 import type { PlayerService, VehicleClass } from '../core/services';
+import { t } from '../core/i18n';
 import { Services, type InteractableKind, type InteractableSpec, type InteractionService } from '../core/services';
 import { hintKeys } from '../core/keyHints';
 import {
@@ -111,11 +112,10 @@ export class InteractionSystem implements System, InteractionService {
   /** Seconds with nothing to offer, so the prompt does not strobe in a crowd. */
   private emptyFor = 0;
 
-  /** Shared marker geometry — one ring, one diamond, one beam for everything. */
+  /** Shared, compact ground rings and overhead markers preserve street visibility. */
   private ringGeo!: THREE.RingGeometry;
   private gemGeo!: THREE.OctahedronGeometry;
-  private beamGeo!: THREE.CylinderGeometry;
-  private matCache = new Map<number, { ring: THREE.Material; gem: THREE.Material; beam: THREE.Material }>();
+  private matCache = new Map<number, { ring: THREE.Material; gem: THREE.Material }>();
 
   init(ctx: GameContext): void {
     this.ctx = ctx;
@@ -125,11 +125,9 @@ export class InteractionSystem implements System, InteractionService {
     this.root.matrixAutoUpdate = true;
     ctx.scene.add(this.root);
 
-    this.ringGeo = new THREE.RingGeometry(0.78, 1.05, 28, 1);
+    this.ringGeo = new THREE.RingGeometry(0.70, 0.75, 32, 1);
     this.ringGeo.rotateX(-Math.PI / 2);
-    this.gemGeo = new THREE.OctahedronGeometry(0.28, 0);
-    this.beamGeo = new THREE.CylinderGeometry(0.34, 0.5, 2.6, 12, 1, true);
-    this.beamGeo.translate(0, 1.3, 0);
+    this.gemGeo = new THREE.OctahedronGeometry(0.14, 0);
 
     this.buildPrompt();
   }
@@ -409,7 +407,7 @@ export class InteractionSystem implements System, InteractionService {
       return;
     }
     el.innerHTML =
-      `${view.keys.map((k) => `<kbd>${escapeHtml(k)}</kbd>`).join('')}<span>${escapeHtml(view.label)}</span>`;
+      `${view.keys.map((k) => `<kbd>${escapeHtml(k)}</kbd>`).join('')}<span>${escapeHtml(t(view.label))}</span>`;
     el.style.borderColor = `#${view.color.toString(16).padStart(6, '0')}`;
     el.style.opacity = '1';
     el.style.transform = 'translateX(-50%) translateY(0)';
@@ -437,22 +435,18 @@ export class InteractionSystem implements System, InteractionService {
     this.promptEl = el;
   }
 
-  private materials(color: number): { ring: THREE.Material; gem: THREE.Material; beam: THREE.Material } {
+  private materials(color: number): { ring: THREE.Material; gem: THREE.Material } {
     let m = this.matCache.get(color);
     if (m) return m;
     const c = new THREE.Color(color).convertSRGBToLinear();
     m = {
       ring: new THREE.MeshBasicMaterial({
-        color: c, transparent: true, opacity: 0.85, side: THREE.DoubleSide,
+        color: c, transparent: true, opacity: 0.55, side: THREE.DoubleSide,
         depthWrite: false, toneMapped: false,
       }),
       gem: new THREE.MeshBasicMaterial({
         color: c, transparent: true, opacity: 0.95,
-        depthTest: false, depthWrite: false, toneMapped: false,
-      }),
-      beam: new THREE.MeshBasicMaterial({
-        color: c, transparent: true, opacity: 0.14, side: THREE.DoubleSide,
-        depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false,
+        depthTest: true, depthWrite: false, toneMapped: false,
       }),
     };
     this.matCache.set(color, m);
@@ -469,12 +463,8 @@ export class InteractionSystem implements System, InteractionService {
     ring.renderOrder = 3;
     g.add(ring);
 
-    const beam = new THREE.Mesh(this.beamGeo, mats.beam);
-    beam.renderOrder = 3;
-    g.add(beam);
-
     const gem = new THREE.Mesh(this.gemGeo, mats.gem);
-    gem.position.y = 1.85;
+    gem.position.y = 2.18;
     gem.renderOrder = 999;
     gem.name = 'gem';
     g.add(gem);
@@ -498,7 +488,7 @@ export class InteractionSystem implements System, InteractionService {
       const gem = m.getObjectByName('gem');
       if (gem) {
         gem.rotation.y = t * 1.5;
-        gem.position.y = 1.85 + Math.sin(t * 2.4 + m.position.x) * 0.13;
+        gem.position.y = 2.18 + Math.sin(t * 2.4 + m.position.x) * 0.06;
         const focused = this.focus === it;
         gem.scale.setScalar(focused ? 1.35 : 1);
       }
@@ -510,11 +500,9 @@ export class InteractionSystem implements System, InteractionService {
     this.root.removeFromParent();
     this.ringGeo?.dispose();
     this.gemGeo?.dispose();
-    this.beamGeo?.dispose();
     for (const m of this.matCache.values()) {
       m.ring.dispose();
       m.gem.dispose();
-      m.beam.dispose();
     }
     this.matCache.clear();
     this.promptEl?.remove();

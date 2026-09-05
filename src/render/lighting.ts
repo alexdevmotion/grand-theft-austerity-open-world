@@ -1,25 +1,5 @@
-/** Sun, sky fill, image-based lighting and cascaded shadows.
- *
- *  This system owns every light in the game and the live state of the shared
- *  material library. It exists to satisfy two rules from the visual target:
- *  "the sky is the key light" and "never neutral".
- *
- *  THE THREE TERMS, AND WHY THEY ARE SPLIT THIS WAY
- *
- *    KEY   a hot, deep-amber directional light with cascaded shadows. It is
- *          the only thing in the frame that produces FORM — a lit face and a
- *          shadowed face on the same building. It must dominate.
- *    FILL  a decisively BLUE hemisphere light. Chroma separation is what gives
- *          the reference its power: ~2000K direct sun against ~12000K skylight,
- *          so lit stone is amber and its own shadow is blue. Fill and key must
- *          never converge on one hue.
- *    IBL   the real sky dome in a PMREM probe. It supplies the magenta mosaic
- *          on glass, chrome and wet asphalt. It is a REFLECTION term, not the
- *          key: when it was the dominant light (ENV_GAIN 2.15) every surface in
- *          the city was lit to the same value from every direction and the city
- *          rendered as one flat violet wedge with no readable sun at all.
- *
- *  OWNER: lighting/materials agent.
+/** Directional sunlight, cool sky fill, environment reflections and shadows.
+ * SkySystem owns the clock and weather; this rig follows its spectral state.
  */
 
 import * as THREE from 'three';
@@ -35,28 +15,7 @@ import { MATERIAL_IDS, Materials } from './materials';
 /* Colour helpers                                                      */
 /* ------------------------------------------------------------------ */
 
-/**
- * COLOUR SPACE — read this before touching any light colour below.
- *
- * three's ColorManagement is on, so `new Color(0xff9c5a)` already decodes sRGB
- * into linear. `src/artDirection.ts` then calls `.convertSRGBToLinear()` on top,
- * so every Palette entry arrives DECODED TWICE. For `Palette.sunLight` that
- * turns a warm amber into (1.000, 0.092, 0.010) — a near-primary RED whose
- * luminance is 0.28 rather than 1.0.
- *
- * Two things followed from that, and both were visible in every capture:
- *   1. the key light was three and a half stops darker than its `intensity`
- *      suggested, which is why the ambient looked like it was doing all the
- *      work — it was;
- *   2. lighting a city with a red primary cannot make stone look warm, only
- *      burnt, so the "warm" half of the frame collapsed into the same wedge as
- *      the violet half.
- *
- * artDirection.ts is not this agent's file. `L()` decodes exactly once, and
- * `unit()` renormalises any colour so the brightest channel is 1 — which is the
- * contract three actually wants: colour carries chromaticity, `intensity`
- * carries magnitude.
- */
+/** Authored light chromaticities, decoded into linear space once. */
 const L = (hex: number): THREE.Color => {
   const c = new THREE.Color(hex);
   if (!THREE.ColorManagement.enabled) c.convertSRGBToLinear();
@@ -434,7 +393,7 @@ export class LightingSystem implements System {
     });
     this.sun = this.csm.lights[0];
     this.csm.registerScene(ctx.scene, true);
-    Materials.onMaterialCreated((m) => this.csm.setupMaterial(m));
+    // The init listener resolves this.csm dynamically, so it already targets the replacement.
   }
 
   /* ---------------- weather / sun ---------------- */
@@ -605,90 +564,23 @@ export class LightingSystem implements System {
 /* of the look.                                                        */
 /* ------------------------------------------------------------------ */
 
-/*
- * Calibrated by measuring the reference frame itself (decoded in-browser and
- * histogrammed) and matching `window.__GTA_POST__.meter()` against it:
- *
- *              p05  p25  p50  p75  p95  mean  saturation  hue std
- *   reference   12   28   50   93  165    66        0.29     130 deg
- *
- * The two failures the previous calibration produced, both measured:
- *   saturation 0.43-0.65 (1.5-2.3x the reference) and hue std 36-39 degrees
- *   (a quarter of the reference). Both had the same root cause: the IBL probe
- *   carrying the magenta dome was the dominant light, so every surface in the
- *   city was tinted by the same magenta and nothing had a second hue to
- *   contrast against. Cutting ENV and giving the fill a hard blue fixes the
- *   hue spread AND most of the saturation, at the source rather than by
- *   desaturating an already-committed frame in the grade.
- */
-
-/** ~2000K low sun, in linear RGB. A grazing sun is amber, not white. */
-const KEY_BLACKBODY = new THREE.Color(1.0, 0.44, 0.15);
-/** How far the sky's reported sun colour is pulled toward that blackbody. */
-const KEY_HUE_PULL = 0.82;
-/** ~12000K skylight. The fill must sit opposite the key on the colour wheel. */
-const FILL_SKY = L(0x5a76ff);
-/**
- * Bounce off the street.
- *
- * WARMER THAN IT WAS, AND FOR A MEASURED REASON. `Atmosphere.wetness` is 0.85
- * and the carriageway mirrors an orange horizon, so the light coming back UP
- * off a Bucharest street at 19:24 is amber, not the violet 0x4a3050 this used
- * to be. That mattered because it is the only warm term reaching a surface the
- * sun cannot see: with the ground bounce violet as well, every shaded face in
- * the city was lit by two cool sources and nothing else. Metered on a tower
- * framing, 93% of the chromatic pixels came out cool against 41% in the
- * reference frame.
- */
-const FILL_GROUND = L(0x6b3a2a);
-/**
- * How hard the sky's own ambient tint is pulled toward that blue.
- *
- * Raised because the sky's dusk ambient is VIOLET — red above green — and at
- * 0.6 it was dragging the fill far enough that way to starve the green channel
- * in every shadow in the game. Binned by luma, the 25-55 band of a tower
- * framing measured [50, 32, 58] against the reference's [41, 37, 47]: the same
- * blue, half the green, i.e. magenta shade rather than violet shade.
- */
-const FILL_BLUE_PULL = 0.72;
-
-/**
- * How much of the palette's chroma the direct sun keeps. See broadSpectrum.
- *
- * EASING THE SUNSET. At 0.9 the key kept nearly all of a 2000K blackbody's
- * chroma, so every sunlit surface in the city was rendered in near-pure amber
- * and every shadow in near-pure blue; with a magenta sky and magenta fog on top
- * of that, a street framing metered 0.73 mean saturation against the reference
- * frame's own 0.37. The sunset was not wrong in HUE — the owner likes it — it
- * was applied at twice the strength of the picture it copies. Backing the key's
- * chroma off lets the travertine and render read as warm STONE lit by a low
- * sun, instead of as white stone flooded with orange light.
- */
+/** Broad-spectrum low sun and desaturated skylight preserve material colours. */
+const KEY_BLACKBODY = new THREE.Color(1.0, 0.70, 0.43);
+const KEY_HUE_PULL = 0.55;
+const FILL_SKY = L(0xacbfd8);
+const FILL_GROUND = L(0x696456);
+const FILL_BLUE_PULL = 0.65;
 const SUN_CHROMA = 0.72;
-/** Chroma of the analytic sky the wet road mirrors. */
-const ROAD_CHROMA = 0.56;
+const ROAD_CHROMA = 0.70;
 
-/**
- * The key. `HeroSun.intensity` (4.6) times this lands at ~11 linear units,
- * which is what makes a west-facing facade a full stop and a half above its own
- * north face — the split that gives the city form.
- */
-const SUN_GAIN = 2.05;
-/**
- * The IBL is a REFLECTION term. At 2.15 it was the key light and the sun was a
- * rounding error; the city additionally scales it by `envMapIntensity` 0.28-0.35
- * on its own materials, so this number only really reaches glass, chrome and
- * water — which is exactly where it should land.
- */
+/** Keep diffuse whites below clipping while retaining directional form. */
+const SUN_GAIN = 1.45;
 const ENV_GAIN = 0.8;
-/** The blue fill. Unlike the IBL this lands at full strength on everything. */
-const HEMI_GAIN = 0.44;
-
-/** Minimum shadow-casting elevation. See LightingSystem.keyDirection. */
+const HEMI_GAIN = 0.52;
 const KEY_MIN_ELEVATION_DEG = 8.0;
 
 /** Night floors, as fractions of the daytime fill. Silhouettes must survive. */
-const NIGHT_FILL_SCALE = 0.42;
+const NIGHT_FILL_SCALE = 0.62;
 const NIGHT_ENV_SCALE = 0.85;
 
 /** Seconds between IBL refreshes while the clock is running. */

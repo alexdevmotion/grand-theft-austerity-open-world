@@ -19,6 +19,21 @@ function node(id: number, x: number, links: number[]): RoadNode {
   };
 }
 
+test('right turns choose the kerb lane and left turns choose the inside lane', () => {
+  for (const side of [-1, 1]) {
+    const nodes = [node(0, 0, [1]), node(1, 100, [0, 2]), node(2, 100, [1])];
+    nodes[2].position.z = side * 100;
+    const graph = new TrafficGraph({ roadNodes: nodes, tramLines: [], spatial: {
+      isBlocked: () => false,
+    } } as unknown as CityService);
+    const vehicle = { id: 'turn-probe', kind: 'dacia' } as ControllableVehicle;
+    const agent = new TrafficAgent(vehicle, graph, graph.edgeBetween(0, 1), 1, new Rng('turn-probe'));
+    // East (+X) to +Z is a right turn when viewed from above with Y up.
+    const plan = agent as unknown as { planLanes: number[] };
+    expect(plan.planLanes[0]).toBe(side > 0 ? 2 : 0);
+  }
+});
+
 test('a displaced tram re-seats level and tangent-aligned on its physical track', () => {
   const nodes = [node(0, 0, [1]), node(1, 100, [0, 2]), node(2, 200, [1])];
   const city = {
@@ -80,4 +95,79 @@ test('a displaced tram re-seats level and tangent-aligned on its physical track'
   // Teleport accepts ground height; VehicleHandle adds its own ride height, so
   // a rail recovery can never preserve an airborne/pitched body transform.
   expect(teleports[0].position.y).toBe(0);
+});
+
+function carAt(graph: TrafficGraph, edge: number, lane: number, t: number, kind = 'dacia') {
+  const e = graph.edges[edge];
+  let controls = [0, 0, false] as [number, number, boolean];
+  const car = {
+    id: 'car', kind, position: graph.lanePoint(e, lane, t, new THREE.Vector3()),
+    rotation: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(e.ux, e.uz)),
+    speed: 0, isWrecked: false,
+    setControls: (throttle: number, steer: number, brake: boolean) => { controls = [throttle, steer, brake]; },
+  } as ControllableVehicle;
+  return { car, controls: () => controls };
+}
+
+function road(nodes: RoadNode[]): TrafficGraph {
+  return new TrafficGraph({ roadNodes: nodes, tramLines: [], spatial: { isBlocked: () => false } } as unknown as CityService);
+}
+
+test('a red light stops the front bumper before the junction and green restarts it', () => {
+  const nodes = [node(0, 0, [1]), node(1, 100, [0, 2]), node(2, 200, [1])];
+  nodes[1].hasTrafficLight = true;
+  const graph = road(nodes);
+  const edge = graph.edgeBetween(0, 1);
+  const { car, controls } = carAt(graph, edge, 0, 1);
+  car.position.x -= 2.2 + 1.4;
+  const agent = new TrafficAgent(car, graph, edge, 0, new Rng(3));
+  const junctions = new JunctionControl(nodes);
+  const field = new SensorField();
+  expect(junctions.signal(1, true)).toBe('red');
+  agent.update(1 / 60, field, junctions, { horn: () => {} });
+  expect(agent.lastTargetSpeed).toBeCloseTo(0);
+  expect(controls()[0]).toBe(0);
+  expect(controls()[1]).toBeCloseTo(0);
+  expect(controls()[2]).toBe(true);
+  junctions.update(junctions.redRemaining(1, true) + .01);
+  agent.bid(junctions);
+  agent.update(1 / 60, field, junctions, { horn: () => {} });
+  expect(agent.lastTargetSpeed).toBeGreaterThan(1);
+  expect(controls()[0]).toBeGreaterThan(0);
+});
+
+test('route advancement waits for the actual outgoing street on an acute turn', () => {
+  const nodes = [node(0, 0, [1]), node(1, 100, [0, 2]), node(2, 0, [1])];
+  nodes[2].position.z = -50;
+  const graph = road(nodes);
+  const edge = graph.edgeBetween(0, 1);
+  const { car } = carAt(graph, edge, 0, .2);
+  const agent = new TrafficAgent(car, graph, edge, 0, new Rng(3));
+  agent.update(1 / 60, new SensorField(), new JunctionControl(nodes), { horn: () => {} });
+  expect(agent.edge).toBe(edge);
+});
+
+test('the rear of a bus must clear a junction before conflicting traffic may enter', () => {
+  const nodes = [node(0, 0, [1]), node(1, 100, [0, 2]), node(2, 200, [1])];
+  const graph = road(nodes);
+  const edge = graph.edgeBetween(0, 1);
+  const next = graph.edgeBetween(1, 2);
+  const { car } = carAt(graph, edge, 0, 1, 'bus');
+  car.position.x -= 5.85 + 1.4 + 1;
+  const agent = new TrafficAgent(car, graph, edge, 0, new Rng(3));
+  const junctions = new JunctionControl(nodes);
+  const update = () => {
+    junctions.update(1 / 60);
+    agent.bid(junctions);
+    agent.update(1 / 60, new SensorField(), junctions, { horn: () => {} });
+  };
+  agent.bid(junctions);
+  update();
+  graph.lanePoint(graph.edges[next], 0, 0, car.position);
+  update();
+  expect(agent.edge).toBe(next);
+  expect(junctions.mayEnter(1, 'crossing', 99)).toBe(false);
+  car.position.x += 7;
+  update();
+  expect(junctions.mayEnter(1, 'crossing', 99)).toBe(true);
 });

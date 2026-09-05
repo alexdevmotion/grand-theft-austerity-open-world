@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Rng } from '../../core/rng';
 import type { DistrictKind } from '../../core/services';
-import type { DetailBuilder, FacadeBuilder, SurfaceBuilder } from './builders';
+import { DetailBuilder, type FacadeBuilder, type SurfaceBuilder } from './builders';
 import { buildOsmCity } from './osm';
 import { buildOsmStreets, type ChunkSink } from './roads';
 
@@ -20,7 +20,8 @@ const noopBuilder = new Proxy<Record<string, () => void>>({}, {
 
 const sink = {
   surf: () => noopBuilder as unknown as SurfaceBuilder,
-  detail: () => noopBuilder as unknown as DetailBuilder,
+  // Mesh templates append directly to the batch arrays as well as methods.
+  detail: () => new DetailBuilder(),
   facade: () => noopBuilder as unknown as FacadeBuilder,
 } satisfies ChunkSink;
 

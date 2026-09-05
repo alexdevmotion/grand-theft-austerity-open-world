@@ -3,10 +3,8 @@
  * clipped hedges, planters, verges and the leaf litter that ends up all over
  * the wet pavement.
  *
- * Trees are built from a trunk, real branches and a handful of low-poly leaf
- * clusters rather than one cone, because against a bright magenta sky a cone
- * reads as a dark kite on a stick — the single most common giveaway that a
- * street is procedural.
+ * Trees retain their branch armature and carry small, two-sided leaf sprays.
+ * Open gaps between leaves preserve the thinning autumn silhouette.
  *
  * OWNER: props / street-dressing agent.
  */
@@ -46,13 +44,6 @@ const leafOpt = (color: PropOpts['color'], gain = 0.12, trans = 0.85, wind = 0):
     emissive: [color.r * gain, color.g * gain, color.b * gain], trans, wind,
   });
 
-/**
- * Radians of normal scatter applied to every leaf cluster. About 18 degrees is
- * enough to break uniform shading without turning each low-poly lobe into a
- * fan of unrelated folded cards.
- */
-const LEAF_NORMAL_JITTER = 0.32;
-
 /** Neighbouring clusters share one seasonal family instead of rainbow noise. */
 const TREE_PALETTES = [
   { tones: [C.leafAmber, C.leafGold, C.leafPale], weights: [6, 3, 0.7] },
@@ -67,7 +58,7 @@ const TREE_PALETTES = [
 /**
  * Autumn street tree. `thin` 0..1 controls how much of the crown has already
  * dropped: at 1 you get bare branches with a few clinging clusters.
- * Roughly 1.5-2.3k triangles at full detail (branches, shell and fringe),
+ * Bounded leaf counts at each detail tier (branches, shell and fringe),
  * merged into the owning tile's single prop draw.
  */
 export function autumnTree(
@@ -187,28 +178,8 @@ export function autumnTree(
     cx + rng.range(-0.25, 0.25), crownY + crownH * 0.72, cz + rng.range(-0.25, 0.25),
     trunkR * 0.42, 4, limbOpt);
 
-  /*
-   * THE CANOPY — a CLOSED SHELL OF SMALL LOBES, not four fat balloons per
-   * branch tip.
-   *
-   * Hanging clusters on branch tips is the obvious construction and it is what
-   * this function used to do. Tips are further apart than clusters are wide, so
-   * the crown never closed: what reached the screen was a bare stick with a
-   * handful of large opaque balloons stuck near the top — which is, word for
-   * word, how a playtest described it. A crown is a MASS, and the size of the
-   * pieces it is made of is not a free parameter. See the derivation on
-   * `LOBE_COVER` in city/facades.ts; this mirrors it:
-   *
-   *     r = sqrt(COVER * crownR * crownHalfH / N)
-   *
-   * closes the side silhouette for any N, so the LOD tiers pick GRANULARITY and
-   * never coverage — few big lobes far away, many small ones near, the same
-   * solid mass either way, and no tier at which the crown comes apart.
-   */
-  // Near trees need a finer grain than the old 0.7 m-radius shell: at camera
-  // distance that size resolves as a row of rocks. The cover is kept just
-  // below one closed hull so the armature and late-autumn gaps survive instead
-  // of becoming an opaque ball. Mid/far tiers retain almost the old count.
+  // Distribute small sprays over the existing crown envelope. The envelope
+  // changes with LOD; each individual blade stays leaf-sized at every tier.
   const COVER = 3.2;
   const rWanted = lod === 2 ? 0.56 : lod === 1 ? 0.82 : 1.30;
   const crownHalfH = crownH * 0.34;
@@ -216,12 +187,6 @@ export function autumnTree(
   const silh = crownR * crownHalfH;
   const nSurf = Math.max(6, Math.min(100, Math.round((COVER * silh) / (rWanted * rWanted))));
   const lobeR = Math.sqrt((COVER * silh) / nSurf);
-  // Two scales — see the long note in city/facades.ts. These structural lobes
-  // are the crown's MASS at 20-24 triangles each; the tuft pass at the bottom
-  // skins their outside in 0.3 m single-ring lobes, and those are what the eye
-  // resolves from the distance a third-person camera actually lives at.
-  const rings = lod === 0 ? 1 : 2;
-  const lobeSeg = lod === 0 || lod === 2 ? 6 : 5;
   const GOLD = Math.PI * (3 - Math.sqrt(5));
   const seedBase = (Math.round(cx * 13.7 + cz * 7.3) >>> 0) || 1;
 
@@ -254,7 +219,7 @@ export function autumnTree(
     // most of the difference between a canopy and a ball of moss.
     const ly = crownMidY + cy * crownHalfH * shell - lobeR * 0.22;
     const r = lobeR * rng.range(0.8, 1.18);
-    b.blob(
+    b.leafSpray(
       cx + Math.cos(ang) * sr * crownR * shell * wob,
       ly,
       cz + Math.sin(ang) * sr * crownR * shell * wob,
@@ -263,15 +228,11 @@ export function autumnTree(
         leafC.clone().multiplyScalar(depth), 0.1, rng.range(0.72, 1.0),
         0.035 + 0.11 * Math.max(0, (ly - crownY) / Math.max(crownH, 0.5)),
       ),
-      // 0.32, not 0.5: on a five/six-segment two-ring lobe a vertex pulled to
-      // 0.75r leaves its neighbours' quad nearly planar, and the structural
-      // lobes flatten into hard cards. Raggedness is the tuft pass's job.
-      0.32, 1 + ((i * 7919 + seedBase * 104729) >>> 0), rings, LEAF_NORMAL_JITTER * 0.55, lobeSeg,
+      1 + ((i * 7919 + seedBase * 104729) >>> 0), lod === 2 ? 4 : lod === 1 ? 3 : 1,
     );
   }
 
-  // Backing lobes: whatever shows through a thinned crown has to be more canopy
-  // in shadow — never sky, and never the trunk.
+  // A few shaded inner sprays give depth while keeping the branch fork visible.
   if (lod >= 1) {
     const nBacking = lod === 2 ? 4 : 5;
     for (let i = 0; i < nBacking; i++) {
@@ -280,13 +241,13 @@ export function autumnTree(
       const ang = i * GOLD * 2.3 + rng.range(-0.28, 0.28);
       const shell = rng.range(0.28, 0.62);
       const r = lobeR * rng.range(0.72, 1.12);
-      b.blob(
+      b.leafSpray(
         cx + Math.cos(ang) * sr * crownR * shell,
         crownMidY + cy * crownHalfH * shell,
         cz + Math.sin(ang) * sr * crownR * shell,
         r, r * 0.72, r,
         leafOpt(palette.tones[0].clone().multiplyScalar(0.5), 0.08, 0.35, 0.03),
-        0.45, 1 + ((i * 15486 + seedBase * 39769) >>> 0), 1, LEAF_NORMAL_JITTER * 0.4, 5,
+        1 + ((i * 15486 + seedBase * 39769) >>> 0), 1,
       );
     }
   }
@@ -322,11 +283,11 @@ export function autumnTree(
       fz = cz + Math.sin(a) * sr * crownR * sh;
       fy = crownMidY + cy * crownHalfH * sh - fr * 0.3;
     }
-    b.blob(
+    b.leafSpray(
       fx, fy, fz, fr, fr * rng.range(0.6, 0.86), fr,
       leafOpt(rng.weighted(palette.tones, palette.weights),
         0.1, rng.range(0.9, 1.0), 0.15),
-      0.6, 1 + ((i * 22691 + seedBase * 6353) >>> 0), 1, LEAF_NORMAL_JITTER * 0.55, 5,
+      1 + ((i * 22691 + seedBase * 6353) >>> 0), 1,
     );
   }
 }
@@ -353,8 +314,7 @@ export function treeGrate(b: PropBuilder, x: number, z: number, rng: Rng): void 
 /* ------------------------------------------------------------------ */
 
 /**
- * Clipped hedge run. Built as overlapping blobs so the top is ragged rather
- * than a green brick.
+ * Clipped hedge run, with open leaf sprays around the retained collision volume.
  */
 export function hedgeRow(
   b: PropBuilder,
@@ -380,10 +340,10 @@ export function hedgeRow(
     const px = x + dirX * t;
     const pz = z + dirZ * t;
     const c = rng.bool(0.28) ? C.leafRust : C.leafOlive;
-    b.blob(
+    b.leafSpray(
       px, WALK_Y + height * 0.5, pz,
       0.55, height * rng.range(0.48, 0.58), 0.55,
-      leafOpt(c, 0.10, 0.55), 0.35, 401 + i * 13, 2, LEAF_NORMAL_JITTER * 0.7,
+      leafOpt(c, 0.10, 0.55), 401 + i * 13, 4,
     );
   }
   // Low kerb the hedge sits in.
@@ -403,10 +363,10 @@ export function planter(b: PropBuilder, x: number, z: number, rng: Rng): void {
   const shrubs = 1 + rng.int(0, 3);
   for (let i = 0; i < shrubs; i++) {
     const c = rng.weighted([C.leafOlive, C.leafAmber, C.leafRust], [3, 2, 1]);
-    b.blob(
+    b.leafSpray(
       x + rng.range(-w * 0.22, w * 0.22), WALK_Y + h + rng.range(0.18, 0.42), z + rng.range(-w * 0.22, w * 0.22),
       rng.range(0.22, 0.4), rng.range(0.2, 0.36), rng.range(0.22, 0.4),
-      leafOpt(c, 0.10, 0.6), 0.5, 601 + i * 11, 2, LEAF_NORMAL_JITTER * 0.7,
+      leafOpt(c, 0.10, 0.6), 601 + i * 11, 4,
     );
   }
 }
@@ -421,8 +381,8 @@ export function grassTufts(
     const px = x + Math.cos(a) * r;
     const pz = z + Math.sin(a) * r;
     const c = rng.bool(0.3) ? C.leafAmber : C.leafOlive;
-    b.blob(px, y + 0.1, pz, rng.range(0.16, 0.34), rng.range(0.1, 0.22), rng.range(0.16, 0.34),
-      leafOpt(c, 0.09, 0.5), 0.6, 811 + i * 3, 1, LEAF_NORMAL_JITTER * 0.6);
+    b.leafSpray(px, y + 0.1, pz, rng.range(0.16, 0.34), rng.range(0.1, 0.22), rng.range(0.16, 0.34),
+      leafOpt(c, 0.09, 0.5), 811 + i * 3, 1);
   }
 }
 

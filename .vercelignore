@@ -5,7 +5,12 @@ dogfood-output/
 dist/
 node_modules/
 tools/out/
+tools/blender/input/
+assets/blender/
+docs/reference/
 tools/facefit/face_landmarker.task
 public/audio/vo/
 public/audio/music/
 *.log
+
+assets/source/

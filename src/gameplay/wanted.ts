@@ -44,6 +44,7 @@ import {
   type WantedService,
 } from '../core/services';
 import { CONEXIUNI_DISCOUNT } from './progression';
+import { num, t, tp } from '../core/i18n';
 import type { CameraDirector } from './cameraSystem';
 
 const STAR_THRESHOLDS = [0, 60, 160, 320, 560, 900];
@@ -562,7 +563,7 @@ export class WantedSystem implements System, WantedService {
     if (!player) return false;
 
     if (what === 'pay' && player.lei < d.fine) {
-      this.flashSheet('Nu ai atât. Rămâi.');
+      this.flashSheet(t('Nu ai atât. Rămâi.'));
       return false;
     }
 
@@ -609,8 +610,8 @@ export class WantedSystem implements System, WantedService {
     if (!d) return;
     ctx.tryGet(Services.Hud)?.toast(
       d.choice === 'pay'
-        ? `Eliberat · −${d.paid} lei · ${d.hours} ore pierdute`
-        : `Eliberat după ${d.hours} ore · ${d.where}`,
+        ? tp('Eliberat · −{paid} lei · {hours} ore pierdute', { paid: d.paid, hours: d.hours })
+        : tp('Eliberat după {hours} ore · {where}', { hours: d.hours, where: t(d.where) }),
       'bad',
       5200,
     );
@@ -646,7 +647,7 @@ export class WantedSystem implements System, WantedService {
 
     const cost = this.bribeCost();
     if (!player.spend(cost, 'șpagă:inspector')) {
-      ctx.tryGet(Services.Hud)?.toast(`Îți cere ${cost} lei. Nu-i ai.`, 'bad', 3000);
+      ctx.tryGet(Services.Hud)?.toast(tp('Îți cere {cost} lei. Nu-i ai.', { cost }), 'bad', 3000);
       return false;
     }
 
@@ -658,7 +659,7 @@ export class WantedSystem implements System, WantedService {
       // He counts it, pockets it, and reaches for the radio.
       this.addHeat(STAR_THRESHOLDS[Math.min(5, this._stars + 1)] - this.heat + 20);
       ctx.tryGet(Services.Hud)?.toast(
-        `A luat banii și a raportat. −${cost} lei, +1 ★`,
+        tp('A luat banii și a raportat. −{cost} lei, +1 ★', { cost }),
         'bad',
         4200,
       );
@@ -670,7 +671,7 @@ export class WantedSystem implements System, WantedService {
     this.setStars(before - 1);
     this.cooldown = COOLDOWN_SECONDS[Math.min(5, this._stars)];
     ctx.tryGet(Services.Hud)?.toast(
-      `„Pentru dosar." −${cost} lei · ${before} → ${this._stars} ★`,
+      tp('„Pentru dosar.” −{cost} lei · {before} → {after} ★', { cost, before, after: this._stars }),
       'good',
       3600,
     );
@@ -718,7 +719,7 @@ export class WantedSystem implements System, WantedService {
       it.remove(BRIBE_ID);
       it.add({
         id: BRIBE_ID,
-        label: `Dă șpagă inspectorului — ${cost.toLocaleString('ro-RO')} lei`,
+        label: tp('Dă șpagă inspectorului — {cost} lei', { cost: num(cost) }),
         position: best.position.clone(),
         radius: 4.6,
         kind: 'world',
@@ -759,10 +760,10 @@ export class WantedSystem implements System, WantedService {
     const root = document.createElement('div');
     root.className = 'gta-bust';
     root.innerHTML =
-      '<div class="bm"><i></i><span>REȚINERE</span></div>' +
+      `<div class="bm"><i></i><span>${t('REȚINERE')}</span></div>` +
       '<div class="sheet"><div class="card">' +
-      '<div class="hdr">MINISTERUL DE-ACCELERĂRII NAȚIONALE</div>' +
-      '<div class="ttl">REȚINUT</div>' +
+      `<div class="hdr">${t('MINISTERUL DE-ACCELERĂRII NAȚIONALE')}</div>` +
+      `<div class="ttl">${t('REȚINUT')}</div>` +
       '<div class="rows"></div>' +
       '<div class="opts"></div>' +
       '<div class="note"></div>' +
@@ -807,11 +808,12 @@ export class WantedSystem implements System, WantedService {
 
     const stars = '★'.repeat(d.stars) + '☆'.repeat(5 - d.stars);
     dom.rows.innerHTML =
-      row('Instabilitate politică', `<b class="st">${stars}</b>`) +
-      row('Amendă administrativă', `<b>${d.fine.toLocaleString('ro-RO')} lei</b>`) +
-      row('Vehicul', '<b>rămâne unde l-ai lăsat</b>') +
+      row(t('Instabilitate politică'), `<b class="st">${stars}</b>`) +
+      row(t('Amendă administrativă'), `<b>${num(d.fine)} lei</b>`) +
+      row(t('Vehicul'), `<b>${t('rămâne unde l-ai lăsat')}</b>`) +
       (d.choice
-        ? row('Ore de „lămuriri"', `<b>${d.hours}</b>`) + row('Eliberare', `<b>${d.where}</b>`)
+        ? row(t('Ore de „lămuriri”'), `<b>${d.hours}</b>`) +
+          row(t('Eliberare'), `<b>${t(d.where)}</b>`)
         : '');
 
     if (d.choice === null) {
@@ -819,16 +821,23 @@ export class WantedSystem implements System, WantedService {
       const player = this.ctx.tryGet(Services.Player);
       const canPay = (player?.lei ?? 0) >= d.fine;
       dom.opts.innerHTML =
-        `<button class="${canPay ? '' : 'off'}"><kbd>E</kbd>Plătește amenda · ${d.fine.toLocaleString('ro-RO')} lei</button>` +
-        `<button><kbd>SPAȚIU</kbd>Refuză · ${HOURS_HELD} ore</button>`;
+        `<button class="${canPay ? '' : 'off'}"><kbd>E</kbd>${tp('Plătește amenda · {fine} lei', {
+          fine: num(d.fine),
+        })}</button>` +
+        `<button><kbd>${t('SPAȚIU')}</kbd>${tp('Refuză · {hours} ore', { hours: HOURS_HELD })}</button>`;
       dom.note.textContent = canPay
-        ? `Decizi în ${left.toFixed(0)}s. Dacă nu decizi, plătesc ei din buzunarul tău.`
-        : `Nu ai ${d.fine.toLocaleString('ro-RO')} lei. Decizi în ${left.toFixed(0)}s.`;
+        ? tp('Decizi în {left}s. Dacă nu decizi, plătesc ei din buzunarul tău.', {
+            left: left.toFixed(0),
+          })
+        : tp('Nu ai {fine} lei. Decizi în {left}s.', { fine: num(d.fine), left: left.toFixed(0) });
     } else {
       dom.opts.innerHTML = '';
       dom.note.textContent = d.choice === 'pay'
-        ? `Plătit ${d.paid.toLocaleString('ro-RO')} lei. Ești liber. Găsește-ți mașina.`
-        : `Reținut ${d.hours} ore. Taxă de dosar: ${d.paid.toLocaleString('ro-RO')} lei.`;
+        ? tp('Plătit {paid} lei. Ești liber. Găsește-ți mașina.', { paid: num(d.paid) })
+        : tp('Reținut {hours} ore. Taxă de dosar: {paid} lei.', {
+            hours: d.hours,
+            paid: num(d.paid),
+          });
     }
   }
 

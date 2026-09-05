@@ -19,8 +19,8 @@ export interface Dent {
   d: number;
 }
 
-const PRIMER = new THREE.Color(0x6a4632).convertSRGBToLinear();
-const SOOT = new THREE.Color(0x2a2228).convertSRGBToLinear();
+const PRIMER = new THREE.Color(0x6a4632);
+const SOOT = new THREE.Color(0x2a2228);
 
 const _a = new THREE.Vector3();
 const _b = new THREE.Vector3();

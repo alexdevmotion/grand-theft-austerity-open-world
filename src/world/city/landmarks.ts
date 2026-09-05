@@ -34,6 +34,7 @@ import {
   wasteBin,
 } from './facades';
 import { FacadeStyle } from './materials';
+import { articulatedExtrusion } from './architecture';
 import {
   BAR,
   BLOCK_HALL,
@@ -148,7 +149,7 @@ export function buildBuildersHouse(sink: LandmarkSink, rng: Rng): LandmarkResult
 
   /* ---- the glass tower ---- */
   const towerFp = rectFootprint(cx, cz, towerW, towerD);
-  f.extrude(towerFp, 0, towerH, 0, glass);
+  articulatedExtrusion(f, d, towerFp, 0, towerH, 0, glass, { tier: 2, front: { x: 0, z: -1 } });
 
   /*
    * AND THEN THE CURTAIN WALL AS REAL GEOMETRY ON TOP OF IT.
@@ -240,7 +241,7 @@ export function buildBuildersHouse(sink: LandmarkSink, rng: Rng): LandmarkResult
     tint: 0.9,
   };
   const stoneFp = rectFootprint(stoneX, cz, stoneW, stoneD);
-  f.extrude(stoneFp, 0, towerH * 0.86, 0, stone);
+  articulatedExtrusion(f, d, stoneFp, 0, towerH * 0.86, 0, stone, { tier: 2, front: { x: -0.6, z: -0.8 } });
   boxes.push({ x: stoneX, z: cz, hx: stoneW / 2, hz: stoneD / 2, h: towerH * 0.86 });
   d.ring(stoneX - stoneW / 2, cz - stoneD / 2, stoneX + stoneW / 2, cz + stoneD / 2,
     towerH * 0.86, 0.4, 1.1, { color: DetailColor.stone, mr: MR.stone });
@@ -260,6 +261,28 @@ export function buildBuildersHouse(sink: LandmarkSink, rng: Rng): LandmarkResult
     d.cyl(cx + i * 6.4, 0.17, cz - towerD / 2 - 4.0, 0.17, 0.15, groundH, 8, {
       color: DetailColor.alu, mr: MR.metal,
     });
+  }
+
+  // Double-height lobby bays with structural transoms and deep limestone
+  // piers. Keep the central doorway and its existing collision shell clear.
+  const lobbyFront = cz - towerD / 2 - 0.12;
+  for (const side of [-1, 1]) for (let bay = 0; bay < 3; bay++) {
+    const x = cx + side * (4.9 + bay * 3.7);
+    for (const edge of [-1, 1]) {
+      d.box(x + edge * 1.71, 4.4, lobbyFront - 0.20, 0.18, 8.1, 0.44, 0,
+        { color: DetailColor.metal, mr: MR.metal });
+    }
+    for (const y of [0.5, 3.8, 7.0]) {
+      d.box(x, y, lobbyFront - 0.20, 3.5, 0.12, 0.44, 0,
+        { color: DetailColor.metal, mr: MR.metal });
+    }
+    d.box(x, 0.42, lobbyFront - 0.06, 3.6, 0.20, 0.8, 0,
+      { color: DetailColor.stoneDark, mr: MR.stone });
+  }
+  // Canopy edge reveals structural thickness and individual soffit coffers.
+  for (let i = -3; i <= 3; i++) {
+    d.box(cx + i * 4.4, groundH - 0.37, cz - towerD / 2 - 2.1,
+      0.16, 0.30, 4.25, 0, { color: DetailColor.metal, mr: MR.metal });
   }
 
   /* ---- external escape stair on the west face (reference, left of tower) ---- */
@@ -346,7 +369,7 @@ export function buildBuildersHouse(sink: LandmarkSink, rng: Rng): LandmarkResult
 
   return {
     id: 'buildersHouse',
-    name: 'Casa Constructorilor',
+    name: 'Casa Builderilor',
     position: new THREE.Vector3(cx, 0, cz - 30),
     radius: 55,
     boxes,
@@ -1019,7 +1042,7 @@ function buildRecorderHouse(sink: LandmarkSink, p: PlazaSpec, rng: Rng): Landmar
     color: lin(0xe12b32), mr: [0, 0.5], emissive: emi(lin(0xe12b32), 0.8),
   });
 
-  parkedCar(d, spec.cx - spec.w / 2 - 4.6, spec.cz + 4.0, 0, rng);
+  parkedCar(d, spec.cx - spec.w / 2 - 4.6, spec.cz + 4.0, 0, rng, 0.18);
   wasteBin(d, spec.cx - spec.w / 2 - 2.2, spec.cz + 9.0, rng);
   streetLamp(d, spec.cx - spec.w / 2 - 5.6, spec.cz - 2, 1, 0, 8.0);
   for (let i = 0; i < 3; i++) {

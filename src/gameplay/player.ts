@@ -29,6 +29,8 @@ import {
   type VehicleHandle,
 } from '../core/services';
 import { interactionClaimed } from './interaction';
+import { tp } from '../core/i18n';
+import type { VehicleDoors } from '../vehicles/vehicleSystem';
 
 const WALK = 2.1;
 const JOG = 4.6;
@@ -239,6 +241,8 @@ const DOOR_STANDOFF = 0.92;
 const BOARD_MAX_REACH = 5.0;
 const BOARD_ENTER_DUR = 1.30;
 const BOARD_EXIT_DUR = 1.05;
+const LOCKPICK_DUR = 0.55;
+const PULL_DRIVER_DUR = 0.8;
 /** Timeline beats, as a fraction of the sequence. */
 const ALIGN_END = 0.26;
 const OPEN_END = 0.50;
@@ -253,6 +257,7 @@ interface BoardDrive {
   side: number;
   /** True while the reach is the pull-shut rather than the pull-open. */
   closing: boolean;
+  action?: 'pull' | 'lockpick';
 }
 
 interface BoardState {
@@ -261,8 +266,11 @@ interface BoardState {
   dur: number;
   vehicle: VehicleHandle;
   from: THREE.Vector3;
+  safePoint: THREE.Vector3;
   fromYaw: number;
   toYaw: number;
+  preparation: 'pull' | 'lockpick' | null;
+  prepared: boolean;
 }
 
 const _v0 = new THREE.Vector3();
@@ -325,10 +333,35 @@ const SEAT_RISE: Partial<Record<VehicleClass, number>> = {
   dacia: 0, sedan: 0, hatch: 0, police: 0, van: 0.29, truck: 0.49,
   bus: 0.33, tram: 0.05, scooter: 0.57,
 };
-/** Lateral seat position (matches the steering wheel in dacia.ts). */
+/** LHD seats occupy +X: up cross forward points left when facing +Z. */
 const SEAT_X: Partial<Record<VehicleClass, number>> = {
-  dacia: -0.34, scooter: 0, bus: -0.62, truck: -0.55, tram: 0,
+  dacia: 0.34, scooter: 0, bus: 0.62, truck: 0.55, tram: 0.62,
 };
+
+/** Driver offset for models without optional physical door anchors. */
+export function driverSeatX(kind: VehicleClass): number {
+  return SEAT_X[kind] ?? 0.36;
+}
+
+type BoardingVehicle = Pick<VehicleHandle, 'kind' | 'position' | 'rotation'> & Partial<VehicleDoors>;
+
+/** Prefer the model's physical driver door; centred vehicles mount from left. */
+export function driverDoorPoint(v: BoardingVehicle, out: THREE.Vector3): THREE.Vector3 {
+  if (v.doorAnchor?.('driver', out)) return out;
+  const sx = driverSeatX(v.kind);
+  return out.set(sx + (sx < 0 ? -1 : 1) * DOOR_STANDOFF, -0.42, 0.02)
+    .applyQuaternion(v.rotation).add(v.position);
+}
+
+/** Step clear of the physical driver door, retaining the exit ground probe height. */
+export function driverExitPoint(v: BoardingVehicle, out: THREE.Vector3): THREE.Vector3 {
+  if (v.doorAnchor?.('driver', out)) {
+    out.add(new THREE.Vector3(0.28, 0, 0).applyQuaternion(v.rotation));
+    out.y = v.position.y + 0.4;
+    return out;
+  }
+  return out.set(2.1, 0.4, 0).applyQuaternion(v.rotation).add(v.position);
+}
 
 class PlayerCharacter implements CharacterHandle {
   readonly id = 'player';
@@ -550,7 +583,7 @@ export class PlayerSystem implements System, PlayerService {
         turnRate: this.turnRate,
         aiming: this._aiming,
       }),
-      boarding: () => (this.board ? { mode: this.board.mode, t: this.board.t, dur: this.board.dur } : null),
+      boarding: () => (this.board ? { mode: this.board.mode, t: this.board.t, dur: this.board.dur, preparation: this.board.preparation, prepared: this.board.prepared } : null),
       /** The economy, which now has an outflow. */
       economy: () => ({
         lei: this._lei,
@@ -613,6 +646,12 @@ export class PlayerSystem implements System, PlayerService {
       return;
     }
 
+    if (this.board?.mode === 'enter') {
+      const v = this.board.vehicle;
+      if (v.isWrecked || Math.abs(v.speed) > 3.5) this.cancelBoarding();
+      else v.setControls(0, 0, true);
+      return;
+    }
     if (this._vehicle) {
       this.driveUpdate(dt, ctx);
       return;
@@ -906,10 +945,9 @@ export class PlayerSystem implements System, PlayerService {
 
   /** Per-frame: pose the hero. Physics already ran this frame. */
   update(dt: number, ctx: GameContext): void {
+    const board = this.board ? this.updateBoarding(dt) : null;
     const actor = this.actor;
     if (!actor) return;
-
-    const board = this.board ? this.updateBoarding(dt) : null;
     if (!board && this._vehicle) this.seatInVehicle(this._vehicle);
 
     actor.drive({
@@ -939,42 +977,42 @@ export class PlayerSystem implements System, PlayerService {
   private seatPoint(v: VehicleHandle, out: THREE.Vector3): THREE.Vector3 {
     const scale = HERO_HEIGHT / 1.75;
     const rise = SEAT_RISE[v.kind] ?? 0;
-    const sx = SEAT_X[v.kind] ?? -0.36;
+    const sx = driverSeatX(v.kind);
     return out.set(sx, rise - 0.44 * scale, 0.04).applyQuaternion(v.rotation).add(v.position);
   }
 
   /** World position the character stands at while working the driver's door. */
   private doorPoint(v: VehicleHandle, out: THREE.Vector3): THREE.Vector3 {
-    const sx = SEAT_X[v.kind] ?? -0.36;
-    const side = sx <= 0 ? -1 : 1;
-    return out.set(sx + side * DOOR_STANDOFF, -0.42, 0.02).applyQuaternion(v.rotation).add(v.position);
+    return driverDoorPoint(v, out);
   }
 
-  /* ------------------------------------------------------------------ *
-   * ENTER / EXIT
-   *
-   * The SERVICE CONTRACT is unchanged and still instantaneous: the instant
-   * `enterVehicle` is called the occupant is registered, `inVehicle` reports
-   * the handle, the event fires and the camera switches — everything that
-   * calls into `PlayerService` sees exactly what it saw before. What is new is
-   * a purely COSMETIC sequence layered on top, which owns nothing but the
-   * mesh's transform and pose for a second or so.
-   *
-   * That split is what makes it interruptible-safe. A sequence can be
-   * cancelled, replaced or never started (a scripted `giveVehicle` teleports
-   * the player in from ten metres away — there is no believable path, so there
-   * is no animation) and the game state is identical either way. Nothing waits
-   * on it, so nothing can dead-lock behind it.
-   * ------------------------------------------------------------------ */
+  /** Reserve a nearby vehicle; ownership changes only after the door sequence. */
+  enterVehicle(v: VehicleHandle, instant = false): void {
+    if (this._vehicle || this.board || v.isWrecked || v.entryReserved || v.occupants.length > 0) return;
+    if (instant) {
+      // Debug/script handoffs explicitly skip the interaction, only into empty cars.
+      if (!v.npcDriver) this.finishEntering(v);
+      return;
+    }
+    if (this.character.position.distanceTo(this.doorPoint(v, _v0)) > BOARD_MAX_REACH || Math.abs(v.speed) > 2.4) return;
+    this.beginBoarding('enter', v);
+    v.entryReserved = true;
+    this.collider.setEnabled(false);
+    v.setControls(0, 0, true);
+    this.character.state = 'idle';
+    this.planarSpeed = this.moveF = this.moveS = 0;
+  }
 
-  enterVehicle(v: VehicleHandle): void {
-    if (this._vehicle) return;
+  private finishEntering(v: VehicleHandle): void {
+    v.entryReserved = false;
+    v.locked = false;
     this._vehicle = v;
+    this.collider.setEnabled(false);
     (v.occupants as string[]).push('player');
     this.character.state = 'drive';
+    this.character.position.copy(v.position);
     this.enterCooldown = 0.45;
-    this.beginBoarding('enter', v);
-    if (!this.board) this.seatInVehicle(v);
+    this.seatInVehicle(v);
     this.ctx.events.emit('player:enteredVehicle', { vehicleId: v.id });
     this.ctx.tryGet(Services.Camera)?.setMode('vehicle');
   }
@@ -986,8 +1024,7 @@ export class PlayerSystem implements System, PlayerService {
     if (idx >= 0) (v.occupants as string[]).splice(idx, 1);
 
     // Step out to the driver's side, clear of the body.
-    const side = new THREE.Vector3(-2.1, 0.4, 0).applyQuaternion(v.rotation);
-    const p = v.position.clone().add(side);
+    const p = driverExitPoint(v, new THREE.Vector3());
     this.body.setNextKinematicTranslation({
       x: p.x,
       y: p.y + this.halfHeight + this.radius,
@@ -1000,6 +1037,7 @@ export class PlayerSystem implements System, PlayerService {
     this.character.object.visible = true;
     this.character.state = 'idle';
     this._vehicle = null;
+    this.collider.setEnabled(true);
     this.velocityY = 0;
     this.footY = p.y;
     this.enterCooldown = 0.45;
@@ -1008,23 +1046,49 @@ export class PlayerSystem implements System, PlayerService {
     this.ctx.tryGet(Services.Camera)?.setMode('thirdPerson');
   }
 
+  private cancelBoarding(completed = false): void {
+    const b = this.board;
+    const doors = this.board?.vehicle as (VehicleHandle & Partial<VehicleDoors>) | undefined;
+    doors?.setDoorOpen?.('driver', 0);
+    if (doors) doors.entryReserved = false;
+    if (b?.mode === 'enter' && !completed) {
+      this.character.position.copy(b.safePoint);
+      this.character.object.position.copy(b.safePoint);
+      this.syncBoardingCapsule(b.safePoint);
+      this.footY = b.safePoint.y;
+      this.velocityY = 0;
+      this.collider.setEnabled(true);
+    }
+    this.board = null;
+  }
+
+  private syncBoardingCapsule(p: THREE.Vector3): void {
+    const centre = { x: p.x, y: p.y + this.halfHeight + this.radius, z: p.z };
+    this.body.setTranslation(centre, true);
+    this.body.setNextKinematicTranslation(centre);
+  }
+
   private beginBoarding(mode: 'enter' | 'exit', v: VehicleHandle): void {
+    this.cancelBoarding();
     const door = this.doorPoint(v, _v0);
     const from = mode === 'enter' ? this.character.position : this.seatPoint(v, _v1);
     // No believable path from ten metres away, and none needed at speed: a
     // scripted hand-off or a moving car both take the old instant placement.
     if (from.distanceTo(door) > BOARD_MAX_REACH || Math.abs(v.speed) > 2.4) {
-      this.board = null;
+      this.cancelBoarding();
       return;
     }
     this.board = {
       mode,
       t: 0,
-      dur: mode === 'enter' ? BOARD_ENTER_DUR : BOARD_EXIT_DUR,
+      dur: mode === 'enter' ? BOARD_ENTER_DUR + (v.npcDriver ? PULL_DRIVER_DUR : v.locked ? LOCKPICK_DUR : 0) : BOARD_EXIT_DUR,
       vehicle: v,
       from: from.clone(),
+      safePoint: from.clone(),
       fromYaw: this.bodyYaw,
       toYaw: this.bodyYaw,
+      preparation: mode === 'enter' ? (v.npcDriver ? 'pull' : v.locked ? 'lockpick' : null) : null,
+      prepared: false,
     };
   }
 
@@ -1052,17 +1116,48 @@ export class PlayerSystem implements System, PlayerService {
 
     // Timeline, as fractions of the sequence. Enter and exit are the same four
     // beats read in opposite order.
-    const p = b.mode === 'enter' ? u : 1 - u;
+    // Pause the ordinary entry at the handle for lockpicking, or with the door
+    // fully open while pulling the driver. Sitting never overlaps either beat.
+    const prepDur = b.preparation === 'pull' ? PULL_DRIVER_DUR : b.preparation === 'lockpick' ? LOCKPICK_DUR : 0;
+    const prepStart = BOARD_ENTER_DUR * (b.preparation === 'pull' ? OPEN_END : ALIGN_END);
+    const prepTime = THREE.MathUtils.clamp(b.t - prepStart, 0, prepDur);
+    const preparing = prepDur > 0 && b.t >= prepStart && b.t < prepStart + prepDur;
+    if (b.mode === 'enter' && b.preparation === 'pull' && !b.prepared && b.t >= prepStart) {
+      const peds = this.ctx.tryGet(Services.Peds);
+      if (!peds || !v.npcDriver) { this.cancelBoarding(); return null; }
+      const exit = driverExitPoint(v, new THREE.Vector3());
+      exit.add(new THREE.Vector3(0.65, 0, -0.9).applyQuaternion(v.rotation));
+      try {
+        peds.ejectDriver(v.npcDriver, seat.clone(), exit, carYaw, PULL_DRIVER_DUR - prepTime);
+      } catch {
+        // A blocked pavement can refuse a safe pedestrian spawn. Keep the driver.
+        this.cancelBoarding();
+        return null;
+      }
+      v.npcDriver = null;
+      v.locked = false;
+      b.prepared = true;
+    }
+    if (b.preparation === 'lockpick' && prepTime >= prepDur) {
+      v.locked = false;
+      b.prepared = true;
+    }
+    const p = b.mode === 'enter' ? THREE.MathUtils.clamp((b.t - prepTime) / BOARD_ENTER_DUR, 0, 1) : 1 - u;
     const align = THREE.MathUtils.smoothstep(p, 0, ALIGN_END);          // walk to the door
     const open = pulse(p, ALIGN_END, OPEN_END);                          // hand on the handle, pull
-    const sit = THREE.MathUtils.smoothstep(p, OPEN_END - 0.04, IN_END);  // body into the seat
+    const sit = THREE.MathUtils.smoothstep(p, OPEN_END, IN_END);  // body into the seat
     const close = pulse(p, IN_END, 1);                                   // reach back, pull shut
+    const doors = v as VehicleHandle & Partial<VehicleDoors>;
+    doors.setDoorOpen?.('driver', THREE.MathUtils.smoothstep(p, ALIGN_END, OPEN_END)
+      * (1 - THREE.MathUtils.smoothstep(p, IN_END, 1)));
 
     // Position: from -> door -> seat. Height rides an arc so the hips clear the
     // sill instead of sliding through it.
     _v3.lerpVectors(b.from, door, align);
     _v3.lerp(seat, sit);
     _v3.y += Math.sin(Math.PI * THREE.MathUtils.clamp(sit, 0, 1)) * 0.055;
+    const pulling = b.preparation === 'pull' ? Math.sin(Math.PI * prepTime / PULL_DRIVER_DUR) : 0;
+    _v3.addScaledVector(_v2.copy(door).sub(seat).setY(0).normalize(), pulling * 0.25);
 
     const yaw = dampAngleTo(
       dampAngleTo(b.fromYaw, faceDoorYaw, align),
@@ -1072,22 +1167,28 @@ export class PlayerSystem implements System, PlayerService {
     b.toYaw = yaw;
 
     this.character.object.position.copy(_v3);
+    if (b.mode === 'enter') {
+      this.character.position.copy(_v3);
+      this.syncBoardingCapsule(_v3);
+      if (sit === 0) b.safePoint.copy(_v3);
+    }
     this.character.object.quaternion.setFromAxisAngle(UP, yaw);
     // Keep the on-foot body yaw in step so releasing the sequence never snaps.
     this.bodyYaw = yaw;
     this.prevYaw = yaw;
 
     if (u >= 1) {
-      this.board = null;
-      if (this._vehicle) this.seatInVehicle(this._vehicle);
+      this.cancelBoarding(true);
+      if (b.mode === 'enter') this.finishEntering(v);
       return null;
     }
     return {
       sit: THREE.MathUtils.clamp(sit, 0, 1),
-      reach: Math.max(open, close * 0.9),
-      // The driver's door is on the character's LEFT of the seat (SEAT_X < 0),
+      reach: preparing ? (b.preparation === 'lockpick' ? 0.7 + 0.12 * Math.sin(prepTime * 42) : 0.95 - pulling * 0.35) : Math.max(open, close * 0.9),
+      action: preparing ? b.preparation ?? undefined : undefined,
+      // +X is the seated character's left, matching the driver door.
       // so the near arm is the left one going in and coming out.
-      side: (SEAT_X[v.kind] ?? -0.36) <= 0 ? 1 : -1,
+      side: driverSeatX(v.kind) >= 0 ? 1 : -1,
       closing: close > open,
     };
   }
@@ -1103,6 +1204,7 @@ export class PlayerSystem implements System, PlayerService {
       return;
     }
     // Death: collapse into a ragdoll, then respawn.
+    this.cancelBoarding();
     const impulse = new THREE.Vector3(0, 2.2, 0);
     if (point) {
       impulse.add(this.character.position.clone().sub(point).setY(0).normalize().multiplyScalar(4.5));
@@ -1116,7 +1218,8 @@ export class PlayerSystem implements System, PlayerService {
   }
 
   teleport(p: THREE.Vector3, headingRad = 0): void {
-    this.body.setTranslation({ x: p.x, y: p.y + this.halfHeight + this.radius, z: p.z }, true);
+    this.cancelBoarding();
+    this.syncBoardingCapsule(p);
     this.character.position.copy(p);
     this.character.object.position.copy(p);
     this.character.object.quaternion.setFromAxisAngle(UP, headingRad);
@@ -1127,7 +1230,6 @@ export class PlayerSystem implements System, PlayerService {
     this.footY = p.y;
     this.moveF = 0;
     this.moveS = 0;
-    this.board = null;
   }
 
   respawn(): void {
@@ -1235,8 +1337,11 @@ export class PlayerSystem implements System, PlayerService {
     const paid = this.chargeUpTo(fee, `daune:${v.kind}`);
     this.ctx.tryGet(Services.Hud)?.toast(
       paid >= fee
-        ? `Mașina e praf · tractare și daune −${paid} lei`
-        : `Mașina e praf · ai plătit ${paid} din ${fee} lei. Restul ți-l reține Ministerul.`,
+        ? tp('Mașina e praf · tractare și daune −{paid} lei', { paid })
+        : tp('Mașina e praf · ai plătit {paid} din {fee} lei. Restul ți-l reține Ministerul.', {
+            paid,
+            fee,
+          }),
       'bad',
       4200,
     );

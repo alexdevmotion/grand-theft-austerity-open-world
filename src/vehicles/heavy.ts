@@ -16,7 +16,7 @@ import { Rng } from '../core/rng';
 import { Palette } from '../artDirection';
 import {
   BLACK_TRIM, CHROME_DULL, CABIN_SHADOW, DARK_PLASTIC, GLASS, L, LAMP_WHITE, LENS_AMBER,
-  LENS_CLEAR, LENS_RED, RUBBER, lin,
+  LENS_CLEAR, LENS_RED, RUBBER, lin, buildCarBody, car, aperture,
   type BodyAnchors, type BodyBuild, type DoorPart, type VehicleSpec,
 } from './carkit';
 
@@ -84,7 +84,7 @@ function cabDoors(o: CabDoorOpts, b: GeoBuilder, g: GeoBuilder): DoorPart[] {
     shellGeo.translate(-hinge.x, -hinge.y, -hinge.z);
     glassGeo.translate(-hinge.x, -hinge.y, -hinge.z);
     out.push({
-      id: side < 0 ? 'frontLeft' : 'frontRight',
+      id: side > 0 ? 'frontLeft' : 'frontRight',
       side, row: 0, hinge,
       shell: shellGeo, glass: glassGeo,
       maxAngle: 1.05,
@@ -223,10 +223,10 @@ function buildBoxy(o: BoxOpts): { b: GeoBuilder; g: GeoBuilder; anchors: BodyAnc
       color: LENS_RED, rough: 0.08, metal: 0.02, coat: 0.9, uv: UV.tailLens, light: L.tail,
     });
     b.box(0.14, 0.10, 0.07, T(sx * (hw - 0.24), y(floor - 0.10), tail - 0.03), {
-      color: LENS_AMBER, rough: 0.14, metal: 0.06, light: sx < 0 ? L.indL : L.indR,
+      color: LENS_AMBER, rough: 0.14, metal: 0.06, light: sx > 0 ? L.indL : L.indR,
     });
     b.box(0.14, 0.10, 0.07, T(sx * (hw - 0.06), y(floor + 0.02), nose + 0.03), {
-      color: LENS_AMBER, rough: 0.14, metal: 0.06, light: sx < 0 ? L.indL : L.indR,
+      color: LENS_AMBER, rough: 0.14, metal: 0.06, light: sx > 0 ? L.indL : L.indR,
     });
     b.box(0.07, 0.26, 0.09, T(sx * (hw + 0.16), y(roof - 0.62), o.windscreenZ - 0.1), trim);
   }
@@ -281,7 +281,7 @@ export function buildPanelVan(spec: VehicleSpec, rng: Rng): BodyBuild {
     trim: { color: BLACK_TRIM, rough: 0.62, metal: 0.12, coat: 0.35 },
     interior: lin(0x2a2630), glazed: true, seatY: floor + 0.42, seatZ: spec.length * 0.5 - 1.35,
   }, b, g);
-  const driver = cabDriver(spec, -hw * 0.45, floor + 0.42, spec.length * 0.5 - 1.35, spec.length * 0.5 - 0.86, floor + 1.14);
+  const driver = cabDriver(spec, hw * 0.45, floor + 0.42, spec.length * 0.5 - 1.35, spec.length * 0.5 - 0.86, floor + 1.14);
   return finish(b, g, anchors, doors, driver);
 }
 
@@ -290,54 +290,81 @@ export function buildPanelVan(spec: VehicleSpec, rng: Rng): BodyBuild {
 /* ------------------------------------------------------------------ */
 
 export function buildAro(spec: VehicleSpec, rng: Rng): BodyBuild {
-  const colour = lin(rng.pick([0x3f5c3a, 0x8f8a76, 0x6a3f2c, 0x2f4358, 0xb8b2a2]));
-  const { b, g, anchors, floor } = buildBoxy({
-    spec, colour,
-    windscreenZ: spec.length * 0.5 - 1.12,
-    cabRoofZ: spec.length * 0.5 - 1.34,
-    sideWindows: { from: -spec.length * 0.5 + 0.5, to: spec.length * 0.5 - 1.22, count: 2, y0: 1.24, y1: 1.72 },
-    floorOverride: 0.62,
+  const base = lin(rng.pick([0x56644d, 0xa7a08a, 0x795c48, 0x506b7a, 0xc7c1ab]));
+  const scheme = {
+    base, alt: base.clone(), faded: base.clone().lerp(lin(0xc1b9a2), 0.12),
+    interior: lin(0x514b3d), wear: rng.range(0.20, 0.48),
+  };
+  // ARO's engine bay ends below the windscreen. It cannot use buildBoxy:
+  // that loft carries a full-height van roof all the way to the grille.
+  const design = car({
+    ...spec, id: 'aro24', cls: 'van', label: 'ARO 244',
+    sill: 0.40, belt: 1.22, bonnetY: 1.23, bonnetRake: -0.014,
+    noseY: 1.18, tailY: 1.20, bootY: 1.22,
+    noseRound: 0.07, tailRound: 0.06, noseTaper: 0.055, tailTaper: 0.035,
+    halfWidth: spec.width * 0.5, archBlister: 0.028, archRadius: 0.465,
+    wsBase: 0.93, wsTop: 0.75, rsBase: -2.08, rsTop: -2.02,
+    bPillarZ: -0.21, hwTop: 0.82, hwBelt: 0.875, glassX: 0.855,
+    roofCrown: 0.014, rear: 'suv',
+    doorRows: 2, frontDoorZ: [-0.16, 0.86], rearDoorZ: [-1.12, -0.25],
+    lamps: 'roundTwin', grille: 'blackSlats', bumpers: 'blackPlastic',
+    brightwork: false, rubStrip: false, cladding: false,
+    cowlVents: true, quarterLight: false, roofRails: false, towbar: true,
+    extra: (b, g, d) => {
+      const y = (h: number) => h - d.rideHeight;
+      const tail = -d.length * 0.5;
+      const nose = d.length * 0.5;
+      const hw = d.width * 0.5;
+      const paint: Surf = { color: base, rough: 0.42, metal: 0, coat: 0.65, uv: UV.bodyClean };
+      const steel: Surf = { color: lin(0x858783), rough: 0.43, metal: 0.75 };
+      const trim: Surf = { color: BLACK_TRIM, rough: 0.78, metal: 0.05 };
+      // Inner pair completes the characteristic four round headlamps.
+      const lampY = d.belt - (d.belt - d.sill) * 0.30 + 0.03;
+      for (const side of [-1, 1]) {
+        b.torus(0.098, 0.012, 6, 24, Math.PI * 2,
+          T(side * 0.405, y(lampY), nose + 0.05), steel);
+        b.cyl(0.09, 0.087, 0.035, 24,
+          T(side * 0.405, y(lampY), nose + 0.046, Math.PI / 2),
+          { color: LAMP_WHITE, rough: 0.10, metal: 0.08, coat: 0.85, uv: UV.headlampGlass, light: L.head });
+        // External hinges and ribbed running boards on the utility body.
+        for (const zz of [0.84, -0.27]) {
+          for (const h of [0.63, 1.10]) {
+            b.box(0.032, 0.055, 0.095, T(side * (hw + 0.014), y(h), zz), paint);
+          }
+        }
+        b.box(0.16, 0.045, 1.82, T(side * (hw + 0.018), y(0.34), -0.12), steel);
+        for (let k = 0; k < 12; k++) {
+          b.box(0.14, 0.008, 0.018, T(side * (hw + 0.018), y(0.367), -0.92 + k * 0.145), trim);
+        }
+        // The fixed cargo window follows the same rounded aperture and
+        // roof tumblehome as the passenger doors.
+        aperture(g, b, (u, v) => {
+          const across = side > 0 ? 1 - u : u;
+          return new THREE.Vector3(side * THREE.MathUtils.lerp(d.hwBelt - .022, d.hwTop - .008, v),
+            y(THREE.MathUtils.lerp(d.belt + .048, d.height - .126, v)),
+            THREE.MathUtils.lerp(-1.92, -1.18, across));
+        }, { color: GLASS, rough: .045, uv: UV.glassGrime }, paint, trim);
+
+      }
+      // Tailgate-mounted spare: wheel axis is longitudinal, not vertical.
+      b.box(0.34, 0.34, 0.13, T(0.34, y(1.10), tail - 0.055), steel);
+      b.torus(d.wheelRadius * 0.79, d.wheelRadius * 0.21, 10, 32,
+        Math.PI * 2, T(0.34, y(1.12), tail - 0.20),
+        { color: RUBBER, rough: 0.91, metal: 0, uv: UV.sidewall });
+      b.cyl(d.wheelRadius * 0.62, d.wheelRadius * 0.65, 0.15, 32,
+        T(0.34, y(1.12), tail - 0.19, Math.PI / 2), steel);
+      b.cyl(0.085, 0.085, 0.18, 12, T(0.34, y(1.12), tail - 0.24, Math.PI / 2), trim);
+      b.box(1.70, 0.009, 0.012, T(0, y(1.21), tail - 0.065), trim);
+      b.box(0.14, 0.045, 0.035, T(-0.42, y(1.13), tail - 0.084), steel);
+      // Raised centre pressing and paired retaining catches on the bonnet.
+      b.loft([
+        { z: 1.00, hw: 0.55, yTop: y(1.262), yBottom: y(1.22), rTop: 0.018, rBottom: 0.006, crown: .014 },
+        { z: nose - 0.14, hw: 0.52, yTop: y(1.245), yBottom: y(1.20), rTop: 0.018, rBottom: 0.006, crown: .014 },
+      ], paint);
+      for (const side of [-1, 1]) b.box(0.026, 0.095, 0.045, T(side * (hw + 0.008), y(1.17), nose - 0.44), steel);
+    },
   });
-  const G = -spec.rideHeight;
-  const y = (h: number) => G + h;
-  const hw = spec.width * 0.5;
-  const nose = spec.length * 0.5;
-  const trim: Surf = { color: BLACK_TRIM, rough: 0.7, metal: 0.1 };
-  const paint: Surf = { color: colour, rough: 0.38, metal: 0, coat: 0.75, uv: UV.bodyClean };
-
-  // Flat military bonnet with a raised centre and a vertical-slat grille.
-  b.box(spec.width * 0.94, 0.09, 1.05, T(0, y(1.52), nose - 0.58), paint);
-  b.box(spec.width * 0.62, 0.05, 0.95, T(0, y(1.57), nose - 0.58), paint);
-  b.box(spec.width * 0.80, 0.40, 0.06, T(0, y(1.30), nose + 0.05), { color: lin(0x14141a), rough: 0.55, metal: 0.35, uv: UV.grille });
-  for (let i = -4; i <= 4; i++) {
-    b.box(0.035, 0.40, 0.07, T(i * spec.width * 0.085, y(1.30), nose + 0.06), paint);
-  }
-  // Round twin headlamps in the wings, big square indicators beside them.
-  for (const sx of [-1, 1]) {
-    b.torus(0.10, 0.022, 5, 12, Math.PI * 2, T(sx * (hw - 0.30), y(1.33), nose + 0.06), { color: CHROME_DULL, rough: 0.2, metal: 0.95 });
-    b.cyl(0.092, 0.088, 0.05, 12, T(sx * (hw - 0.30), y(1.33), nose + 0.04, Math.PI / 2, 0, 0), {
-      color: LAMP_WHITE, rough: 0.07, metal: 0.02, coat: 0.9, uv: UV.headlampGlass, light: L.head,
-    });
-    b.box(0.11, 0.09, 0.05, T(sx * (hw - 0.09), y(1.30), nose + 0.05), {
-      color: LENS_AMBER, rough: 0.12, metal: 0.04, light: sx < 0 ? L.indL : L.indR,
-    });
-    // step, snorkel-ish mirror arm, side steps
-    b.box(0.12, 0.06, 0.9, T(sx * (hw + 0.02), y(0.44), -0.1), { color: lin(0x2a2a32), rough: 0.6, metal: 0.6 });
-    b.box(0.05, 0.42, 0.05, T(sx * (hw + 0.16), y(1.76), nose - 1.16), trim);
-  }
-  // Spare wheel on the tailgate, canvas-style roof ribs.
-  b.cyl(spec.wheelRadius * 1.02, spec.wheelRadius * 1.02, 0.20, 16, T(hw * 0.42, y(1.28), -spec.length * 0.5 - 0.14, 0, 0, 0), { color: lin(0x16161b), rough: 0.95, metal: 0.02, uv: UV.tread });
-  for (let i = 0; i < 4; i++) {
-    b.box(spec.width * 0.92, 0.035, 0.05, T(0, y(spec.height + 0.02), -1.2 + i * 0.62), trim);
-  }
-  b.box(spec.width * 1.0, 0.14, 0.14, T(0, y(0.52), nose + 0.02), { color: lin(0x2e2e36), rough: 0.5, metal: 0.7 });
-
-  const doors = cabDoors({
-    spec, hw, z0: spec.length * 0.5 - 2.28, z1: spec.length * 0.5 - 1.20, y0: floor - 0.20, y1: floor + 1.16,
-    paint, trim, interior: lin(0x2c2822), glazed: true, seatY: floor + 0.28, seatZ: spec.length * 0.5 - 1.72,
-  }, b, g);
-  const driver = cabDriver(spec, -hw * 0.45, floor + 0.28, spec.length * 0.5 - 1.72, spec.length * 0.5 - 1.28, floor + 0.90);
-  return finish(b, g, anchors, doors, driver);
+  return buildCarBody(design, scheme, rng);
 }
 
 /* ------------------------------------------------------------------ */
@@ -423,7 +450,7 @@ export function buildPickup(spec: VehicleSpec, rng: Rng): BodyBuild {
       color: LAMP_WHITE, rough: 0.06, metal: 0.02, coat: 0.9, uv: UV.headlampGlass, light: L.head,
     });
     b.box(0.10, 0.075, 0.045, T(sx * (hw - 0.04), y(0.70), zF - 0.012), {
-      color: LENS_AMBER, rough: 0.12, metal: 0.03, light: sx < 0 ? L.indL : L.indR,
+      color: LENS_AMBER, rough: 0.12, metal: 0.03, light: sx > 0 ? L.indL : L.indR,
     });
     b.box(0.16, 0.28, 0.05, T(sx * (hw - 0.20), y(0.98), tail - 0.03), {
       color: LENS_RED, rough: 0.09, metal: 0.02, uv: UV.tailLens, light: L.tail,
@@ -438,7 +465,7 @@ export function buildPickup(spec: VehicleSpec, rng: Rng): BodyBuild {
     spec, hw, z0: rsZ + 0.02, z1: wsBase - 0.04, y0: 0.32, y1: roof - 0.12,
     paint, trim, interior: lin(0x3a3040), glazed: true, seatY: 0.62, seatZ: nose - 1.72,
   }, b, g);
-  const driver = cabDriver(spec, -hw * 0.42, 0.62, nose - 1.72, nose - 1.42, belt - 0.06);
+  const driver = cabDriver(spec, hw * 0.42, 0.62, nose - 1.72, nose - 1.42, belt - 0.06);
 
   return finish(b, g, {
     headlights: [new THREE.Vector3(-(hw - 0.22), y(0.75), nose - 0.02), new THREE.Vector3(hw - 0.22, y(0.75), nose - 0.02)],
@@ -503,8 +530,8 @@ export function buildTruck(spec: VehicleSpec, rng: Rng): BodyBuild {
   for (const sx of [-1, 1]) {
     b.box(0.36, 0.24, 0.12, T(sx * (hw - 0.4), y(1.10), nose + 0.04), { color: LAMP_WHITE, rough: 0.1, metal: 0.1, uv: UV.headlampGlass, light: L.head });
     b.box(0.18, 0.34, 0.10, T(sx * (hw - 0.26), y(1.24), tail - 0.04), { color: LENS_RED, rough: 0.12, metal: 0.06, uv: UV.tailLens, light: L.tail });
-    b.box(0.16, 0.12, 0.08, T(sx * (hw - 0.1), y(1.34), nose + 0.03), { color: LENS_AMBER, rough: 0.14, metal: 0.06, light: sx < 0 ? L.indL : L.indR });
-    b.box(0.16, 0.12, 0.08, T(sx * (hw - 0.26), y(0.98), tail - 0.03), { color: LENS_AMBER, rough: 0.14, metal: 0.06, light: sx < 0 ? L.indL : L.indR });
+    b.box(0.16, 0.12, 0.08, T(sx * (hw - 0.1), y(1.34), nose + 0.03), { color: LENS_AMBER, rough: 0.14, metal: 0.06, light: sx > 0 ? L.indL : L.indR });
+    b.box(0.16, 0.12, 0.08, T(sx * (hw - 0.26), y(0.98), tail - 0.03), { color: LENS_AMBER, rough: 0.14, metal: 0.06, light: sx > 0 ? L.indL : L.indR });
     b.box(0.08, 0.5, 0.16, T(sx * (hw + 0.14), y(2.4), nose - 0.5), trim);
   }
   b.box(spec.width * 0.78, 0.52, 0.08, T(0, y(1.5), nose + 0.03), { color: lin(0x1a1a20), rough: 0.5, metal: 0.5, coat: 0.3, uv: UV.grille });
@@ -529,7 +556,7 @@ export function buildTruck(spec: VehicleSpec, rng: Rng): BodyBuild {
     spec, hw, z0: cabRear + 0.10, z1: nose - 0.42, y0: 1.06, y1: 2.86,
     paint, trim, interior: lin(0x2a2630), glazed: true, seatY: 1.62, seatZ: nose - 1.12,
   }, b, g);
-  const driver = cabDriver(spec, -hw * 0.45, 1.62, nose - 1.12, nose - 0.56, 2.30);
+  const driver = cabDriver(spec, hw * 0.45, 1.62, nose - 1.12, nose - 0.56, 2.30);
 
   return finish(b, g, {
     headlights: [new THREE.Vector3(-(hw - 0.4), y(1.1), nose - 0.02), new THREE.Vector3(hw - 0.4, y(1.1), nose - 0.02)],
@@ -608,7 +635,7 @@ export function buildBus(spec: VehicleSpec, rng: Rng): BodyBuild {
   });
   b.box(spec.width * 0.96, 0.10, 0.12, T(0, y(floor - 0.36), spec.length * 0.5 + 0.04), { color: CHROME_DULL, rough: 0.2, metal: 0.95, coat: 0.3 });
 
-  const driver = cabDriver(spec, -hw * 0.58, 1.10, spec.length * 0.5 - 1.55, spec.length * 0.5 - 1.05, 1.72);
+  const driver = cabDriver(spec, hw * 0.58, 1.10, spec.length * 0.5 - 1.55, spec.length * 0.5 - 1.05, 1.72);
   return finish(b, g, anchors, [], driver);
 }
 
@@ -650,7 +677,7 @@ export function buildTram(spec: VehicleSpec, rng: Rng): BodyBuild {
   for (const sx of [-1, 1]) {
     b.box(0.06, 0.5, spec.length * 0.9, T(sx * (hw - 0.01), y(0.24), 0), { color: lin(0x1a1a22), rough: 0.85, metal: 0.1 });
   }
-  const driver = cabDriver(spec, -hw * 0.5, 1.12, spec.length * 0.5 - 1.35, spec.length * 0.5 - 0.9, 1.68);
+  const driver = cabDriver(spec, hw * 0.5, 1.12, spec.length * 0.5 - 1.35, spec.length * 0.5 - 0.9, 1.68);
   return finish(b, g, anchors, [], driver);
 }
 

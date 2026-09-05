@@ -21,11 +21,9 @@ const X_AMBER = 12.6;
 const Z_GREEN = 24.0;
 
 interface Claim {
-  bidder: string;
-  /** Approach the holder came in on, so a platoon can follow it through. */
+  /** Same-approach vehicles may follow; each keeps the crossing until its rear clears. */
   edge: number;
-  /** Seconds of grace before the claim lapses if the winner never arrives. */
-  ttl: number;
+  holders: Map<string, number>;
 }
 
 export class JunctionControl {
@@ -90,7 +88,8 @@ export class JunctionControl {
    */
   mayEnter(node: number, bidder: string, edge: number): boolean {
     const held = this.claims.get(node);
-    if (held) return held.bidder === bidder || held.edge === edge;
+    if (held) return held.holders.has(bidder) || held.edge === edge;
+    if (this.hasLight(node)) return true;
     const win = this.bids.get(node);
     return !win || win.bidder === bidder;
   }
@@ -98,26 +97,37 @@ export class JunctionControl {
   /** Take (or refresh) the node. Lapses if the winner never actually arrives. */
   claim(node: number, bidder: string, edge: number): void {
     const held = this.claims.get(node);
-    if (held && held.bidder !== bidder && held.edge !== edge) return;
-    if (held) { held.ttl = 5; held.bidder = bidder; held.edge = edge; return; }
-    this.claims.set(node, { bidder, edge, ttl: 5 });
+    if (held && held.edge !== edge) return;
+    if (held) { held.holders.set(bidder, 5); return; }
+    this.claims.set(node, { edge, holders: new Map([[bidder, 5]]) });
+  }
+
+  /** Keep an occupied crossing reserved, even after its entrance is behind us. */
+  refresh(node: number, bidder: string): void {
+    const held = this.claims.get(node);
+    if (held?.holders.has(bidder)) held.holders.set(bidder, 5);
   }
 
   release(node: number, bidder: string): void {
     const held = this.claims.get(node);
-    if (held && held.bidder === bidder) this.claims.delete(node);
+    if (!held) return;
+    held.holders.delete(bidder);
+    if (!held.holders.size) this.claims.delete(node);
   }
 
   /** Drop every claim held by a vehicle that has just been despawned. */
   forget(bidder: string): void {
-    for (const [node, c] of this.claims) if (c.bidder === bidder) this.claims.delete(node);
+    for (const node of this.claims.keys()) this.release(node, bidder);
   }
 
   update(dt: number): void {
     this.clock += dt;
     for (const [node, c] of this.claims) {
-      c.ttl -= dt;
-      if (c.ttl <= 0) this.claims.delete(node);
+      for (const [bidder, ttl] of c.holders) {
+        if (ttl <= dt) c.holders.delete(bidder);
+        else c.holders.set(bidder, ttl - dt);
+      }
+      if (!c.holders.size) this.claims.delete(node);
     }
     this.bids.clear();
   }

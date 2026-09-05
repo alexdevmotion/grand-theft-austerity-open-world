@@ -26,6 +26,10 @@ import { BEARD_TOP, buildBeard, buildBrows, buildHairCards, buildHairShell, buil
 import { createHairMaterial } from '../hair/hair';
 import { createFallbackSkinMaterial, createSkinMaterial, lodSkinMaterial, type SkinMaterial, type SkinMaterialOptions } from '../skin/skinMaterial';
 import { buildEyes, type EyeBuild } from './eyes';
+import { applyBlenderSculpt, blinkWeight } from './blenderSculpt';
+import { buildAnatomicalHead, type AnatomicalCast } from './anatomicalHead';
+import anatomicalCook from './generated/anatomical-cast.json';
+import { applyAnatomicalAlbedo } from '../skin/anatomicalAlbedo';
 import { blendClouds, cloud, pushRegion, type CastId, type Cloud } from './fitData';
 import { buildHeadGeometry, type HeadAnchors } from './headMesh';
 import { BROW_L_BOTTOM, BROW_L_TOP, BROW_R_BOTTOM, BROW_R_TOP } from './landmarks';
@@ -81,165 +85,30 @@ export const CAST: Record<CastId, CastConfig> = {
   player: {
     id: 'player',
     cloud: playerCloud,
-    /* Olive/tanned, mid-forties to fifties. Authored, not sampled.
-     *
-     * 0xcaa183 was authored against a neutral preview and blew out to bare
-     * white under the game's low sunset key, which is the whole of "waxy": a
-     * clipped highlight carries no pore detail, no scattering and no colour,
-     * however good the shader under it is. A weathered olive complexion is
-     * genuinely this dark in base albedo — the sun is what makes it read warm.
-     *
-     * 0x9c7452 was still not dark enough and was still not olive. Sampled off
-     * the sunset render, the face came back at R = 240-251 out of 255 with
-     * G/R = 0.57 and B/R = 0.42; the reference photograph measures G/R = 0.64-0.71
-     * and B/R = 0.50-0.58 on the same features. Two separate faults, and the
-     * first causes half of the second: red was CLIPPING, which throws away every
-     * pore, blotch and capillary in that channel and drags the hue bodily toward
-     * orange no matter what the other two do. So the value comes down about 12%
-     * to stop the clip, and green and blue come up against red to put the cool
-     * green-grey undertone back into an otherwise pure orange-brown. Checked
-     * under a neutral noon key as well as the sunset, because a warm key is a
-     * legitimate reason for a face to look warm and is not a reason to
-     * mis-author the albedo.
-     *
-     * And then it had to come down a great deal FURTHER than that reasoning
-     * suggested, because the face sits in the shoulder of the tone curve where
-     * the response is almost flat: measured on the sunset render, an 11% cut in
-     * albedo moved the rendered red by 2 counts (240 -> 238). Sweeping a
-     * multiplier on the live material found the knee — 0.72 in linear takes the
-     * cheek from 240 to 186, which is the reference photograph's range, and it
-     * is the point where the cheekbone, the sub-malar hollow and the brow shadow
-     * come back out of the highlight. Below about 0.6 the scene's purple sky
-     * ambient starts to dominate and the face goes magenta, so this is a knee
-     * with a floor under it, not a direction to keep pushing.
-     *
-     * AND THEN THE TRIM WAS MEASURED AGAINST THE BODY AND WAS WRONG.
-     *
-     * The whole paragraph above was tuned against the RENDER of the head alone,
-     * with nothing beside it to calibrate against, and it over-corrected. The
-     * decisive measurement is the one nobody took: the head and the NECK are
-     * lit by the same key, in the same frame, one centimetre apart, and the
-     * neck is painted by `wardrobe.ts` at `skin: 0x8d6d53`. Sampled off a
-     * 1600x900 capture at 0.6 m with the face turned into a 40-degree sun,
-     * the neck came back at 186/158/130 and the lit forehead at 165/135/113 —
-     * and every part of the head that was NOT taking the key directly fell to
-     * 33-40, against a scene whose pavement sat at 152-161. That is the
-     * "near-black head over a correctly lit jacket" the immersion review saw,
-     * and it is not a shading bug: a plain `MeshPhysicalMaterial` on the same
-     * geometry with the same vertex colours renders just as dark (33/19/26),
-     * and the same head with albedo forced to white renders at 134-189, i.e.
-     * in line with the pavement. The light arriving at this head is fine. The
-     * paint on it is roughly 40% too dark, and the paint on the beard, brows
-     * and scalp is an order of magnitude too dark — see those entries.
-     *
-     * So this value is now pinned to the body's own skin rather than to a
-     * sweep: 0x8d6550 carries the same linear luminance as `wardrobe.ts`'s
-     * 0x8d6d53 (0.156 against 0.170) with G/R = 0.716 and B/R = 0.567, which
-     * is inside the reference photograph's measured 0.64-0.71 and 0.50-0.58.
-     * The head and the neck now differ by less than a stop, which is what
-     * "one man" looks like. If the head ever needs to come down again, the
-     * body's skin has to come down with it or this bug is back. */
     skin: 0x8d6550,
-    /* `microScale` is tiles per metre of object space. At 820 one tile of the
-     * 256 px pore map covered 1.2 mm of skin, so a pore was seven microns
-     * across: it mipmapped to flat grey long before it reached a pixel, which
-     * is why no micro-detail survived to screen. At 0.6 m and a 32 degree fov
-     * one pixel subtends 0.21 mm, so detail has to be around half a millimetre
-     * to read at all. 34 tiles/metre puts a tile at 29 mm and the crease octave
-     * at 0.5-1.8 mm — visible, and still fine enough not to read as noise. */
-    /* `sssTint` and `transColor` are the shader's OWN warm terms, and they are
-     * where the last of the orange lives once the albedo is right.
-     *
-     * Under a neutral noon key the corrected albedo renders at G/R = 0.718
-     * against the reference photograph's 0.713 — so the base colour is not the
-     * problem and darkening it further would only make a grey man. Under the
-     * sunset it still came back at R = 236/255 with B/R = 0.43. Two reasons, and
-     * neither is the albedo: the scattered diffuse is multiplied by a warm tint,
-     * and the transmission term adds a saturated orange-red to direct diffuse
-     * over the WHOLE face, because `thick` has a 0.06 floor everywhere and the
-     * term is deliberately unshadowed. Those are legitimate effects at an ear
-     * rim and a nostril and they were being applied at cheek scale. */
-    /* `sss` up from 0.36. The scattering strength is also the WIDTH of the
-     * terminator: at 0.36 the wrap is mostly plain Lambert, so the moment a
-     * facet turns away from the key it falls off a cliff — measured across the
-     * cheekbone in full sun the face went 172 -> 33 over about fifteen pixels.
-     * Real flesh has a centimetre of red bleed there. 0.50 is still short of
-     * the 0.60 default (this face is weathered, not a child's) and it is what
-     * stops the shaded half of the head reading as a hole. */
     skinOpts: {
       sss: 0.50, sssTint: 0xffeadf, transScale: 0.80, transColor: 0xf05a30,
-      microScale: 34, microStrength: 0.88,
+      microScale: 42, microStrength: 0.20, roughnessBias: 0.13,
     },
     irisColor: 0x4a3520,
     tired: 0.95,
     age: 0.82,
-    /* Down from 0.046. `jawPush` multiplies the gonial ramus term in
-     * anatomy.ts, and at 0.046 it alone added 41 of the 69 thousandths that
-     * pushed the mouth-level width past the cheekbones. Bolojan reads as a
-     * heavy jaw because of DEPTH and a square corner, which `masseter` and
-     * `jawEdge` supply, not because his face is widest at the mouth. */
     jawPush: 0.021,
-    /* Up from 0.024. The supraorbital shelf is what casts the shadow that makes
-     * a heavy brow read as BONE rather than as hair stuck on a smooth forehead,
-     * and 0.024 (4.4 mm at head scale) is a normal male ridge. Bolojan is well
-     * past normal. 0.032 is 5.8 mm, which is at the top of the male range and
-     * still under the point where the sculpt starts to overhang the eye. */
     browPush: 0.032,
     beardShade: 1.0,
-    /* The stubble tone under the cards: a salt-and-pepper beard is much greyer
-     * than the hair, so this is a warm iron grey, not the hair's near-black.
-     *
-     * Still 0.24 lighter than the hair (0x1d1710), and a lot darker than it was.
-     * Measured against the reference photograph the beard was rendering at
-     * 140-193/255 where the reference sits at 64-118 — roughly twice as bright,
-     * which is what turns a beard into a haze. Skin albedo came down 28% in the
-     * same pass, so holding the beard where it was would have shrunk the
-     * contrast between them as well.
-     *
-     * That reasoning compared the RENDERED beard against the reference's
-     * rendered beard and then moved the ALBEDO by the same factor, which is
-     * only valid if the two are lit alike — and they are not. 0x241e17 is
-     * 0.017/0.012/0.008 in linear reflectance: an order of magnitude under the
-     * skin beside it and about the albedo of charcoal. Sampled in full sun the
-     * whole lower half of the face came back at 33/27/27 while the neck an
-     * inch below it read 186. That is not a beard, it is a hole in the head,
-     * and it is most of why the review reported both "the head is near-black"
-     * and "the beard mass is absent" — the mass is there, 9300 cards of it,
-     * painted in a colour that cannot return light.
-     *
-     * Human hair keratin does not go below about 0.04 linear even when it
-     * reads jet black; a salt-and-pepper beard sits nearer 0.06-0.08. At 0x4a4139
-     * (0.066/0.051/0.041 linear) the beard is still 2.4x darker than the
-     * cheek, which is all the contrast a beard needs, and it now reads as a
-     * mass with strands catching the key rather than as a silhouette. */
     beardColor: 0x4a4139,
     hair: PLAYER_HAIR,
-    /* Also the scalp: `headMesh.paintVertices` paints this colour over the
-     * whole scalp at 95% opacity, so a near-black hair colour puts a black cap
-     * on the skull that the shell and cards then have to light on their own.
-     * 0x1d1710 is 0.011 linear. 0x2b241b is 0.026 — still very dark brown,
-     * still clearly darker than the greying cards over it. */
     hairColor: 0x2b241b,
     brow: HEAVY_BROW,
-    /* The signature: heavy, dark, and they stay dark as the hair greys — but
-     * 0x0f0b07 is 0.0033 linear, which is darker than any pigment on earth and
-     * three times darker than the eye socket it sits in. It rendered as one
-     * black smear from brow to lash, which is exactly the "flat heavy brow is
-     * absent" reading: you cannot see a brow that has merged with its own
-     * shadow. 0x241b13 is 0.017 linear — 9x darker than the skin around it,
-     * dark enough to be unmistakably a brow, light enough to have a shape. */
-    browColor: 0x241b13,
-    /* Longer cards. At 5.6 mm the beard was shorter than the pore-scale relief
-     * beside it and never broke the jaw silhouette; 6.8 mm is a two-week
-     * trimmed beard at head scale and shows against the sky. */
+    browColor: 0x1b1814,
     beard: { density: 1.0, length: 0.0068, grey: 0.24 },
-    beardCardColor: 0x453d34,
+    beardCardColor: 0x29251f,
   },
   nicusor: {
     id: 'nicusor',
     cloud: () => cloud('nicusor'),
-    skin: 0x9e7d68,   // same 0.72 linear trim as the player — same key, same shoulder.
-    skinOpts: { sss: 0.32, sssTint: 0xffe8da, transScale: 1.00, microScale: 34, microStrength: 0.74 },
+    skin: 0x9e7d68,
+    skinOpts: { sss: 0.32, sssTint: 0xffe8da, transScale: 1.00, microScale: 42, microStrength: 0.18, roughnessBias: 0.13 },
     irisColor: 0x4d5a4c,
     tired: 0.30,
     age: 0.62,
@@ -257,23 +126,21 @@ export const CAST: Record<CastId, CastConfig> = {
   ally: {
     id: 'ally',
     cloud: () => cloud('ally'),
-    skin: 0x946f55,   // same 0.72 linear trim as the player — same key, same shoulder.
-    skinOpts: { sss: 0.33, sssTint: 0xffe4d4, transScale: 0.95, microScale: 34, microStrength: 0.74 },
-    irisColor: 0x4a3826,
+    skin: 0x946f55,
+    skinOpts: { sss: 0.33, sssTint: 0xffe4d4, transScale: 0.95, microScale: 42, microStrength: 0.18, roughnessBias: 0.13 },
+    irisColor: 0x577078,
     tired: 0.42,
     age: 0.44,
     jawPush: -0.004,
     browPush: 0.007,
     // Clean-shaven with a faint stubble shadow along the jaw.
-    beardShade: 0.34,
+    beardShade: 0.16,
     beardColor: 0x6a6058,
     hair: ALLY_HAIR,
     hairColor: 0x2a2018,
     brow: LEAN_BROW,
-    // Floored at ~0.02 linear for the same reason as the player's: below that
-    // a brow stops being a feature and becomes a hole. See `browColor` above.
     browColor: 0x2a2018,
-    beard: { density: 0.14, length: 0.0035, grey: 0.06 },
+    beard: { density: 0.07, length: 0.0009, grey: 0.03 },
     beardCardColor: 0x2e2620,
   },
 };
@@ -357,8 +224,10 @@ export class HeroHead {
   private readonly fallbackMat: THREE.MeshStandardMaterial;
   private readonly skinOpts: SkinMaterialOptions;
   private readonly eyes: EyeBuild;
+  private lashes: THREE.Mesh | null = null;
   private readonly hairMats: THREE.MeshPhysicalMaterial[] = [];
   private readonly geometries: THREE.BufferGeometry[] = [];
+  private readonly blinkPhase: number;
   private sky: SkySource | null = null;
   private sun: THREE.DirectionalLight | null = null;
   private lookedUp = false;
@@ -367,7 +236,8 @@ export class HeroHead {
 
   constructor(cfg: CastConfig, opts: HeroHeadOptions) {
     const detail = opts.detail ?? 1;
-    const built = buildHeadGeometry({
+    this.blinkPhase = ((opts.seed ?? 0) * 0.61803398875 + ['player', 'nicusor', 'ally'].indexOf(cfg.id) * 0.29) % 1;
+    let built = buildHeadGeometry({
       cloud: cfg.cloud(),
       chinY: opts.chinY,
       crownY: opts.crownY,
@@ -385,12 +255,25 @@ export class HeroHead {
       rows: Math.round(84 * detail),
       seed: opts.seed ?? 0x51a5e,
     });
+    const anatomical = buildAnatomicalHead(
+      (anatomicalCook.casts as unknown as Record<string, AnatomicalCast>)[cfg.id], cfg, built,
+    );
+    if (anatomical) {
+      built.geometry.dispose();
+      built = anatomical;
+    } else {
+      applyBlenderSculpt(built.geometry, cfg.id, detail, built.anchors.frame);
+    }
     this.anchors = built.anchors;
     this.geometries.push(built.geometry);
 
     this.skinOpts = cfg.skinOpts;
     this.skinMat = createSkinMaterial(cfg.skinOpts);
     this.fallbackMat = createFallbackSkinMaterial();
+    if (anatomical) {
+      applyAnatomicalAlbedo(this.skinMat, cfg.id);
+      applyAnatomicalAlbedo(this.fallbackMat, cfg.id);
+    }
     this.headMesh = new THREE.Mesh(built.geometry, this.skinMat);
     this.headMesh.name = `head:${cfg.id}`;
     this.headMesh.castShadow = true;
@@ -428,6 +311,7 @@ export class HeroHead {
       mat.name = name;
       const mesh = new THREE.Mesh(geo, mat);
       mesh.name = name;
+      if (name === 'lashes') this.lashes = mesh;
       // Only the hair mass casts: brows, lashes and beard are sub-shadow-texel
       // and every extra caster costs one draw per shadow cascade.
       mesh.castShadow = o.shadow === true;
@@ -494,6 +378,9 @@ export class HeroHead {
    * The full skin runs for hero faces near the camera only.
    */
   update(ctx: GameContext, distance: number): void {
+    const blink = distance < 15 && this.headMesh.morphTargetInfluences ? blinkWeight(ctx.time.elapsed, this.blinkPhase) : 0;
+    if (this.headMesh.morphTargetInfluences) this.headMesh.morphTargetInfluences[0] = blink;
+    this.eyes.globe.visible = blink < 0.96;
     if (!this.lookedUp) {
       this.lookedUp = true;
       this.sky = findSky(ctx.scene);
@@ -521,13 +408,17 @@ export class HeroHead {
       this.eyes.cornea.visible = !wantFallback;
       this.eyes.meniscus.visible = !wantFallback;
     }
+    this.eyes.cornea.visible = !wantFallback && blink < 0.30;
+    this.eyes.meniscus.visible = !wantFallback && blink < 0.30;
+    // Static lash roots follow the open lid; hide them during its closure.
+    if (this.lashes) this.lashes.visible = !wantFallback && blink < 0.30;
   }
 
   /**
    * Rebuild this head as a different cast member, in place.
    *
-   * Nothing in `src/gameplay/**` spawns Nicusor or Alex yet (see the report),
-   * so this is how their heads are inspected: `__GTA_FACE__.swap('nicusor')`.
+   * The inspection hook changes this instance without advancing the campaign:
+   * `__GTA_FACE__.swap('nicusor')`.
    */
   static debugHook(head: HeroHead, rebuild: (id: CastId) => void): void {
     if (typeof window === 'undefined') return;

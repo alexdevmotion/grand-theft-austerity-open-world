@@ -29,6 +29,7 @@ import { compassLetter, damp, dampAngle, fmtDistance, makeView, rangeForSpeed, t
 import type { MapWorld } from './mapWorld';
 import type { Router } from './route';
 import type { CityService } from '../../core/services';
+import { t } from '../../core/i18n';
 
 const W = 214;
 const H = 182;
@@ -155,7 +156,7 @@ export class Minimap {
     let district = '';
     try {
       const k = city?.districtAt(world.x, world.z);
-      district = k ? DISTRICT_NAMES[k] : '';
+      district = k ? t(DISTRICT_NAMES[k]) : '';
     } catch {
       district = '';
     }

@@ -29,6 +29,7 @@ import type { GameContext, System } from '../core/engine';
 import { CG, PhysicsWorld, probeGroups } from '../physics/physics';
 import { Rng } from '../core/rng';
 import { Services, type CameraService, type CityService } from '../core/services';
+import { t } from '../core/i18n';
 
 /** Metres of clearance kept between the camera and whatever is under it. */
 const FLOOR_MARGIN = 0.42;
@@ -228,7 +229,7 @@ const CLIMAX_SHOTS: Record<string, ShotPreset> = {
   act4_giftshop: {
     duration: 5.0, distance: 11.0, height: 1.6, lookHeight: 1.3, fov: 36,
     push: -9.0, rise: 4.5, rollDeg: 1.2,
-    title: 'CASA CONSTRUCTORILOR', subtitle: 'E din nou deschisă.',
+    title: 'CASA BUILDERILOR', subtitle: 'E din nou deschisă.',
   },
   /** Mid-act beat: the broadcast goes live. Fires off `broadcast:hijacked`. */
   hijack: {
@@ -1354,8 +1355,8 @@ export class CameraSystem implements System, CameraDirector {
     const c = this.cine;
     if (!c) return;
     c.root.classList.toggle('on', on);
-    c.title.textContent = title;
-    c.sub.textContent = sub;
+    c.title.textContent = t(title);
+    c.sub.textContent = t(sub);
     c.card.classList.toggle('on', on && (title !== '' || sub !== ''));
   }
 
@@ -1618,7 +1619,7 @@ export class CameraSystem implements System, CameraDirector {
       '<div class="pf-ui">' +
       '<div class="pf-grid"></div>' +
       '<div class="pf-read"></div>' +
-      `<div class="pf-legend">${PHOTO_LEGEND}</div>` +
+      `<div class="pf-legend">${PHOTO_LEGEND.map(t).join('<br>')}</div>` +
       '</div>';
     host.appendChild(root);
     this.photoDom = {
@@ -1697,9 +1698,9 @@ export class CameraSystem implements System, CameraDirector {
     if (!st.clean) {
       const roll = THREE.MathUtils.radToDeg(st.roll);
       d.read.innerHTML =
-        `<b>FOTO</b><span class="f">${f.name}</span>` +
+        `<b>${t('FOTO')}</b><span class="f">${t(f.name)}</span>` +
         `<span>FOV <b>${st.fov.toFixed(0)}°</b></span>` +
-        `<span>ÎNCLINARE <b>${roll >= 0 ? '+' : ''}${roll.toFixed(1)}°</b></span>` +
+        `<span>${t('ÎNCLINARE')} <b>${roll >= 0 ? '+' : ''}${roll.toFixed(1)}°</b></span>` +
         `<span>FOCUS <b>${st.focus.toFixed(1)} m</b></span>` +
         `<span>BLUR <b>${st.blur.toFixed(1)}</b></span>`;
     }
@@ -1908,11 +1909,12 @@ interface PhotoDom {
   read: HTMLElement;
 }
 
+/** Joined at render time, so each line can be looked up on its own. */
 const PHOTO_LEGEND = [
   '<b>WASD</b> mișcare · <b>Space/C</b> sus-jos · <b>Shift</b> rapid · <b>Ctrl</b> lent',
   '<b>,</b> <b>.</b> unghi · <b>[</b> <b>]</b> înclinare · <b>−</b> <b>=</b> focus · <b>;</b> <b>\'</b> blur',
   '<b>F</b> filtru · <b>G</b> grilă · <b>B</b> benzi · <b>H</b> ascunde interfața · <b>0</b> reset · <b>P</b> ieșire',
-].join('<br>');
+];
 
 const CINE_CSS = `
 .gta-cine{position:absolute;inset:0;pointer-events:none;z-index:30;}

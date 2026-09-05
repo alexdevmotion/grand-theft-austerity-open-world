@@ -23,6 +23,8 @@ import type { VehicleClass, VehicleHandle } from '../../core/services';
 
 /** VehicleHandle plus the presentation hooks the vehicle system exposes. */
 export type ControllableVehicle = VehicleHandle & {
+  setRailPath?(path: ReadonlyArray<{ x: number; z: number }>,
+    extend?: () => ReadonlyArray<{ x: number; z: number }> | null): void;
   setSiren?(on: boolean): void;
   setIndicator?(i: -1 | 0 | 1 | 2): void;
   setHeadlights?(level: number): void;
@@ -147,7 +149,7 @@ export class Driver {
 
     if (this.reversing > 0) {
       this.reversing -= dt;
-      v.setControls(-0.85, this.reverseSteer, false);
+      v.setControls(-0.85, -this.reverseSteer, false);
       return;
     }
     if (this.stuckTime > 2.6 && (opts?.allowReverse ?? true)) {
@@ -208,9 +210,15 @@ export class Driver {
       if (Math.abs(this.steerOut) > 0.75 && speed > want * 1.1) throttle = Math.min(throttle, -0.2);
     }
     this.throttleOut += (throttle - this.throttleOut) * Math.min(1, dt * 14);
+    if (want < 0.3 && Math.abs(speed) < 0.75) {
+      this.throttleOut = 0;
+      handbrake = true;
+    }
     if (throttle <= -0.98 && absSpeed > 12 && opts?.emergency) handbrake = false;
 
-    v.setControls(this.throttleOut, this.steerOut, handbrake);
+    // Heading errors use positive yaw (left); the vehicle control contract
+    // uses positive steering for a right turn. Convert only at this boundary.
+    v.setControls(this.throttleOut, -this.steerOut, handbrake);
   }
 
   /** Full stop where we are — used at stop lines and when pulled over. */
@@ -219,10 +227,10 @@ export class Driver {
     const speed = v.speed;
     if (speed > 0.7) {
       this.throttleOut += (-1 - this.throttleOut) * Math.min(1, dt * 18);
-      v.setControls(this.throttleOut, this.steerOut * 0.5, false);
+      v.setControls(this.throttleOut, -this.steerOut * 0.5, false);
     } else {
       this.throttleOut = 0;
-      v.setControls(0, 0, false);
+      v.setControls(0, 0, true);
     }
     this.stuckTime = 0;
   }

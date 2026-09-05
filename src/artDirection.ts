@@ -1,47 +1,41 @@
-/**
- * ART DIRECTION — the single source of truth for the look of the game.
- *
- * Every value here is derived from the reference frame
- * `docs/reference/house-under-siege-duo.png`: a magenta-orange Bucharest
- * sunset, deep violet shadows, wet asphalt mirroring the sky, a dark glass
- * tower with warm travertine cladding, purple-lit interiors, political faces
- * on facade screens, and a battered yellow/purple Dacia 1300.
- *
- * Systems MUST pull colours from here rather than hardcoding hexes, so that a
- * single grade change re-tints the whole city coherently.
+/** Shared look for a weathered Bucharest at golden hour.
+ * Surface colours stay recognisable under a warm sun and cool skylight.
  */
+import { Color, ColorManagement } from 'three';
 
-import { Color } from 'three';
-
-const c = (hex: number) => new Color(hex).convertSRGBToLinear();
+/** Hex values are sRGB; the renderer works in linear light. Decode once. */
+const c = (hex: number) => {
+  const color = new Color(hex);
+  return ColorManagement.enabled ? color : color.convertSRGBToLinear();
+};
 
 export const Palette = {
   /** Sky gradient, bottom (horizon) to top (zenith). */
-  skyHorizon: c(0xff7a3c),
-  skyLowBand: c(0xff5f86),
-  skyMidBand: c(0xd0569f),
-  skyHighBand: c(0x6b4192),
-  skyZenith: c(0x231a45),
+  skyHorizon: c(0xe6ae78),
+  skyLowBand: c(0xc4aaa0),
+  skyMidBand: c(0x899cac),
+  skyHighBand: c(0x617c99),
+  skyZenith: c(0x334d71),
 
   /** Sun disc + directional light tint. Low, warm, slightly pink. */
   sunCore: c(0xffd9a8),
-  sunLight: c(0xff9c5a),
+  sunLight: c(0xffd1a0),
   /** Bounce/ambient coming off lit cloud deck — this is what fills shadows. */
-  skyAmbient: c(0x6d4f9e),
-  groundBounce: c(0x2a1c33),
+  skyAmbient: c(0xa3b8d0),
+  groundBounce: c(0x514b42),
 
   /** Clouds. */
-  cloudLit: c(0xffa477),
-  cloudMid: c(0xd2679c),
-  cloudShadow: c(0x4a3670),
+  cloudLit: c(0xe5c3a0),
+  cloudMid: c(0x999fa8),
+  cloudShadow: c(0x556476),
 
   /** Surfaces. */
-  asphaltDry: c(0x1a1622),
-  asphaltWet: c(0x0d0a14),
-  sidewalkStone: c(0x4a4048),
-  travertine: c(0xc9a882),
-  concreteGrey: c(0x6a6470),
-  glassTint: c(0x1b2340),
+  asphaltDry: c(0x413e3a),
+  asphaltWet: c(0x383735),
+  sidewalkStone: c(0x74736c),
+  travertine: c(0xb4a28a),
+  concreteGrey: c(0x88877f),
+  glassTint: c(0x27333e),
   glassSpecular: c(0xbfd4ff),
 
   /** Interior / signage emissives. */
@@ -79,40 +73,41 @@ export const HeroSun = {
   ambientIntensity: 1.15,
 } as const;
 
-/** Post-processing grade constants. */
+/** Restrained photographic grade; lighting carries the colour separation. */
 export const Grade = {
   exposure: 1.0,
-  bloomIntensity: 0.54,
-  bloomThreshold: 0.72,
+  /** AgX owns highlight compression; optional look-dev shoulders start neutral. */
+  exposureKnee: 4.0,
+  exposureRolloff: 0.0,
+  contrastPivot: 0.18,
+  shoulderKnee: 0.85,
+  shoulderStrength: 0.0,
+  toeDepth: 0.0,
+  toeRange: 0.10,
+  toeLift: 0.0,
+  toeRGB: [0.06, 0.065, 0.07] as [number, number, number],
+  shadowRGB: [0.97, 1.0, 1.035] as [number, number, number],
+  highlightRGB: [1.035, 1.0, 0.975] as [number, number, number],
+  splitStrength: 0.12,
+  splitBalance: 2.2,
+  chromaRolloff: 0.08,
+  chromaKnee: 0.90,
+  bloomIntensity: 0.22,
+  bloomThreshold: 1.0,
   bloomSmoothing: 0.35,
-  bloomRadius: 0.72,
-  /** Shadows pushed toward violet, highlights toward warm orange. */
-  liftRGB: [0.020, 0.008, 0.042] as [number, number, number],
-  gainRGB: [1.055, 0.985, 0.955] as [number, number, number],
-  gammaRGB: [1.0, 1.01, 1.03] as [number, number, number],
-  /*
-   * SUNSET INTENSITY. The magenta-orange grade is the game's signature and is
-   * staying — but at 1.14 saturation on top of an already magenta key, an
-   * already violet ambient and a magenta fog, every surface in the city was
-   * being pushed to the same hue and the city read as one wash rather than as
-   * warm stone standing in violet shade.
-   *
-   * MEASURED, not guessed. Metering the reference frame through the game's own
-   * `__GTA_POST__.meter()` gives saturation 0.37; the city was metering 0.73 at
-   * a street framing, i.e. twice the chroma of the picture it is copying. That
-   * is precisely the "sunset is a bit too pronounced" note. Backed off to land
-   * nearer the reference while leaving the tonal distribution (p05 15 vs 13,
-   * p95 169 vs 164 — both already correct) untouched.
-   */
-  saturation: 0.92,
+  bloomRadius: 0.65,
+  liftRGB: [0.001, 0.0012, 0.0014] as [number, number, number],
+  gainRGB: [1.018, 1.0, 0.986] as [number, number, number],
+  gammaRGB: [1.0, 1.0, 1.0] as [number, number, number],
+  saturation: 0.98,
   contrast: 1.08,
-  vignetteDarkness: 0.52,
-  vignetteOffset: 0.28,
-  chromaticAberration: 0.00072,
-  filmGrain: 0.028,
+  vignetteDarkness: 0.32,
+  vignetteOffset: 0.24,
+  chromaticAberration: 0.00018,
+  filmGrain: 0.0015,
 } as const;
 
-/** Fog / aerial perspective. Heavy warm haze toward the sun, violet away. */
+/** Aerial perspective: warm horizon haze, cool distant shade. */
 export const Atmosphere = {
   fogNear: 40,
   fogFar: 1150,

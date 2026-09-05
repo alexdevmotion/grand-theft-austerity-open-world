@@ -22,6 +22,7 @@ import {
   type EnvironmentDamageService,
   type EnvironmentImpactResult,
   type Faction,
+  type PedArchetype,
   type VehicleClass,
   type VehicleHandle,
   type VehicleService,
@@ -36,6 +37,7 @@ import { VehicleLamps, VehicleLightPool, contactShadowAssets } from './lights';
 import { DamageModel, deform } from './damage';
 import { ParticlePool, SkidmarkPool } from './skidmarks';
 import { QUALITY, onQualityChange, type Quality, type QualitySettings } from '../render/renderer';
+import { RailPath, type RailPoint } from './railPath';
 
 /* ------------------------------------------------------------------ */
 /* Tuning                                                              */
@@ -477,6 +479,9 @@ class Vehicle implements VehicleHandle {
   readonly position = new THREE.Vector3();
   readonly rotation = new THREE.Quaternion();
   readonly occupants: string[] = [];
+  npcDriver: PedArchetype | null = null;
+  entryReserved = false;
+  locked = true;
 
   body!: RAPIER.RigidBody;
   collider!: RAPIER.Collider;
@@ -593,6 +598,7 @@ class Vehicle implements VehicleHandle {
   get isWrecked(): boolean { return this.damage.isWrecked; }
 
   get speed(): number {
+    if (this.railPath) return this.railSpeed;
     const v = this.body.linvel();
     this._fwd.set(0, 0, 1).applyQuaternion(this.rotation);
     return this._tmp.set(v.x, v.y, v.z).dot(this._fwd);
@@ -616,8 +622,8 @@ class Vehicle implements VehicleHandle {
   }
 
   private findDoor(id: string): DoorState | undefined {
-    if (id === 'driver') return this.doors.find((d) => d.part.row === 0 && d.part.side < 0) ?? this.doors[0];
-    if (id === 'passenger') return this.doors.find((d) => d.part.row === 0 && d.part.side > 0);
+    if (id === 'driver') return this.doors.find((d) => d.part.row === 0 && d.part.side > 0);
+    if (id === 'passenger') return this.doors.find((d) => d.part.row === 0 && d.part.side < 0);
     return this.doors.find((d) => d.part.id === id);
   }
 
@@ -688,6 +694,72 @@ class Vehicle implements VehicleHandle {
 
   /* ---------------- simulation ---------------- */
 
+  private railPath: RailPath | null = null;
+  private railSpeed = 0;
+  private railHeight = 0;
+  private extendRailRoute?: () => ReadonlyArray<RailPoint> | null;
+
+  /** Traffic supplies only paths verified against the rendered rails. */
+  setRailPath(points: ReadonlyArray<RailPoint>, extend?: () => ReadonlyArray<RailPoint> | null): void {
+    if (!this.tuning.spec.railed || points.length < 2) return;
+    if (!this.railPath) {
+      this.railHeight = this.position.y - 0.05;
+      this.body.setBodyType(this.phys.rapier.RigidBodyType.KinematicPositionBased, true);
+    }
+    this.railPath = new RailPath(points);
+    this.extendRailRoute = extend;
+  }
+
+  private simulateRail(dt: number): void {
+    const extension = this.extendRailRoute?.();
+    if (extension) this.railPath = new RailPath(extension);
+    const path = this.railPath!;
+    const at = path.project(this.position.x, this.position.z);
+    // Leave the complete body on verified steel at a terminus.
+    const end = Math.max(at, path.length - this.tuning.spec.length * 0.5);
+    const start = Math.min(at, this.tuning.spec.length * 0.5);
+    const forwardRoom = end - at;
+    const reverseRoom = at - start;
+    const opposing = this.throttle * this.railSpeed < 0;
+    const brake = this.handbrakeInput || this.isWrecked || opposing ||
+      (this.throttle < -0.02 && this.occupants.length === 0);
+    if (brake) {
+      this.railSpeed = Math.sign(this.railSpeed) * Math.max(0, Math.abs(this.railSpeed) - 4 * dt);
+    } else {
+      this.railSpeed += (this.throttle * 1.6 - this.railSpeed * 0.035) * dt;
+    }
+    this.railSpeed = Math.max(-this.tuning.reverseSpeed,
+      -Math.sqrt(2 * 4 * (reverseRoom < 0.001 ? 0 : reverseRoom)), Math.min(this.tuning.topSpeed,
+        this.railSpeed, Math.sqrt(2 * 4 * (forwardRoom < 0.001 ? 0 : forwardRoom))));
+    let next = Math.max(start, Math.min(end, at + this.railSpeed * dt));
+    let point = path.sample(next);
+    // Kinematic bodies need an explicit sweep: a stopped car or new prop must
+    // stop the tram instead of being pushed through the track corridor.
+    const delta = { x: point.x - this.position.x, y: 0, z: point.z - this.position.z };
+    const hit = this.phys.world.castShape(
+      { x: this.position.x, y: this.railHeight + this.tuning.colliderCentreY, z: this.position.z },
+      this.rotation, delta, this.collider.shape, 0.15, 1, true, undefined,
+      probeGroups(CG.STATIC | CG.PROP | CG.VEHICLE | CG.CHARACTER | CG.PLAYER), this.collider, this.body,
+    );
+    if (hit) { next = at; point = path.sample(at); this.railSpeed = 0; }
+    _railQ.setFromAxisAngle(UP, path.heading(next, this.tuning.spec.frontAxleZ));
+    this.body.setNextKinematicTranslation({ x: point.x, y: this.railHeight, z: point.z });
+    this.body.setNextKinematicRotation(_railQ);
+    this.airTime = 0;
+    this.upsideTime = 0;
+    this.parked = Math.abs(this.railSpeed) < 0.05;
+    this.steerAngle = 0;
+    this.latAccel = 0;
+    this.longAccel = 0;
+    for (let i = 0; i < this.tuning.wheels.length; i++) {
+      this.wheelContact[i] = true;
+      this.wheelCompression[i] = 9.81 / this.tuning.suspensionStiffness;
+      this.wheelSpin[i] += this.railSpeed * dt / this.tuning.wheels[i].radius;
+      this.skidding[i] = false;
+    }
+    this.incomingVelocity.set((point.x - this.position.x) / dt, 0, (point.z - this.position.z) / dt);
+  }
+
   simulate(dt: number): void {
     this.tickGrace(dt);
     const body = this.body;
@@ -697,6 +769,8 @@ class Vehicle implements VehicleHandle {
     this.rotation.set(r.x, r.y, r.z, r.w);
     this.object.position.copy(this.position);
     this.object.quaternion.copy(this.rotation);
+
+    if (this.railPath) { this.simulateRail(dt); return; }
 
     this._fwd.set(0, 0, 1).applyQuaternion(this.rotation);
     this._right.set(1, 0, 0).applyQuaternion(this.rotation);
@@ -996,10 +1070,9 @@ class Vehicle implements VehicleHandle {
     // Filth: what the car came with, plus what the crashes added.
     this.uniforms.uGrime.value = Math.min(1, this.baseGrime + (1 - this.damage.ratio) * 0.55);
 
-    // A driver is only visible when somebody is actually in there. Traffic and
-    // police cars are always crewed; the player's parked car is not.
+    // The hero renders separately; this mesh represents only the ambient driver.
     if (this.driverMesh) {
-      const crewed = this.occupants.length > 0 || this.faction !== 'player';
+      const crewed = this.npcDriver !== null;
       this.driverMesh.visible = crewed && this.lodBand <= 2;
     }
 
@@ -1212,6 +1285,9 @@ export class VehicleSystem implements System, VehicleService {
         pos: [v.position.x, v.position.y, v.position.z],
         speed: +v.speed.toFixed(2),
         health: v.health,
+        npcDriver: v.npcDriver, locked: v.locked, entryReserved: v.entryReserved,
+        driverVisible: v.driverMesh?.visible ?? false,
+        driverDoor: v.doorAnchor('driver', new THREE.Vector3())?.toArray(),
         grounded: v.wheelContact.filter(Boolean).length,
         comp: v.wheelCompression.map((c) => +c.toFixed(2)),
         throttle: v.throttle,
@@ -1325,7 +1401,7 @@ export class VehicleSystem implements System, VehicleService {
        * every vehicle on the same node, which produced a pile-up that then
        * ground itself to scrap.
        */
-      stage: (kind: VehicleClass, sideOffset?: number) => {
+      stage: (kind: VehicleClass, sideOffset?: number, occupied = false) => {
         const gap = SPECS[kind].length * 0.5 + 3;
         const along = sideOffset ?? this.stageCursor + gap;
         this.stageCursor = along + gap;
@@ -1333,6 +1409,7 @@ export class VehicleSystem implements System, VehicleService {
         const v = this.spawn(kind, pos, heading, {
           faction: kind === 'dacia' ? 'player' : 'civilian',
           colorSeed: kind === 'dacia' ? 0 : 3,
+          npcDriver: occupied ? 'civilian' : undefined,
         }) as Vehicle;
         return { id: v.id, heading };
       },
@@ -1460,11 +1537,25 @@ export class VehicleSystem implements System, VehicleService {
     );
   }
 
+  trySpawn(
+    kind: VehicleClass,
+    position: THREE.Vector3,
+    headingRad: number,
+    opts?: { colorSeed?: number; faction?: Faction; npcDriver?: PedArchetype },
+  ): VehicleHandle | null {
+    const colorSeed = opts?.colorSeed ?? this.rng.int(0, 4096);
+    const hero = kind === 'dacia' && (opts?.faction === 'player' || colorSeed === 0);
+    const variant = hero ? 0 : colorSeed % VARIANTS[kind];
+    const model = modelFor(kind, variant, hero);
+    if (!this.placementClear(position, headingRad, model.spec)) return null;
+    return this.spawn(kind, position, headingRad, { ...opts, colorSeed });
+  }
+
   spawn(
     kind: VehicleClass,
     position: THREE.Vector3,
     headingRad: number,
-    opts?: { colorSeed?: number; faction?: Faction },
+    opts?: { colorSeed?: number; faction?: Faction; npcDriver?: PedArchetype },
   ): VehicleHandle {
     const id = `veh_${this.nextId++}`;
     const faction = opts?.faction ?? (kind === 'police' ? 'police' : 'civilian');
@@ -1472,6 +1563,8 @@ export class VehicleSystem implements System, VehicleService {
     const hero = kind === 'dacia' && (faction === 'player' || colorSeed === 0);
     const variant = hero ? 0 : colorSeed % VARIANTS[kind];
     const v = new Vehicle(id, kind, faction, this.phys, modelFor(kind, variant, hero));
+    v.npcDriver = opts?.npcDriver ?? null;
+    v.locked = faction !== 'player' && kind !== 'scooter';
     const tuning = v.tuning;
 
     const place = this.clearSpawnPoint(position, headingRad, tuning.spec);
@@ -1657,7 +1750,7 @@ export class VehicleSystem implements System, VehicleService {
   despawn(id: string): void {
     const v = this.vehicles.get(id);
     if (!v) return;
-    if (v.occupants.length > 0) {
+    if (v.occupants.length > 0 || v.entryReserved) {
       // Occupied: hand it over rather than delete it. Whoever owns the
       // occupant is now responsible for the vehicle's lifetime.
       return;
@@ -1680,7 +1773,7 @@ export class VehicleSystem implements System, VehicleService {
     let best: Vehicle | undefined;
     let bestD = radius * radius;
     for (const v of this.list) {
-      if (v.occupants.length >= v.seats || v.isWrecked) continue;
+      if (v.occupants.length > 0 || v.entryReserved || v.isWrecked || Math.abs(v.speed) > 2.4) continue;
       const d = v.position.distanceToSquared(p);
       if (d < bestD) { bestD = d; best = v; }
     }
@@ -1688,6 +1781,19 @@ export class VehicleSystem implements System, VehicleService {
   }
 
   /* ---------------- frame ---------------- */
+
+  private recoveryVisible(v: Vehicle, position: THREE.Vector3): boolean {
+    const camera = this.ctx.camera;
+    if (!camera) return false;
+    camera.updateWorldMatrix(true, false);
+    const frustum = new THREE.Frustum().setFromProjectionMatrix(
+      new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse),
+    );
+    return frustum.intersectsSphere(new THREE.Sphere(
+      position.clone().add(new THREE.Vector3(0, v.tuning.spec.height / 2, 0)),
+      Math.hypot(v.tuning.spec.length / 2, v.tuning.spec.height / 2, v.tuning.spec.width / 2) + 2,
+    ));
+  }
 
   fixedUpdate(dt: number): void {
     if (this.harness) this.runHarness(dt);
@@ -1712,13 +1818,14 @@ export class VehicleSystem implements System, VehicleService {
       // Stuck rescue: a vehicle that has had no wheel on anything for four
       // seconds has fallen off geometry somewhere. Left alone it grinds down a
       // wall taking contact damage until it is scrap. Put it back on a road.
-      if (v.airTime > 4 && v.occupants.length === 0) {
+      if (v.airTime > 4 && v.occupants.length === 0 && !v.tuning.spec.railed && !this.recoveryVisible(v, v.position)) {
         const start = this.rng.range(-30, 30);
         const offsets = [start, start + 18, start - 18, start + 36, start - 36, start + 54, start - 54];
         let slot: { pos: THREE.Vector3; heading: number } | null = null;
         for (const along of offsets) {
           slot = this.roadSlot(along, undefined, v);
-          if (slot) break;
+          if (slot && !this.recoveryVisible(v, slot.pos)) break;
+          slot = null;
         }
         if (slot) {
           v.teleport(slot.pos, slot.heading);

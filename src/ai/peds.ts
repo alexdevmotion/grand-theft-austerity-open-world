@@ -85,6 +85,14 @@ const PED_MIN_HALF_HEIGHT = 0.38;
 const DOG_COLLIDER_RADIUS = 0.18;
 const DOG_COLLIDER_HALF_LENGTH = 0.25;
 const DOG_COLLIDER_CENTRE_Y = 0.36;
+interface DriverEjection {
+  ped: Ped;
+  heading: number;
+  seat: THREE.Vector3;
+  exit: THREE.Vector3;
+  elapsed: number;
+  duration: number;
+}
 const PED_PHYSICS_SWEEP_SKIN = 0.018;
 const PED_PHYSICS_MASK = probeGroups(CG.STATIC | CG.PROP);
 const DOG_PHYSICS_MASK = probeGroups(CG.STATIC | CG.PROP | CG.CHARACTER | CG.PLAYER);
@@ -637,6 +645,8 @@ export class PedSystem implements System, PedService {
   private readonly debugCrashFwd = new THREE.Vector3();
   private debugMeleeTargetId: string | null = null;
   private debugCrashTargetId: string | null = null;
+  /** Short, bounded handoff owned by the crowd after a driver is pulled out. */
+  private driverEjections = new Map<string, DriverEjection>();
   /** Stable Ped ids are reused by the pool, so this is cleared on attachment. */
   private readonly reportedDeaths = new Set<string>();
   private spawnTimer = 0;
@@ -1072,9 +1082,39 @@ export class PedSystem implements System, PedService {
     return p;
   }
 
+  /** Spawn a driver at the door and animate the pull into the street. */
+  ejectDriver(
+    archetype: PedArchetype,
+    seat: THREE.Vector3,
+    exit: THREE.Vector3,
+    headingRad: number,
+    duration: number,
+  ): CharacterHandle {
+    const ped = this.spawn(archetype, exit, headingRad) as Ped;
+    const resolvedExit = ped.position.clone();
+    // Ejections are always close to the camera/player interaction. Promote
+    // immediately so the seated pull has a real rig instead of an imposter.
+    this.promote(ped);
+    ped.position.copy(seat);
+    ped.mode = 'scripted';
+    ped.playState('sit');
+    this.driverEjections.set(ped.id, {
+      ped,
+      heading: headingRad,
+      seat: seat.clone(),
+      exit: resolvedExit,
+      elapsed: 0,
+      duration: Math.max(0.05, duration),
+    });
+    // The seated proxy would overlap its own vehicle until the pull clears it.
+    this.collisions?.detach(ped);
+    return ped;
+  }
+
   despawn(id: string): void {
     const p = this.peds.get(id);
     if (!p) return;
+    this.driverEjections.delete(id);
     this.peds.delete(id);
     const i = this.list.indexOf(p);
     if (i >= 0) this.list.splice(i, 1);
@@ -1473,7 +1513,9 @@ export class PedSystem implements System, PedService {
     prof.add('peds.vehGrid', t);
 
     t = prof.begin();
-    this.grid.rebuild(this.list);
+    this.grid.rebuild(this.driverEjections.size
+      ? this.list.filter((p) => !this.driverEjections.has(p.id))
+      : this.list);
     prof.add('peds.grid', t);
 
     this.env.time = ctx.time.elapsed;
@@ -1495,6 +1537,28 @@ export class PedSystem implements System, PedService {
     this.stream(dt);
     prof.add('peds.stream', t);
     this.stats.peds = this.list.length;
+  }
+
+  /** Use the same frame clock as player boarding, including under physics backlog. */
+  update(dt: number): void {
+    this.updateDriverEjections(dt);
+  }
+
+  private updateDriverEjections(dt: number): void {
+    for (const [id, e] of this.driverEjections) {
+      if (!e.ped.active || !this.peds.has(id)) { this.driverEjections.delete(id); continue; }
+      e.elapsed += Math.max(0, dt);
+      const t = e.elapsed + 1e-6 >= e.duration ? 1 : THREE.MathUtils.clamp(e.elapsed / e.duration, 0, 1);
+      e.ped.position.lerpVectors(e.seat, e.exit, t);
+      e.ped.yaw = e.heading + t * Math.PI / 2;
+      e.ped.playState(t < 1 ? 'sit' : 'stagger');
+      if (t >= 1) {
+        e.ped.startFlee(e.seat.x, e.seat.z);
+        this.collisions?.attach(e.ped);
+        this.collisions?.snap(e.ped);
+        this.driverEjections.delete(id);
+      }
+    }
   }
 
   private buildVehicleGrid(dt: number, ctx: GameContext): void {
@@ -1608,7 +1672,7 @@ export class PedSystem implements System, PedService {
     for (let i = 0; i < this.ranked.length; i++) {
       const { p, d } = this.ranked[i];
       let actor = this.actors.get(p.id);
-      const wants = i < this.actorBudget && d <= cut;
+      const wants = this.driverEjections.has(p.id) || (i < this.actorBudget && d <= cut);
 
       if (wants && !actor && promotions < 2) {
         // Rate-limited: building a skeleton is cheap but not free, and a
@@ -1625,7 +1689,19 @@ export class PedSystem implements System, PedService {
       if (actor) {
         if (!actor.object.visible) actor.setVisible(true);
         tp = prof.begin();
-        driveActor(actor, p, dt, ctx, d, this.shadowRadius, t);
+        const ejection = this.driverEjections.get(p.id);
+        if (ejection) {
+          // Blend from the seat to standing while the pull owns the root.
+          actor.setTransform(p.position, p.yaw);
+          actor.footIk = false;
+          actor.drive({
+            state: 'sit', speed: 0, grounded: false, turnRate: 0,
+            board: { sit: 1 - THREE.MathUtils.clamp(ejection.elapsed / ejection.duration, 0, 1), reach: 0.72, side: 1, closing: false },
+          });
+          actor.update(dt, ctx);
+        } else {
+          driveActor(actor, p, dt, ctx, d, this.shadowRadius, t);
+        }
         if (p.ragdolled) this.collisions?.snap(p);
         prof.add('peds.skinnedActors', tp);
         if (d < 44) this.handLight(actor, p, r, t);
@@ -1676,6 +1752,7 @@ export class PedSystem implements System, PedService {
   private readonly _spawnResolved = new THREE.Vector3();
 
   dispose(): void {
+    this.driverEjections.clear();
     this.collisions?.dispose();
     this.collisions = null;
     this.renderer?.dispose();

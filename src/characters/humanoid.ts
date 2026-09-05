@@ -1,13 +1,12 @@
 /**
- * HUMANOID — procedural skinned geometry, the shared factory, and the actor
+ * HUMANOID — skinned geometry, the shared factory, and the actor
  * every gameplay system drives.
  *
- * The mesh is generated as swept super-elliptical tubes along the bind-pose
- * skeleton: torso, neck, head, arms, hands, legs, shoes, hair, headwear and
- * accessories all land in ONE indexed BufferGeometry with ONE material, so a
- * character costs a single draw call. Clothing is not a separate layer — the
- * relevant tube is inflated and its texture slot swapped, and only silhouette
- * pieces (coat skirts, hi-vis shells, backpacks, harnesses) add geometry.
+ * Named characters use the continuous CC0 anatomical body and authored weights
+ * from tailoredBody.ts. Crowd bodies use smaller swept meshes. Both share
+ * seated garment panels, layered shoe soles, the atlas, and the same skeleton.
+ * Body and garment geometry merge into one skinned draw; fitted heads keep
+ * their separate skin, eye and hair materials.
  *
  * COST MODEL
  *   - geometry cached by `appearanceGeoKey`  (mesh-changing traits only)
@@ -28,6 +27,7 @@
  */
 
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { GameContext } from '../core/engine';
 import { Rng } from '../core/rng';
 import { Services, type LocomotionState } from '../core/services';
@@ -36,6 +36,7 @@ import { AnimationController, type Drive } from './animation';
 import { CAST, HeroHead } from './face/heroHead';
 import { Ragdoll } from './ik';
 import { prof } from './profile';
+import { addGarmentDetails, buildTailoredBody } from './tailoredBody';
 import {
   BI, BONE_COUNT, DIGIT_NAMES, NOMINAL_HEIGHT, bodyMetrics, buildRig,
   type BodyMetrics, type Rig, type RigPoints,
@@ -345,6 +346,11 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
   const torsoSlot: SlotId = hasOuter ? SLOT.OUTER : SLOT.TOP;
   const sleeveSlot: SlotId = hasOuter && OUTER_SLEEVES[a.outer] ? SLOT.OUTER : SLOT.TOP;
   const sleeveBulk = sleeveSlot === SLOT.OUTER ? bulk * 0.75 : 0.006;
+  // Named cast is inspected close up; crowd geometry keeps its existing cost.
+  const torsoRadial = a.cast ? 32 : 12;
+  const collarRadial = a.cast ? 28 : 10;
+  const armRadial = a.cast ? 20 : 8;
+  const anatomical = !!a.cast;
 
   /* ---------------- torso ---------------- */
   {
@@ -417,31 +423,35 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
         v: pr.v,
       };
     });
-    b.tube(rings, 12, torsoSlot, { capStart: hem < 0.4, capEnd: true });
+    if (!anatomical) b.tube(rings, torsoRadial, torsoSlot, { capStart: hem < 0.4, capEnd: true });
 
     // Open coat/apron hem: a short inner skirt so the silhouette has depth.
-    if (hem > 0.4) {
+    if (hem > 0.4 && !anatomical) {
       const inner = rings[0];
       b.tube(
         [
           { ...inner, rx: inner.rx * 0.86, rzF: inner.rzF * 0.86, rzB: (inner.rzB ?? inner.rzF) * 0.86, v: 0.52 },
           { ...rings[1], rx: rings[1].rx * 0.9, rzF: rings[1].rzF * 0.9, rzB: (rings[1].rzB ?? rings[1].rzF) * 0.9, v: 0.42 },
         ],
-        12, torsoSlot, { capStart: true },
+        torsoRadial, torsoSlot, { capStart: true },
       );
     }
 
     // Collar / visible shirt at the neck when something is worn over it.
-    if (hasOuter) {
+    if (hasOuter && !anatomical) {
       const y0 = m.neckY - 0.02;
       const w = spineWeights(y0, m);
-      b.tube(
-        [
-          { c: V(0, y0, 0.006), dir: UPV, rx: m.neckR * 1.55, rzF: m.neckR * 1.5, n: 2.4, b0: w[0], w0: w[1], b1: w[2], w1: w[3], v: 0.03 },
-          { c: V(0, m.neckY + 0.045, 0.004), dir: UPV, rx: m.neckR * 1.22, rzF: m.neckR * 1.2, n: 2.2, b0: BI.neck, w0: 1, v: 0.005 },
-        ],
-        10, SLOT.TOP, {},
-      );
+      // A raised cast collar has one exposed rim. The taller shirt tube
+      // otherwise cuts across it as the neck and upper-chest weights diverge.
+      if (!(a.cast && a.collarUp)) {
+        b.tube(
+          [
+            { c: V(0, y0, 0.006), dir: UPV, rx: m.neckR * 1.55, rzF: m.neckR * 1.5, n: 2.4, b0: w[0], w0: w[1], b1: w[2], w1: w[3], v: 0.03 },
+            { c: V(0, m.neckY + 0.045, 0.004), dir: UPV, rx: m.neckR * 1.22, rzF: m.neckR * 1.2, n: 2.2, b0: BI.neck, w0: 1, v: 0.005 },
+          ],
+          collarRadial, SLOT.TOP, {},
+        );
+      }
 
       /* COLLAR UP. The shirt neckline above tops out 25 mm below the chin, which
        * on a bearded man leaves a bare column of neck as the brightest thing in
@@ -471,7 +481,7 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
             { c: V(0, lerp(m.neckY, top, 0.5), -0.002), dir: UPV, rx: m.neckR * 1.52, rzF: m.neckR * 1.42, rzB: m.neckR * 1.62, n: 2.3, b0: BI.neck, w0: 0.85, b1: BI.upperChest, w1: 0.15, v: 0.02 },
             { c: V(0, top, -0.008), dir: UPV, rx: m.neckR * 1.70, rzF: m.neckR * 1.40, rzB: m.neckR * 1.82, n: 2.2, b0: BI.neck, w0: 1, v: 0.008 },
           ],
-          12, SLOT.OUTER, {},
+          a.cast ? collarRadial : 12, SLOT.OUTER, {},
         );
       }
     }
@@ -497,7 +507,7 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
         { c: V(0, chinY + 0.006, 0.005), dir: UPV, rx: m.neckR * 1.05, rzF: m.neckR * 1.10, b0: BI.neck, w0: 0.55, b1: BI.head, w1: 0.45, v: 0.52 },
         { c: V(0, chinY + 0.026, 0.006), dir: UPV, rx: m.neckR * 1.00, rzF: m.neckR * 1.08, b0: BI.neck, w0: 0.25, b1: BI.head, w1: 0.75, v: 0.5 },
       ],
-      10, SLOT.SKIN, {},
+      a.cast ? 28 : 10, SLOT.SKIN, {},
     );
   }
 
@@ -564,7 +574,7 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
   buildHeadwear(b, a, m, chinY, crownY);
 
   /* ---------------- arms ---------------- */
-  for (const s of [1, -1] as const) {
+  if (!anatomical) for (const s of [1, -1] as const) {
     const L = s > 0 ? 'L' : 'R';
     const shoulder = P[`upperArm${L}` as 'upperArmL'];
     const elbow = P[`forearm${L}` as 'forearmL'];
@@ -657,7 +667,7 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
 
     if (!bare) {
       // Long sleeve: shoulder to cuff, one surface, one slot.
-      b.tube(armTaper.map(armRing), 8, sleeveSlot, { capStart: true });
+      b.tube(armTaper.map(armRing), armRadial, sleeveSlot, { capStart: true });
     } else {
       /* A short sleeve is a real edge in the world, so it gets a real seam here.
        * The two chains share the cut ring exactly (same centre, same direction,
@@ -669,14 +679,14 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
       const cutRow: ArmRow = [cutT, m.upperArmR * 1.02, upper, 1, upper];
       const sleeve = armTaper.filter((r) => r[0] < cutT).map(armRing);
       sleeve.push(armRing(cutRow));
-      b.tube(sleeve, 8, sleeveSlot, { capStart: true });
+      b.tube(sleeve, armRadial, sleeveSlot, { capStart: true });
 
       const skin = [cutRow, ...armTaper.filter((r) => r[0] > cutT)].map((row) => {
         const ring = armRing(row);
         // Same centres, no cloth bulk, and the SKIN column's own v ramp.
         return { ...ring, rx: row[1], rzF: row[1] * 0.97, rzB: row[1] * 1.02, v: 0.30 + (row[0] - 1) * 0.19 };
       });
-      b.tube(skin, 8, SLOT.SKIN, {});
+      b.tube(skin, armRadial, SLOT.SKIN, {});
     }
 
     buildHand(b, m, rig, L, hand);
@@ -717,7 +727,7 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
       };
     };
 
-    if (!skirt) {
+    if (!skirt && !anatomical) {
       const rings: Ring[] = [
         legRing(hip.clone().addScaledVector(dT, -0.055), dT, m.thighR * 1.02, 0.02, BI.hips, 0.6, thigh, 0.4),
         legRing(at(hip, dT, 0.14, thighLen), dT, m.thighR, 0.14, thigh, 1, thigh, 0),
@@ -743,7 +753,7 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
         const bare = rings.slice(3).map((r) => ({ ...r, rx: r.rx - trouser, rzF: r.rzF - trouser, rzB: (r.rzB ?? r.rzF) - trouser, v: 0.30 + (r.v) * 0.2 }));
         b.tube(bare, 9, SLOT.SKIN, {});
       }
-    } else {
+    } else if (!anatomical) {
       // Bare leg under the skirt.
       const bareRings: Ring[] = [
         legRing(at(hip, dT, 0.35, thighLen), dT, lerp(m.thighR, m.kneeR, 0.35) * 0.95, 3, thigh, 1, thigh, 0),
@@ -768,7 +778,7 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
         { c: ankle.clone().add(V(0, -m.ankleY * 0.62, m.footLen * 0.40)), dir: dF, rx: m.footW * 0.95, rzF: 0.034, rzB: 0.030, n: 3.4, b0: foot, w0: 0.45, b1: BI[`toe${L}` as 'toeL'], w1: 0.55, v: 0.70, ref: UPV },
         { c: toe.clone().add(V(0, 0, m.footLen * 0.06)), dir: dF, rx: m.footW * 0.66, rzF: 0.020, rzB: 0.022, n: 3.2, b0: BI[`toe${L}` as 'toeL'], w0: 1, v: 0.86, ref: UPV },
       ],
-      8, SLOT.SHOES, { capStart: true, capEnd: true },
+      a.cast ? 16 : 10, SLOT.SHOES, { capStart: true, capEnd: true },
     );
     if (bootTop) {
       b.tube(
@@ -778,6 +788,27 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
         ],
         8, SLOT.SHOES, { capEnd: true },
       );
+    }
+    // An outsole has its own silhouette and welt. It must not be a white
+    // texture stripe wrapped around the toe of the upper.
+    const soleV = a.shoes === 'sneakers' ? .76 : .91;
+    const soleRows: Array<[number, number]> = [[-m.heelBack,.82],[-.018,.98],[m.footLen*.24,1.05],[m.footLen*.48,.99],[m.footLen*.68,.65]];
+    b.tube(soleRows.map(([z,w]) => ({
+      c: V(ankle.x,.011,ankle.z+z), dir: FRONT, ref: UPV,
+      rx:m.footW*w+.003,rzF:.010,rzB:.010,n:3.7,
+      b0:foot,w0:1,v:soleV,
+    })), a.cast ? 16 : 10, SLOT.SHOES, {capStart:true,capEnd:true});
+    if (a.cast) {
+      // Facing quarters and paired laces follow the instep rather than drawing
+      // decoration around the entire boot as a latitude band.
+      for (let k=0;k<5;k++) {
+        const z=ankle.z+.004+k*.014;
+        const y=.095-k*.005;
+        b.slab(V(ankle.x-.020,y,z),V(ankle.x+.020,y-.001,z+.006),.0011,.0011,SLOT.DETAIL,foot,.32,.32,UPV,3);
+      }
+      for (const side of [-1,1]) {
+        b.slab(V(ankle.x+side*.024,.100,ankle.z-.002),V(ankle.x+side*.027,.068,ankle.z+.068),.0015,.0013,SLOT.SHOES,foot,.50,.50,UPV,3);
+      }
     }
   }
 
@@ -827,9 +858,20 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
   }
 
   /* ---------------- accessories ---------------- */
-  buildAccessory(b, a, m, rig.points, rng);
+  if (!(anatomical && (a.accessory === 'sitePass' || a.accessory === 'lanyard'))) buildAccessory(b, a, m, rig.points, rng);
 
-  return b.build();
+  const extras = b.build();
+  if (!anatomical) {
+    addGarmentDetails(extras, a, rig);
+    return extras;
+  }
+  const body = buildTailoredBody(a, rig);
+  const geometry = mergeGeometries([body, extras])!;
+  geometry.userData = { ...body.userData };
+  geometry.boundingBox = extras.boundingBox!.clone();
+  geometry.boundingSphere = extras.boundingSphere!.clone();
+  body.dispose(); extras.dispose();
+  return geometry;
 }
 
 /* ---------------- hands ---------------- */
@@ -1301,6 +1343,8 @@ function buildCharacterMaterial(a: Appearance, tex: AppearanceTextures): THREE.M
     map: tex.map,
     roughnessMap: tex.mra,
     metalnessMap: tex.mra,
+    bumpMap: tex.bump,
+    bumpScale: a.cast ? .00045 : .00025,
     roughness: 1,
     metalness: 1,
     emissive: tex.emissive ? new THREE.Color(0xffffff) : new THREE.Color(0x000000),

@@ -23,6 +23,7 @@ import * as THREE from 'three';
 import type { GameContext, System } from '../core/engine';
 import { LEVEL_NAMES } from '../content/story';
 import { Services, type CityService, type ProgressionService } from '../core/services';
+import { t, tp } from '../core/i18n';
 
 const LEVEL_CURVE = [0, 400, 1100, 2300, 4200, 7000, 11000, 16500, 24000, 34000];
 
@@ -116,7 +117,7 @@ export class ProgressionSystem implements System, ProgressionService {
         if (this.peakStars >= 2 && !this.escapeForfeited) {
           const gain = ESCAPE_XP * this.peakStars;
           this.addXp(gain, 'evadare');
-          ctx.tryGet(Services.Hud)?.toast(`Ai scăpat de Minister · +${gain} XP`, 'good');
+          ctx.tryGet(Services.Hud)?.toast(tp('Ai scăpat de Minister · +{gain} XP', { gain }), 'good');
         }
         this.escapeForfeited = false;
         this.peakStars = 0;
@@ -139,7 +140,11 @@ export class ProgressionSystem implements System, ProgressionService {
       this._unlocks.add(`level_${this._level}`);
       this.ctx.events.emit('progression:levelUp', { level: this._level, unlock });
       this.ctx.tryGet(Services.Hud)?.toast(
-        `NIVEL ${this._level} — ${this.levelName}: ${named?.text ?? 'conținut nou'}`,
+        tp('NIVEL {level} — {name}: {text}', {
+          level: this._level,
+          name: t(this.levelName),
+          text: t(named?.text ?? 'conținut nou'),
+        }),
         'good',
         5200,
       );
@@ -242,7 +247,11 @@ export class ProgressionSystem implements System, ProgressionService {
       if (Math.hypot(p.x - lm.position.x, p.z - lm.position.z) > r) continue;
       this.discoveredSet.add(id);
       this.addXp(DISCOVERY_XP, 'descoperire');
-      this.ctx.tryGet(Services.Hud)?.toast(`Descoperit: ${lm.name} · +${DISCOVERY_XP} XP`, 'good', 3600);
+      this.ctx.tryGet(Services.Hud)?.toast(
+        tp('Descoperit: {name} · +{gain} XP', { name: t(lm.name), gain: DISCOVERY_XP }),
+        'good',
+        3600,
+      );
     }
   }
 

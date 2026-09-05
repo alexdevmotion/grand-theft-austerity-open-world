@@ -1,35 +1,12 @@
-/**
- * Shared city materials.
- *
- * NOTE: `src/render/materials.ts` does not exist in the tree yet, so the city
- * defines its own library here using the names the brief asked for
- * (`cityMaterials.facade` / `.surface` / `.detail`). If a global material
- * module lands later this file should be re-exported from it.
- *
- * There are exactly three materials for the whole city so that every chunk
- * draws in three calls:
- *
- *   facade  — a facade GRAMMAR shader. Storeys, bays, mullions, spandrels,
- *             punched windows, arcades, balconies, corrugation, graffiti and
- *             lit interiors are all evaluated analytically from world-metre UVs
- *             plus per-vertex grammar attributes. No texture memory, crisp at
- *             any distance, and one program for the entire city.
- *   surface — roads, lane markings, kerbs, paving joints, plaza stone, lawn,
- *             gravel and water, with the wet sky-mirror response the reference
- *             frame is built on.
- *   detail  — vertex-coloured PBR for all the small stuff (cornices, parapets,
- *             balconies, roof plant, poles, tram rails, signage), with
- *             per-vertex metalness/roughness and emissive.
- *
- * All three carry an ANALYTIC sky model matching src/render/sky.ts, so glass
- * and wet asphalt reflect the magenta-orange dome even though the scene has no
- * environment map. If the lighting agent later installs a real IBL, drop
- * `uEnvMix` toward 0 rather than deleting the code.
+/** Three batched PBR materials for the city: facade grammar, street surfaces,
+ * and vertex-coloured detail. Metre-space shading provides panel repairs,
+ * window reveals and localized wetness without per-building draw calls.
  */
 
 import * as THREE from 'three';
-import { Atmosphere, HeroSun } from '../../artDirection';
+import { Atmosphere, HeroSun, Palette } from '../../artDirection';
 import { srgb } from '../../render/materials';
+import { createScannedMaterials, WALL_SCAN_GLSL, SURFACE_SCAN_GLSL } from './scannedMaterials';
 
 export const FacadeStyle = {
   glassCorporate: 0,
@@ -162,36 +139,7 @@ float fasciaLetters(float su, float sv, float id) {
   return inBand * inked * stem * (1.0 - wordGap) * (1.0 - bowl);
 }
 
-/**
- * GEOMETRIC RELIEF FROM A PROCEDURAL HEIGHT FIELD.
- *
- * A curtain wall painted as a flat rectangle with a grid drawn on it is the
- * single clearest tell that a building is fake: real glazing sits 60-120 mm
- * BEHIND its mullions, every transom throws a hard shadow across the pane
- * under it, and a low sun rakes those reveals into a ladder of light and dark.
- * Painted lines cannot do any of that, because they never change the normal.
- *
- * This is the standard "derivative bump" construction (the same maths three's
- * own perturbNormalArb uses for bump maps), applied to an ANALYTIC height in
- * metres rather than a texture: it costs two derivatives and two cross
- * products, works on any topology, and needs no tangents, no UV unwrap and no
- * texture memory. Everything downstream — the sun, the cascades, the IBL and
- * the specular — then sees the real recessed surface.
- *
- * eyePos and surfN must both be VIEW space; hgt is metres of outward
- * displacement.
- */
-vec3 gtaRelief(vec3 eyePos, vec3 surfN, float hgt, float scale) {
-  vec2 dH = vec2(dFdx(hgt), dFdy(hgt)) * scale;
-  if (dot(dH, dH) < 1e-12) return surfN;
-  vec3 sx = dFdx(eyePos);
-  vec3 sy = dFdy(eyePos);
-  vec3 R1 = cross(sy, surfN);
-  vec3 R2 = cross(surfN, sx);
-  float det = dot(sx, R1);
-  vec3 grad = sign(det) * (dH.x * R1 + dH.y * R2);
-  return normalize(abs(det) * surfN - grad);
-}
+
 `;
 
 /* ------------------------------------------------------------------ */
@@ -239,8 +187,6 @@ struct Fac {
   float rough;
   float metal;
   float ao;
-  /** Outward relief in metres — drives the analytic normal (see gtaRelief). */
-  float height;
   /** Per-pixel weight on the EnvProbe radiance. 1 = the material default. */
   float env;
   /** Extra per-panel normal tilt, in facade tangent space. Glass is never flat. */
@@ -281,16 +227,14 @@ Fac facadeGrammar() {
   float litBias = vFac2.z;
   float tint  = vFac2.w;
 
-  // After dark far more of the city is lit from within, and a dark window at
-  // dusk is a bug (see docs/VISUAL_TARGET.md rule 3).
-  litBias = mix(litBias, clamp(litBias * 1.3 + 0.22, 0.0, 0.94), uNight);
+  // Occupancy leaves dark flats between pools of domestic light.
+  litBias = mix(litBias * 0.72, clamp(litBias * 0.85 + 0.12, 0.0, 0.70), uNight);
 
   f.albedo = uConcrete;
   f.emissive = vec3(0.0);
   f.rough = 0.85;
   f.metal = 0.0;
   f.ao = 1.0;
-  f.height = 0.0;
   f.env = 1.0;
   f.tilt = vec2(0.0);
 
@@ -334,7 +278,7 @@ Fac facadeGrammar() {
      *      reads as cold because that warm stone is next to it. A uniform
      *      glass tower has nothing to be cold against.
      *   2. REAL DEPTH. Glazing sits behind its mullions, transoms project,
-     *      every pane has a reveal and a sill. See f.height / gtaRelief.
+     *      nearby panes have geometric reveals and sills.
      *   3. A MOSAIC, NOT A MIRROR. Each pane is bowed and tinted slightly
      *      differently, so a curtain wall breaks the sunset into a hundred
      *      slightly different slices instead of showing one smooth gradient.
@@ -378,17 +322,14 @@ Fac facadeGrammar() {
       float cut = max(course, joint);
       f.albedo *= 1.0 - 0.30 * cut;
       f.ao = 1.0 - 0.30 * cut;
-      f.height = -0.022 * cut;
       // The slab stands PROUD of the curtain wall it abuts, so its edge throws
       // a shadow onto the glass and the two materials never read as coplanar.
-      f.height += 0.16 * smoothstep(pierW + 0.9, pierW + 0.35, u) * corner;
       // Narrow punched openings, deeply reveal-ed, on the stone.
       float wW = 0.55;
       float wH = floorH * 0.44;
       vec2 wc = vec2(um - bayW * 0.5, vm - floorH * 0.52);
       float win = rectMask(wc, vec2(wW * 0.5, wH * 0.5)) * (1.0 - isGround) * band3;
       f.albedo = mix(f.albedo, vec3(0.014, 0.012, 0.024), win);
-      f.height -= 0.19 * win;
       float lit = step(1.0 - litBias * 0.7, h21(cell * 2.9 + seed));
       f.emissive += mix(uOffice, uPurple, 0.22) * win * lit * 0.056 * uLitGain;
       f.rough = mix(f.rough, 0.4, win);
@@ -415,14 +356,10 @@ Fac facadeGrammar() {
     // ---- relief, in metres of outward displacement ----
     // Glazing recessed 85 mm behind the frame; the transom at each floor line
     // projects a further 40 mm and carries a sill that catches the low sun.
-    f.height = -0.085 * inGlass;
-    f.height += 0.026 * band(vm, transomW * 1.6) * (1.0 - isGround);
     float sillT = smoothstep(spandrel + transomW + 0.10, spandrel + transomW - 0.02, vm)
                 * smoothstep(spandrel - 0.06, spandrel + 0.02, vm);
-    f.height += 0.055 * sillT;
     // Vertical mullions stand proud too, which is what casts the long vertical
     // shadow lines down a curtain wall lit from the side.
-    f.height += 0.020 * max(band(um, mullionW * 1.5), band(um - bayW, mullionW * 1.5));
 
     /* ---- 3. the mosaic ---- */
     // Each pane is a separately-glazed unit: it has its own tint, its own
@@ -446,7 +383,7 @@ Fac facadeGrammar() {
      * is an exaggeration, and it is the exaggeration that buys the mosaic.
      */
     vec2 pn = vec2(um / bayW - 0.5, (vm - spandrel) / max(floorH - spandrel, 0.5) - 0.5);
-    f.tilt = (pn * (0.22 + pid.z * 0.30) + (pid.xy - 0.5) * 0.32) * inGlass;
+    f.tilt = (pn * (0.04 + pid.z * 0.06) + (pid.xy - 0.5) * 0.05) * inGlass;
 
     // DARK glass. Acceptance test from the previous pass still holds: the mean
     // luminance of the tower must sit below the mean luminance of the open sky.
@@ -464,7 +401,7 @@ Fac facadeGrammar() {
     // one of the Builders' purple/magenta fit-outs. That ratio is what gives
     // the tower two hues to play against each other instead of one.
     float rk = h21(cell + 9.0);
-    vec3 room = rk > 0.82 ? mix(uPurple, uMagenta, h11(rk * 31.0)) * 0.55 : uOffice;
+    vec3 room = rk > 0.97 ? mix(uPurple, uMagenta, h11(rk * 31.0)) * 0.35 : uOffice;
     vec3 emis = room * lit * (1.0 - inner * 0.80) * 0.019 * uLitGain;
     emis += room * lit * smoothstep(0.82, 0.98, pane.y) * 0.017 * uLitGain;
 
@@ -504,7 +441,6 @@ Fac facadeGrammar() {
       float joint = band(fract(u / 1.55) - 0.5, 0.018);
       float cut = max(course, joint);
       f.albedo *= 1.0 - 0.32 * cut;
-      f.height = -0.024 * cut;
       /*
        * THE LOBBY. In the reference you look THROUGH the ground floor into a
        * lit room with people and furniture in it, and it glows purple. A flat
@@ -527,12 +463,10 @@ Fac facadeGrammar() {
       f.metal = mix(f.metal, 0.30, glassBand);
       f.rough = mix(f.rough, 0.11, glassBand);
       f.env = mix(f.env, 1.5, glassBand);
-      f.height -= 0.22 * glassBand;
       // Transoms across the shopfront: without them a 4 m tall glazed strip is
       // one undivided sheet, which no real lobby ever is.
       float lt = band(fract((v - 1.6) / 1.6) - 0.5, 0.035) * glassBand;
       f.albedo = mix(f.albedo, uStone * 0.18, lt);
-      f.height += 0.06 * lt;
       f.emissive *= 1.0 - lt * 0.8;
     }
     return f;
@@ -559,7 +493,7 @@ Fac facadeGrammar() {
     reveal *= 1.0 - isGround;
 
     float lit = step(1.0 - litBias, h21(cell * 2.3 + seed));
-    vec3 room = mix(uSodium, uMagenta, h21(cell + 3.0) * 0.35);
+    vec3 room = mix(uSodium, uOffice, h21(cell + 3.0));
     vec2 pane = (wc / vec2(wW, wH)) + 0.5;
     float inner = officeInterior(pane, ch * 53.0 + seed);
     f.albedo = mix(f.albedo, vec3(0.012, 0.010, 0.022), win);
@@ -570,10 +504,6 @@ Fac facadeGrammar() {
     // Real depth: the pane sits 160 mm back inside a 100 mm splayed reveal,
     // and the sill projects. A painted rectangle cannot cast the hard lintel
     // shadow that a low sun puts across the top of every opening.
-    f.height = -0.16 * win - 0.07 * reveal;
-    f.height += 0.05 * band(vm - (floorH * 0.52 - wH * 0.5 - 0.09), 0.05)
-                     * step(abs(wc.x), wW * 0.62);
-    f.height -= 0.02 * pil;
 
     // Sill + lintel shadow.
     f.albedo *= 1.0 - 0.30 * band(vm - (floorH * 0.52 - wH * 0.5 - 0.09), 0.05) * step(abs(wc.x), wW * 0.62);
@@ -609,7 +539,6 @@ Fac facadeGrammar() {
       f.emissive += uOffice * shopGlass * smoothstep(0.72, 0.97, spq.y) * 0.09 * uLitGain;
       // The glazing is 180 mm behind its frame, so the head and the stallriser
       // both throw a shadow into it under a raking sun.
-      f.height -= 0.18 * shopGlass;
       // Fascia sign band above the glazing.
       float fascia = step(groundH - 1.25, v) * step(v, groundH - 0.35);
       f.albedo = mix(f.albedo, mix(uRust, uNeon, sh) * 0.25, fascia);
@@ -631,6 +560,15 @@ Fac facadeGrammar() {
     f.albedo = base * (0.52 + grain * 0.5 + panelTone * 0.22);
     f.rough = 0.92;
 
+    // Individual flats have been re-rendered at different times. Keep repairs
+    // aligned to panels, with rain runoff and exposed aggregate between them.
+    float repaired = step(0.77, h21(cell * 0.73 + seed * 2.7));
+    float repairEdge = rectMask(vec2(bu - 0.5, fv - 0.5), vec2(0.46, 0.46));
+    f.albedo = mix(f.albedo, uStucco * (0.80 + panelTone * 0.22), repaired * repairEdge * 0.56);
+    float runoff = fbmLo(vec2(u * 2.4, v * 0.12) + seed);
+    f.albedo *= 1.0 - smoothstep(0.58, 0.86, runoff) * 0.21;
+    f.rough = 0.86 + grain * 0.12;
+
     // Panel joints — the signature grid of a Romanian bloc.
     float jv = band(fract(u / pw) - 0.5, 0.020);
     float jh = band(fv - 0.5, 0.020 / floorH);
@@ -644,7 +582,8 @@ Fac facadeGrammar() {
     f.ao = mix(1.0, 0.45, balc);
     // Laundry / stored junk colour flecks inside the loggia.
     vec3 junk = h23(cell * 3.3 + seed);
-    f.albedo = mix(f.albedo, junk * 0.5, balc * step(0.55, junk.x) * step(vm, floorH * 0.55));
+    vec3 stored = mix(uRust * 0.28, uStone * 0.38, junk.y);
+    f.albedo = mix(f.albedo, stored, balc * step(0.55, junk.x) * step(vm, floorH * 0.55));
 
     // Windows: mismatched frames — some white PVC, some brown timber.
     float wW = bayW * (0.34 + 0.10 * h11(bi + fi * 3.0 + seed));
@@ -657,10 +596,9 @@ Fac facadeGrammar() {
     f.albedo = mix(f.albedo, frameCol, frame);
     // Panel joints are 20 mm recesses, loggias are 700 mm ones, and the glass
     // is 140 mm behind its frame. On a bloc that grid of relief IS the facade.
-    f.height = -0.020 * max(jv, jh) - 0.70 * balc - 0.14 * win + 0.02 * frame;
 
     float lit = step(1.0 - litBias, h21(cell * 1.3 + seed * 2.0));
-    vec3 room = mix(uSodium, uMagenta, h21(cell + 7.0) * 0.6);
+    vec3 room = mix(uSodium, uOffice, h21(cell + 7.0));
     vec2 pane = (wc / vec2(wW, wH)) + 0.5;
     float inner = officeInterior(pane, ch * 31.0 + seed);
     f.albedo = mix(f.albedo, vec3(0.010, 0.009, 0.020), win);
@@ -717,10 +655,9 @@ Fac facadeGrammar() {
     f.albedo = mix(f.albedo, base * 1.35, trim);
     f.albedo = mix(f.albedo, vec3(0.014, 0.011, 0.024), win);
     // Moulded architrave proud of the render, glass deep behind it.
-    f.height = 0.055 * trim - 0.20 * win + 0.03 * pil;
 
     float lit = step(1.0 - litBias, h21(cell * 1.9 + seed));
-    vec3 room = mix(uSodium, uNeon, h21(cell + 2.0) * 0.5);
+    vec3 room = mix(uSodium, uOffice, h21(cell + 2.0));
     f.emissive += room * lit * win * 0.075 * uLitGain;
     f.metal = mix(f.metal, 0.0, win);
     f.rough = mix(f.rough, 0.42, win);
@@ -789,9 +726,8 @@ Fac facadeGrammar() {
     f.albedo = mix(f.albedo, vec3(0.016, 0.013, 0.026), win);
     // A giant order only reads if the pilasters actually project and the
     // windows actually recede; on the Palace axis this is the whole effect.
-    f.height = 0.11 * pil * aboveBase - 0.30 * win - 0.10 * rev;
     float lit = step(1.0 - litBias, h21(cell * 2.7 + seed));
-    f.emissive += mix(uSodium, uPurple, 0.25) * win * lit * 0.06 * uLitGain;
+    f.emissive += mix(uSodium, uOffice, 0.65) * win * lit * 0.06 * uLitGain;
     f.metal = mix(f.metal, 0.0, win);
     f.rough = mix(f.rough, 0.42, win);
 
@@ -816,7 +752,6 @@ Fac facadeGrammar() {
     f.rough = 0.62 - rib * 0.12;
     // Corrugated sheet is 25 mm deep. As relief it self-shades under the low
     // sun; as an albedo ripple it was a painted stripe that never moved.
-    f.height = rib * 0.025;
 
     // Horizontal fixing lines.
     f.albedo *= 1.0 - 0.20 * band(fract(v / 2.4) - 0.5, 0.02);
@@ -830,7 +765,7 @@ Fac facadeGrammar() {
     float mull = band(fract(u / 1.5) - 0.5, 0.06);
     f.albedo = mix(f.albedo, vec3(0.02, 0.018, 0.032), strip * (1.0 - mull));
     float lit = step(1.0 - litBias * 0.8, h21(vec2(floor(u / 1.5), 0.0) + seed));
-    f.emissive += mix(uSodium, uPurple, 0.3) * strip * (1.0 - mull) * lit * 0.07 * uLitGain;
+    f.emissive += mix(uSodium, uOffice, 0.75) * strip * (1.0 - mull) * lit * 0.07 * uLitGain;
     f.metal = mix(f.metal, 0.0, strip * (1.0 - mull));
     f.rough = mix(f.rough, 0.40, strip * (1.0 - mull));
 
@@ -903,7 +838,6 @@ Fac facadeGrammar() {
     // A projecting string course at every floor line. This is the single
     // strongest cue in the whole style: it is what turns a wall into a stack.
     float courseT = band(vm, 0.13);
-    f.height += 0.075 * courseT;
     f.albedo *= 1.0 - 0.16 * band(vm - 0.16, 0.05);   // shadow under it
 
     /* ---- continuous balconies ---- */
@@ -916,11 +850,9 @@ Fac facadeGrammar() {
     float inRecess = hasBalc * step(recessLo, vm) * step(vm, recessHi) * (1.0 - isGround);
     f.albedo = mix(f.albedo, base * 0.30, inRecess);
     f.ao = mix(f.ao, 0.40, inRecess);
-    f.height -= 0.62 * inRecess;
     // Parapet: a solid render band standing in front of the recess, with a
     // coping line along its top. Rendered as relief so it self-shades.
     float parapetT = hasBalc * band(vm - (recessLo + 0.02), 0.34) * (1.0 - isGround);
-    f.height += 0.50 * parapetT;
     f.albedo = mix(f.albedo, base * (0.86 + grain * 0.3), parapetT);
     f.albedo *= 1.0 - 0.22 * band(vm - (recessLo + 0.36), 0.035) * hasBalc;
 
@@ -937,10 +869,8 @@ Fac facadeGrammar() {
     f.albedo = mix(f.albedo, vec3(0.013, 0.011, 0.023), win);
     f.albedo = mix(f.albedo, base * 0.9, mull);
     f.albedo *= 1.0 - 0.42 * reveal;
-    f.height += -0.17 * win - 0.07 * reveal + 0.03 * mull;
     // Projecting sill, which is where the staining starts.
     float sill = band(vm - (floorH * 0.66 - wH * 0.5 - 0.07), 0.055) * step(abs(wc.x), wW * 0.60);
-    f.height += 0.05 * sill;
 
     float lit = step(1.0 - litBias, h21(cell * 3.1 + seed));
     vec3 room = mix(uSodium, uOffice, h21(cell + 5.0) * 0.7);
@@ -969,7 +899,6 @@ Fac facadeGrammar() {
     float roundR = 1.7 + 1.4 * h11(seed * 5.9);
     float corner = 1.0 - smoothstep(roundR, roundR + 0.7, u);
     f.albedo = mix(f.albedo, base * (0.94 + grain * 0.24), corner * 0.85);
-    f.height = mix(f.height, 0.045, corner * 0.9);
     f.ao = mix(f.ao, 1.0, corner);
 
     /* ---- cornice ---- */
@@ -992,7 +921,6 @@ Fac facadeGrammar() {
       float shopInner = officeInterior(spq, sh * 67.0 + seed);
       f.emissive += sign * shopGlass * (1.0 - shopInner * 0.82) * (0.07 + sh * 0.10) * uLitGain;
       f.emissive += uOffice * shopGlass * smoothstep(0.72, 0.97, spq.y) * 0.09 * uLitGain;
-      f.height -= 0.18 * shopGlass;
       // Fascia band over the shopfront.
       float fascia = step(groundH - 1.20, v) * step(v, groundH - 0.30);
       f.albedo = mix(f.albedo, mix(uRust, uNeon, sh) * 0.24, fascia);
@@ -1043,8 +971,6 @@ struct Surf {
   float metal;
   /** Per-pixel weight on the EnvProbe radiance — this is the wet reflection. */
   float env;
-  /** Outward relief in metres (kerb arrises, sett domes, paving joints). */
-  float height;
 };
 
 Surf surfaceShade() {
@@ -1061,7 +987,6 @@ Surf surfaceShade() {
   s.rough = 0.6;
   s.metal = 0.0;
   s.env = 1.0;
-  s.height = 0.0;
 
   float wet = uWetness;
   /** Extra wetness on top of the base mask — gutters, low spots, tram beds. */
@@ -1080,6 +1005,12 @@ Surf surfaceShade() {
     // there was no contrast for the wet end to be wet AGAINST and the whole
     // carriageway collapsed into one reflectivity.
     s.rough = 0.78 - grain * 0.12;
+    if (uRoadScanReady > 0.5) {
+      vec3 roadARM = texture2D(uRoadARM, wp / 3.0).rgb;
+      s.albedo = texture2D(uRoadColor, wp / 3.0).rgb * (0.86 + coarse * 0.22);
+      s.albedo *= mix(1.0, roadARM.r, 0.35);
+      s.rough = clamp(roadARM.g, 0.70, 0.96);
+    }
 
     /*
      * THE CROSS-SECTION ONLY EXISTS ON A RIBBON.
@@ -1180,7 +1111,7 @@ Surf surfaceShade() {
     float dirt = fbmLo(wp * 0.55);
     s.albedo = uPaveStone * (0.55 + tone * 0.30 + dirt * 0.42);
     vec2 fj = abs(fract(g) - 0.5);
-    float joint = max(band(fj.x - 0.5, 0.035), band(fj.y - 0.5, 0.035));
+    float joint = max(band(fj.x - 0.5, 0.009), band(fj.y - 0.5, 0.009));
     s.albedo *= 1.0 - 0.42 * joint;
     /*
      * A PAVEMENT IS DRY, ROUGH, DUSTY STONE. 0.72 was glossy enough that the
@@ -1197,7 +1128,6 @@ Surf surfaceShade() {
     // Slab joints are 8 mm recesses; sunken slabs hold water. Both are relief.
     float broken = step(0.955, h21(cellId * 1.7 + 4.0));
     s.albedo *= 1.0 - 0.35 * broken;
-    s.height = -0.02 * broken;
     // Water sits in the joints and in every sunken slab — this is what makes a
     // wet pavement read as paving rather than as one shiny sheet.
     //
@@ -1211,6 +1141,11 @@ Surf surfaceShade() {
     // are isolated events rather than a continuous sheet.
     pooling = broken * 0.55 - 0.34;
     wet *= 0.30;
+    if (uPavingScanReady > 0.5) {
+      vec3 pavingARM = texture2D(uPavingARM, wp / 1.5).rgb;
+      s.albedo = texture2D(uPavingColor, wp / 1.5).rgb * mix(1.0, pavingARM.r, 0.5);
+      s.rough = clamp(pavingARM.g, 0.78, 0.98);
+    }
   } else if (kind < 2.5) {
     /* ---- kerb face ---- */
     float grain = fbm2(wp * 3.0 + vWPosS.y * 4.0);
@@ -1254,7 +1189,14 @@ Surf surfaceShade() {
     filmMirror = 0.14;
     pooling = -0.22;
     wet *= 0.62;
-    s.height = -0.012 * joint;
+    if (uWallScanReady > 0.5) {
+      vec3 plazaARM = texture2D(uWallARM, wp / 2.0).rgb;
+      // Broad civic slabs retain their layout; scanned aggregate replaces the flat fill.
+      float fineJoint = max(band(fj.x - 0.5, 0.002), band(fj.y - 0.5, 0.002));
+      s.albedo = texture2D(uWallColor, wp / 2.0).rgb * vec3(1.14, 1.17, 1.20);
+      s.albedo *= (1.0 - fineJoint * 0.35) * (0.88 + tone * 0.18);
+      s.rough = clamp(plazaARM.g, 0.80, 0.98);
+    }
   } else if (kind < 4.5) {
     /* ---- lawn ---- */
     float n = fbm2(wp * 2.2);
@@ -1318,7 +1260,6 @@ Surf surfaceShade() {
     filmMirror = 0.45;
     // Setts are domed and their gaps are 15 mm deep: real relief, so a low sun
     // rakes across a cobbled street instead of shading a painted pattern.
-    s.height = dome * 0.016;
     pooling = (1.0 - dome) * 0.35 - 0.15;
   }
 
@@ -1370,7 +1311,6 @@ Surf surfaceShade() {
   // A water film FILLS surface relief; a near-mirror that still carries
   // aggregate normals turns every bump into its own glint and the road reads
   // as glitter under a low sun.
-  s.height *= 1.0 - wetAmt * mix(0.5, 0.97, standing);
 
   // 2 + 3 + 4. Hand the reflection to the probe.
   float fres = pow(1.0 - max(dot(-vd, nrm), 0.0), 5.0);
@@ -1596,36 +1536,14 @@ function sunDirection(): THREE.Vector3 {
   ).normalize();
 }
 
-/**
- * THE CITY'S SURFACE COLOURS, decoded exactly once.
- *
- * `src/artDirection.ts` double-decodes every entry in `Palette` (see the note
- * in `src/render/materials.ts`), which crushed travertine from a warm cream at
- * 0.59 luminance to a burnt red at 0.31, concrete to near-black and asphalt to
- * literal zero. With every warm albedo gone, the only things left carrying any
- * value in the frame were the emissive and sky-reflection terms — all of them
- * magenta — which is precisely why the whole city rendered as one flat mauve
- * wash with no warm surface anywhere.
- *
- * These are authored against the reference frame and go through `srgb()`.
- */
+/** Weathered architectural albedos, kept separate from light-source colours. */
 const C = {
-  /*
-   * MEASURED, not guessed. `window.__GTA_POST__.meter()` against the reference
-   * frame's own histogram (p05 12 / p50 50 / p95 165, mean 66, saturation 0.29)
-   * is the acceptance test. Authored a stop brighter than this the city
-   * metered p50 100 / mean 101 / saturation 0.47 — a full stop hot and 1.6x
-   * over-saturated, i.e. blown cream facades instead of raking warm stone.
-   * These are real architectural albedos: travertine 0.33 linear, limestone
-   * 0.40, render 0.27, precast concrete 0.15.
-   */
-  /** The frame's warm anchor. Travertine catching a 3-degree sun. */
   travertine: srgb(0x9d8464),
   stone: srgb(0xaba191),
-  stucco: srgb(0x84715f),
-  concrete: srgb(0x655f6b),
+  stucco: srgb(0x9b9180),
+  concrete: srgb(0x77776f),
   /** Curtain-wall glass is the DARKEST large mass in the reference. */
-  glassTint: srgb(0x1d2647),
+  glassTint: srgb(0x28353c),
   purple: srgb(0x7b3fd4),
   magenta: srgb(0xc04ad0),
   sodium: srgb(0xffb14a),
@@ -1640,19 +1558,19 @@ const C = {
    * never its own surface, and why it read either as a black hole or as a pale
    * mirror with nothing in between.
    */
-  asphalt: srgb(0x37333d),
-  paveStone: srgb(0x564e5b),
-  kerb: srgb(0x66606c),
+  asphalt: srgb(0x393937),
+  paveStone: srgb(0x696860),
+  kerb: srgb(0x78786e),
   grass: srgb(0x545c34),
   gravel: srgb(0x4b423a),
   water: srgb(0x1b2434),
   marking: srgb(0xb2ac9f),
-  skyHorizon: srgb(0xff7a3c),
-  skyLow: srgb(0xff5f86),
-  skyMid: srgb(0xd0569f),
-  skyHigh: srgb(0x6b4192),
-  skyZenith: srgb(0x231a45),
-  sunCore: srgb(0xffd9a8),
+  skyHorizon: Palette.skyHorizon,
+  skyLow: Palette.skyLowBand,
+  skyMid: Palette.skyMidBand,
+  skyHigh: Palette.skyHighBand,
+  skyZenith: Palette.skyZenith,
+  sunCore: Palette.sunCore,
 } as const;
 
 function skyUniforms(shared: CityMaterials['shared']): Record<string, THREE.IUniform> {
@@ -1669,6 +1587,7 @@ function skyUniforms(shared: CityMaterials['shared']): Record<string, THREE.IUni
 }
 
 export function createCityMaterials(): CityMaterials {
+  const scans = createScannedMaterials();
   const shared: CityMaterials['shared'] = {
     uSunDir: { value: sunDirection() },
     uWetness: { value: Atmosphere.wetness as number },
@@ -1703,7 +1622,7 @@ export function createCityMaterials(): CityMaterials {
     dithering: true,
   });
   facade.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, skyUniforms(shared), {
+    Object.assign(shader.uniforms, skyUniforms(shared), scans.uniforms, {
       uTravertine: { value: C.travertine },
       uConcrete: { value: C.concrete },
       uStucco: { value: C.stucco },
@@ -1723,11 +1642,21 @@ export function createCityMaterials(): CityMaterials {
       .replace('#include <common>', `#include <common>\n${FACADE_VERT_PARS}`)
       .replace('#include <fog_vertex>', `#include <fog_vertex>\n${FACADE_VERT_MAIN}`);
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', `#include <common>\n${FACADE_FRAG_PARS}`)
+      .replace('#include <common>', `#include <common>\n${FACADE_FRAG_PARS}\n${WALL_SCAN_GLSL}`)
       .replace(
         '#include <map_fragment>',
         /* glsl */ `
         Fac _f = facadeGrammar();
+        // Keep glazing and polished trim separate from scanned porous masonry.
+        float _wallScan = uWallScanReady * smoothstep(0.56, 0.78, _f.rough);
+        vec2 _wallUV = vUvM / 2.0;
+        if (_wallScan > 0.0) {
+          vec3 _wallColor = texture2D(uWallColor, _wallUV).rgb;
+          vec3 _wallARM = texture2D(uWallARM, _wallUV).rgb;
+          _f.albedo *= mix(vec3(1.0), clamp(_wallColor / 0.135, vec3(0.32), vec3(2.2)), _wallScan * 0.82);
+          _f.rough = mix(_f.rough, max(0.72, _wallARM.g), _wallScan);
+          _f.ao *= mix(1.0, _wallARM.r, _wallScan * 0.65);
+        }
         _f.emissive *= uEmissiveGain;
         _f.env *= uEnvGain;
         // Distance LOD. Window bays are ~1.2 m; past a few hundred metres they
@@ -1760,23 +1689,20 @@ export function createCityMaterials(): CityMaterials {
         '#include <emissivemap_fragment>',
         'totalEmissiveRadiance = _f.emissive;',
       )
-      /*
-       * GEOMETRIC RELIEF. The grammar's height field becomes a real normal
-       * here, so mullions, reveals, sills, panel joints and pilasters are lit
-       * by the actual sun and the actual cascades rather than being painted on.
-       * The pane tilt is applied on top: each glazing unit is bowed a fraction
-       * of a degree differently, which is what breaks a curtain wall into a
-       * mosaic of sky slices instead of one smooth gradient.
-       *
-       * The relief fades out with distance for the same reason the emissive
-       * does — a 55 mm reveal below a pixel is nothing but aliasing.
-       */
+      // Scanned wall normals and per-pane tilt complement geometric window depth.
       .replace(
         '#include <normal_fragment_maps>',
         /* glsl */ `
         #include <normal_fragment_maps>
         {
-          vec3 _eye = (viewMatrix * vec4(vWPosF, 1.0)).xyz;
+
+          if (_wallScan > 0.0 && abs(vWNrmF.y) < 0.55) {
+            vec3 _wnScan = normalize(vWNrmF);
+            vec3 _txScan = normalize(cross(vec3(0, 1, 0), _wnScan));
+            vec3 _bumpScan = texture2D(uWallNormal, _wallUV).xyz * 2.0 - 1.0;
+            vec3 _scanN = normalize(_wnScan + (_txScan * _bumpScan.x + vec3(0, 1, 0) * _bumpScan.y) * 0.48);
+            normal = normalize(mix(normal, (viewMatrix * vec4(_scanN, 0)).xyz, _wallScan));
+          }
           float _texel = max(fwidth(vUvM.x), fwidth(vUvM.y));
           float _rk = 1.0 - smoothstep(0.014, 0.055, _texel);
           if (_rk > 0.002) {
@@ -1786,9 +1712,9 @@ export function createCityMaterials(): CityMaterials {
             vec3 _tan = normalize(cross(vec3(0.0, 1.0, 0.0), _wn) + vec3(1e-5));
             vec3 _bit = cross(_wn, _tan);
             vec3 _tilted = normalize(_wn + (_tan * _f.tilt.x + _bit * _f.tilt.y) * _rk);
-            normal = normalize(mix(normal, normalize((viewMatrix * vec4(_tilted, 0.0)).xyz), _rk));
-            normal = gtaRelief(_eye, normal, _f.height, 11.0 * _rk);
+            normal = normalize(normal + (viewMatrix * vec4(_tilted - _wn, 0.0)).xyz * _rk);
           }
+          // Window depth is geometry; scanned masonry supplies the fine normal.
         }
         `,
       )
@@ -1840,7 +1766,7 @@ export function createCityMaterials(): CityMaterials {
         `,
       );
   };
-  facade.customProgramCacheKey = () => 'gta-facade-v7';
+  facade.customProgramCacheKey = () => 'gta-facade-v8-scanned';
 
   /* ---- surface ---- */
   const surface = new THREE.MeshStandardMaterial({
@@ -1880,7 +1806,7 @@ export function createCityMaterials(): CityMaterials {
     dithering: true,
   });
   surface.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, skyUniforms(shared), {
+    Object.assign(shader.uniforms, skyUniforms(shared), scans.uniforms, {
       uAsphalt: { value: C.asphalt },
       uPaveStone: { value: C.paveStone },
       uKerb: { value: C.kerb },
@@ -1895,7 +1821,7 @@ export function createCityMaterials(): CityMaterials {
       .replace('#include <common>', `#include <common>\n${SURF_VERT_PARS}`)
       .replace('#include <fog_vertex>', `#include <fog_vertex>\n${SURF_VERT_MAIN}`);
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', `#include <common>\n${SURF_FRAG_PARS}`)
+      .replace('#include <common>', `#include <common>\n${SURFACE_SCAN_GLSL}\n${SURF_FRAG_PARS}`)
       .replace(
         '#include <map_fragment>',
         /* glsl */ `
@@ -1906,18 +1832,31 @@ export function createCityMaterials(): CityMaterials {
       .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = clamp(_s.rough, 0.02, 1.0);')
       .replace('#include <metalnessmap_fragment>', 'float metalnessFactor = clamp(_s.metal, 0.0, 1.0);')
       .replace('#include <emissivemap_fragment>', 'totalEmissiveRadiance = _s.emissive;')
-      // Kerb arrises, paving joints and sett domes as real relief, so the low
-      // sun rakes across them. Faded out well before they fall under a pixel.
+      // World-space scan normals keep the aggregate and stone relief attached
+      // to the surface under camera movement.
       .replace(
         '#include <normal_fragment_maps>',
         /* glsl */ `
         #include <normal_fragment_maps>
         {
-          float _texel = max(fwidth(vWPosS.x), fwidth(vWPosS.z));
-          float _rk = 1.0 - smoothstep(0.006, 0.03, _texel);
-          if (_rk > 0.002 && abs(_s.height) > 1e-5) {
-            normal = gtaRelief((viewMatrix * vec4(vWPosS, 1.0)).xyz, normal, _s.height, 12.0 * _rk);
+          vec2 _scanUV = vWPosS.xz;
+          vec3 _scanBump = vec3(0, 0, 1);
+          float _scanWeight = 0.0;
+          if (vSurf.x < 0.5) {
+            _scanBump = texture2D(uRoadNormal, _scanUV / 3.0).xyz * 2.0 - 1.0;
+            _scanWeight = uRoadScanReady * 0.50;
+          } else if (vSurf.x < 1.5) {
+            _scanBump = texture2D(uPavingNormal, _scanUV / 1.5).xyz * 2.0 - 1.0;
+            _scanWeight = uPavingScanReady * 0.65;
+          } else if (vSurf.x > 2.5 && vSurf.x < 3.5) {
+            _scanBump = texture2D(uWallNormal, _scanUV / 2.0).xyz * 2.0 - 1.0;
+            _scanWeight = uWallScanReady * 0.35;
           }
+          if (abs(vWNrmS.y) > 0.55 && _scanWeight > 0.0) {
+            vec3 _scanN = normalize(vWNrmS + vec3(_scanBump.x, 0, _scanBump.y) * _scanWeight);
+            normal = normalize((viewMatrix * vec4(_scanN, 0)).xyz);
+          }
+          // Scanned normals supply relief without differentiating the AA joint mask.
         }
         `,
       )
@@ -2025,7 +1964,7 @@ export function createCityMaterials(): CityMaterials {
         `,
       );
   };
-  surface.customProgramCacheKey = () => 'gta-surface-v16';
+  surface.customProgramCacheKey = () => 'gta-surface-v17-scanned';
 
   /* ---- detail ---- */
   const detail = new THREE.MeshStandardMaterial({
@@ -2038,13 +1977,13 @@ export function createCityMaterials(): CityMaterials {
     dithering: true,
   });
   detail.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, skyUniforms(shared), {
+    Object.assign(shader.uniforms, skyUniforms(shared), scans.uniforms, {
       uNight: shared.uNight,
       uTime: shared.uTime,
     });
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>\n${DETAIL_VERT_PARS}`)
-      .replace('#include <fog_vertex>', `#include <fog_vertex>\n${DETAIL_VERT_MAIN}`);
+      .replace('#include <begin_vertex>', `#include <begin_vertex>\n${DETAIL_VERT_MAIN}`);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>\n${DETAIL_FRAG_PARS}`)
       .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = clamp(vMR.y, 0.03, 1.0);')
@@ -2137,6 +2076,7 @@ export function createCityMaterials(): CityMaterials {
       shared.uWetness.value = w;
     },
     dispose() {
+      scans.dispose();
       facade.dispose();
       surface.dispose();
       detail.dispose();

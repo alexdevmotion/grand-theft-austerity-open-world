@@ -51,6 +51,8 @@ const CAMBER = 0.09;
 const TRAM_GAUGE = 1.435;
 
 export interface ChunkSink {
+  /** Raised landmark decks override the road ribbon beneath them. */
+  groundHeight?(x: number, z: number): number | undefined;
   surf(x: number, z: number): SurfaceBuilder;
   detail(x: number, z: number): DetailBuilder;
   facade(x: number, z: number): FacadeBuilder;
@@ -142,7 +144,7 @@ export function buildRoads(opt: RoadBuildOptions): void {
    *
    * `covered` is true inside the imported OSM extent. Two things still come
    * from the grid in there and only two: the N–S and E–W monumental axes. Casa
-   * Constructorilor's forecourt, the Dacia's kerbside slot, the barricade and
+   * Builderilor's forecourt, the Dacia's kerbside slot, the barricade and
    * the Parliament axis are all authored against those two centrelines, and the
    * survey has no boulevard on either of them (real Bucharest's Magheru and
    * Regina Elisabeta run close, which is exactly why the fit was chosen — but
@@ -230,14 +232,14 @@ export function buildRoads(opt: RoadBuildOptions): void {
       const off = (l + 0.5) * laneW;
       opt.lanes.push({
         fromNode: from, toNode: to, lane: l,
-        ax: ax - px * off, az: az - pz * off,
-        bx: bx - px * off, bz: bz - pz * off,
+        ax: ax + px * off, az: az + pz * off,
+        bx: bx + px * off, bz: bz + pz * off,
         width: laneW,
       });
       opt.lanes.push({
         fromNode: to, toNode: from, lane: l,
-        ax: bx + px * off, az: bz + pz * off,
-        bx: ax + px * off, bz: az + pz * off,
+        ax: bx - px * off, az: bz - pz * off,
+        bx: ax - px * off, bz: az - pz * off,
         width: laneW,
       });
     }
@@ -325,7 +327,7 @@ export function buildRoads(opt: RoadBuildOptions): void {
         const sbx = cx + ux * dir * (depth / 2 + 0.55);
         const sbz = cz + uz * dir * (depth / 2 + 0.55);
         zs.ribbon(
-          sbx, sbz, sbx - px * (width / 2 - 0.5), sbz - pz * (width / 2 - 0.5),
+          sbx, sbz, sbx - px * dir * (width / 2 - 0.5), sbz - pz * dir * (width / 2 - 0.5),
           0.45, 0.013, 0,
           { kind: Surf.zebra, a: 1e6, b: 0, seed: 1 }, 1,
           CAMBER, 0, -(width / 2 - 0.5) / (width / 2),
@@ -782,7 +784,9 @@ function dressOsmEdge(
       const cz = sz + uz * t + pz * side * (e.width / 2 - 2.0);
       parkedCar(
         sink.detail(cx, cz), cx, cz,
-        Math.atan2(ux, uz) + (side > 0 ? Math.PI : 0) + rng.range(-0.03, 0.03), rng,
+        Math.atan2(-uz, ux) + (side > 0 ? Math.PI : 0) + rng.range(-0.03, 0.03), rng,
+        sink.groundHeight?.(cx, cz) ?? (e.width > 0
+          ? OSM_CAMBER * (1 - (1 - 4 / e.width) ** 2) : KERB_H),
       );
     }
   }
@@ -1020,7 +1024,7 @@ export function fillOsmGround(
  * Their carriageways come from the grid, but their pavements used to come from
  * the block rings — and inside the imported extent there are no blocks left to
  * draw them. Without this the monumental axis is a 42 m strip of tarmac with
- * the bare ground either side, which is where Casa Constructorilor stands.
+ * the bare ground either side, which is where Casa Builderilor stands.
  */
 export function dressAuthoredAxes(
   sink: ChunkSink,
@@ -1231,7 +1235,8 @@ function dressBlock(
         const cx = px + ed.ox * 2.1;
         const cz = pz + ed.oz * 2.1;
         const heading = ed.alongX ? 0 : Math.PI / 2;
-        parkedCar(sink.detail(cx, cz), cx, cz, heading + rng.range(-0.03, 0.03), rng);
+        parkedCar(sink.detail(cx, cz), cx, cz, heading + rng.range(-0.03, 0.03), rng,
+          sink.groundHeight?.(cx, cz) ?? CAMBER * (1 - (1 - 4.2 / ROAD_WIDTH[ed.rank]) ** 2));
       }
     }
   }

@@ -25,6 +25,7 @@ import * as THREE from 'three';
 import type { GameContext, System } from '../core/engine';
 import { Services } from '../core/services';
 import { hintRows } from '../core/keyHints';
+import { t } from '../core/i18n';
 import {
   WALK_STEPS,
   noSignals,
@@ -206,10 +207,10 @@ export class WalkthroughSystem implements System {
       .join('');
     el.classList.toggle('is-cleared', cleared);
     el.innerHTML = `
-      <p class="gw-kicker">GHID · ${stepCounter(this.index)}</p>
-      <h4 class="gw-title">${cleared ? '✓ ' : ''}${escapeHtml(step.title)}</h4>
+      <p class="gw-kicker">${t('GHID')} · ${stepCounter(this.index)}</p>
+      <h4 class="gw-title">${cleared ? '✓ ' : ''}${escapeHtml(t(step.title))}</h4>
       <div class="gw-keys">${chips}</div>
-      <p class="gw-body">${escapeHtml(step.body)}</p>`;
+      <p class="gw-body">${escapeHtml(t(step.body))}</p>`;
   }
 
   private build(): void {

@@ -235,7 +235,10 @@ export class PoliceSystem implements System {
       this.maintainHelicopter(dt, plan);
     }
 
-    for (const u of this.units) u.update(dt, this.quarry, this.city, this.field, this.stars);
+    for (const u of this.units) {
+      if (u.vehicle.entryReserved) u.vehicle.setControls(0, 0, true);
+      else u.update(dt, this.quarry, this.city, this.field, this.stars);
+    }
 
     this.reportSearch();
     this.pushPanic(dt);
@@ -366,7 +369,7 @@ export class PoliceSystem implements System {
       const far = u.position.distanceTo(this.quarry.position);
       if (u.vehicle.isWrecked && far > 90) { this.retire(i); continue; }
       if (far > 620) { this.retire(i); continue; }
-      if (u.vehicle.occupants.length > 0) { this.retire(i); continue; }
+      if (u.vehicle.occupants.length > 0 || u.vehicle.npcDriver === null) { this.retire(i); continue; }
     }
     // Shed units when the star level falls.
     while (this.units.length > plan.cars) {
@@ -419,6 +422,7 @@ export class PoliceSystem implements System {
       : 'police';
     const v = this.vehicles!.spawn(kind, slot.pos, slot.heading, {
       faction: 'police',
+      npcDriver: 'police',
       colorSeed: 1,
     }) as ControllableVehicle;
     v.setSiren?.(true);

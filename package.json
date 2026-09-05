@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Third-person open-world Bucharest — B★ BUILDERSTAR GAMES",
+  "description": "Third-person open-world Bucharest \u2014 B\u2605 BUILDERSTAR GAMES",
   "scripts": {
     "dev": "vite --port 5273 --strictPort",
     "build": "tsc --noEmit && vite build",
@@ -11,7 +11,12 @@
     "preview": "vite preview --port 5274 --strictPort",
     "shot": "node tools/shot.mjs",
     "test": "bun test",
-    "audio:sync": "node tools/sync-audio.mjs"
+    "audio:sync": "node tools/sync-audio.mjs",
+    "assets:cast": "bun tools/blender/export-cast.ts && blender --background --threads 2 --python tools/blender/build-cast.py && blender --background --threads 2 --python tools/blender/fit-anatomical-cast.py",
+    "assets:vehicles": "bun tools/blender/export-vehicles.ts && blender --background --threads 2 --python tools/blender/build-vehicles.py",
+    "assets:buildings": "bun tools/blender/export-buildings.ts && blender --background --threads 2 --python tools/blender/build-buildings.py",
+    "assets:body": "python3 tools/blender/cook-body.py",
+    "assets:bodies": "bun tools/blender/export-bodies.ts && blender --background --threads 2 --python tools/blender/build-bodies.py"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "0.19.3",

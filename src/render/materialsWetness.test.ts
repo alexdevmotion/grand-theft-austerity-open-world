@@ -1,7 +1,7 @@
 /** Material-level regression checks for matte masonry and localized puddles. */
 
 import { describe, expect, test } from 'bun:test';
-import type * as THREE from 'three';
+import * as THREE from 'three';
 import { Materials, type WetOptions } from './materials';
 import { createCityMaterials } from '../world/city/materials';
 
@@ -80,4 +80,22 @@ describe('the procedural city surface shader', () => {
     city.surface.dispose();
     city.detail.dispose();
   });
+});
+
+
+test('foliage wind changes vertex positions before projection and shadow coordinates', () => {
+  const g = globalThis as unknown as { window?: unknown };
+  if (!g.window) g.window = globalThis;
+  const city = createCityMaterials();
+  const shader = {
+    uniforms: {},
+    vertexShader: THREE.ShaderLib.standard.vertexShader,
+    fragmentShader: THREE.ShaderLib.standard.fragmentShader,
+  };
+  city.detail.onBeforeCompile(shader as unknown as THREE.WebGLProgramParametersWithUniforms, {} as THREE.WebGLRenderer);
+  const wind = shader.vertexShader.indexOf('transformed.x +=');
+  expect(wind).toBeGreaterThan(shader.vertexShader.indexOf('#include <begin_vertex>'));
+  expect(wind).toBeLessThan(shader.vertexShader.indexOf('#include <project_vertex>'));
+  expect(wind).toBeLessThan(shader.vertexShader.indexOf('#include <shadowmap_vertex>'));
+  city.dispose();
 });

@@ -17,6 +17,7 @@
 
 import type { Input, ActionName } from '../../core/input';
 import { glyph } from '../../core/keyHints';
+import { t } from '../../core/i18n';
 
 // The full CONTROLS page still probes the live `Input`; the hint rows the
 // loading curtain and the walkthrough use live in `src/core/keyHints.ts`.
@@ -142,7 +143,7 @@ export function readBindings(input: Input, host: ProbeHost): BindingGroups {
 
   const move = (id: string, label: string, group: BindGroup): string[] => {
     const keys = byMove.get(id) ?? [];
-    if (keys.length) out[group].push({ label, keys: keys.map(glyph) });
+    if (keys.length) out[group].push({ label: t(label), keys: keys.map(glyph) });
     return keys.map(glyph);
   };
 
@@ -150,14 +151,14 @@ export function readBindings(input: Input, host: ProbeHost): BindingGroups {
   const back = move('back', 'Înapoi', 'foot');
   move('left', 'Stânga', 'foot');
   move('right', 'Dreapta', 'foot');
-  out.foot.push({ label: 'Privește în jur', keys: ['MOUSE'] });
+  out.foot.push({ label: t('Privește în jur'), keys: ['MOUSE'] });
 
   // Throttle and steering are the same axes the walk keys drive — derived from
   // the probe, not invented, so a rebind moves both pages at once.
-  if (fwd.length) out.vehicle.push({ label: 'Accelerează', keys: fwd });
-  if (back.length) out.vehicle.push({ label: 'Frânează / marșarier', keys: back });
+  if (fwd.length) out.vehicle.push({ label: t('Accelerează'), keys: fwd });
+  if (back.length) out.vehicle.push({ label: t('Frânează / marșarier'), keys: back });
   const steer = [...(byMove.get('left') ?? []), ...(byMove.get('right') ?? [])].map(glyph);
-  if (steer.length) out.vehicle.push({ label: 'Virează', keys: steer });
+  if (steer.length) out.vehicle.push({ label: t('Virează'), keys: steer });
 
   for (const a of ALL_ACTIONS) {
     const info = ACTION_INFO[a];
@@ -165,11 +166,11 @@ export function readBindings(input: Input, host: ProbeHost): BindingGroups {
     if (a === 'handbrake' && handbrakeKeys.length) continue;
     const keys = byAction.get(a);
     if (!keys?.length) continue;
-    out[info.group].push({ label: info.label, keys: keys.map(glyph) });
+    out[info.group].push({ label: t(info.label), keys: keys.map(glyph) });
   }
   if (handbrakeKeys.length) {
     out.vehicle.push({
-      label: ACTION_INFO.handbrake?.label ?? 'Frână de mână',
+      label: t(ACTION_INFO.handbrake?.label ?? 'Frână de mână'),
       keys: handbrakeKeys.map(glyph),
     });
   }

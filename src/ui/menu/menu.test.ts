@@ -18,6 +18,7 @@ import {
   showsWalkthrough,
   stepSelection,
 } from './panels';
+import { setLang, t } from '../../core/i18n';
 import { hintRow, hintRows, type HintId } from '../../core/keyHints';
 import {
   actNumber,
@@ -123,10 +124,83 @@ test('the walkthrough is for players with nothing to continue', () => {
 
 /* ---- menu row ----------------------------------------------------- */
 
-test('the menu is the five rows the brief asks for', () => {
-  expect(MENU_ITEMS.map((m) => m.id)).toEqual(['start', 'continue', 'controls', 'audio', 'credits']);
+test('the menu is the rows the brief asks for, plus LANGUAGE', () => {
+  expect(MENU_ITEMS.map((m) => m.id)).toEqual([
+    'start', 'continue', 'controls', 'audio', 'language', 'credits',
+  ]);
   expect(MENU_ITEMS[0].sub).toBe('THE LAST SERVER');
   expect(MENU_ITEMS.find((m) => m.id === 'audio')?.label).toBe('SETTINGS');
+});
+
+test('LANGUAGE is labelled in English in both languages', () => {
+  // A player who cannot read the language currently on screen has to be able
+  // to find the row that changes it, so this one label is never translated.
+  const row = MENU_ITEMS.find((m) => m.id === 'language');
+  expect(row?.label).toBe('LANGUAGE');
+  // `finally`, not a trailing call: the language is module-global, and a
+  // failed expectation here would otherwise leave every later test running
+  // against the wrong catalogue.
+  try {
+    setLang('ro');
+    expect(t(row!.label)).toBe('LANGUAGE');
+    setLang('en');
+    expect(t(row!.label)).toBe('LANGUAGE');
+  } finally {
+    setLang('ro');
+  }
+});
+
+test('switching language moves the whole interface and then comes back', () => {
+  try {
+    setLang('en');
+    expect(t('NICIUN PROGRES SALVAT')).toBe('NO SAVED PROGRESS');
+    expect(t('Casa Builderilor')).toBe('The Builders House');
+    // Not in the catalogue: proper nouns fall through rather than blanking.
+    expect(t('Nicușor LAN')).toBe('Nicușor LAN');
+  } finally {
+    setLang('ro');
+  }
+  expect(t('NICIUN PROGRES SALVAT')).toBe('NICIUN PROGRES SALVAT');
+});
+
+test('English covers every page of the pause menu and gameplay notices', () => {
+  const sources = [
+    'PAUZĂ',
+    'MENIU / SETĂRI',
+    'MENIU / COMENZI',
+    'B★ BUILDERSTAR GAMES — TRANSMISIUNE ÎNTRERUPTĂ',
+    'ESC ÎNAPOI · ↑ ↓ NAVIGARE · ← → MODIFICĂ · ENTER SELECTEAZĂ',
+    'REIA JOCUL',
+    'înapoi în București',
+    'SALVEAZĂ',
+    'SETĂRI',
+    'imagine, sunet, mouse',
+    'toate tastele',
+    'progres salvat',
+    'salvarea nu este disponibilă',
+    'scrie progresul în browser',
+    'nivel {level} · {lei} lei · {mins} min',
+    'Calitate imagine',
+    'Volum principal',
+    'Sensibilitate mouse',
+    'Inversează axa Y',
+    'NU',
+    'DA',
+    'Comenzi',
+    'ÎNAPOI',
+    'Citite direct din harta de input a jocului — nu dintr-o listă scrisă de mână.',
+    'BENZI CU ȚINTE — cauciucuri compromise',
+    'Radar Ministerial: viteză înregistrată',
+    'Tracțiune de urgență · mașina a ieșit din blocaj',
+    'Descoperit: {name} · +{gain} XP',
+  ];
+
+  try {
+    setLang('en');
+    for (const source of sources) expect(t(source)).not.toBe(source);
+  } finally {
+    setLang('ro');
+  }
 });
 
 test('selection skips a CONTINUE with nothing to continue', () => {

@@ -5,7 +5,8 @@ import { Rng } from '../../core/rng';
 import { DetailBuilder } from '../city/builders';
 import { planeTree } from '../city/facades';
 import { autumnTree } from './foliage';
-import { PropBuilder } from './kit';
+import { PropBuilder, PropColor } from './kit';
+import * as THREE from 'three';
 
 interface Bounds {
   minY: number;
@@ -66,9 +67,8 @@ interface LeafComponent {
   width: number;
 }
 
-/** Leaf blobs are intentionally emitted as disconnected primitives. Recover
- * those components from the merged index buffer so the near-shell test can
- * measure cluster granularity without coupling to a private builder counter. */
+/** Recover connected leaf surfaces from the merged batch to check their
+ * actual size and topology independently of the spray builder. */
 function leafComponents(props: PropBuilder): LeafComponent[] {
   const n = props.pos.length / 3;
   const parent = Array.from({ length: n }, (_, i) => i);
@@ -158,18 +158,20 @@ describe('late-autumn trees', () => {
     expect(cityTriangles[1]).toBeLessThan(cityTriangles[2]);
   });
 
-  test('near autumn crowns use finer clusters and keep a matte leaf response', () => {
+  test('autumn crowns use individual open leaves and keep a matte response', () => {
     const near = new PropBuilder();
     autumnTree(near, 0, 0, new Rng('near-canopy'), 1, 0.2, 2);
     const mid = new PropBuilder();
     autumnTree(mid, 0, 0, new Rng('near-canopy'), 1, 0.2, 1);
 
-    const nearLeaves = leafComponents(near).filter((c) => c.vertices >= 14);
-    const midLeaves = leafComponents(mid).filter((c) => c.vertices >= 12);
+    const nearLeaves = leafComponents(near);
+    const midLeaves = leafComponents(mid);
     expect(nearLeaves.length).toBeGreaterThan(midLeaves.length);
-    expect(Math.max(...nearLeaves.map((c) => c.width))).toBeLessThan(
-      Math.max(...midLeaves.map((c) => c.width)),
-    );
+    for (const leaf of [...nearLeaves, ...midLeaves]) {
+      expect(leaf.vertices).toBe(6);
+      expect(leaf.width).toBeLessThan(0.30);
+    }
+    expect(near.triangles).toBeLessThan(6000);
 
     const leafRoughness = near.trans
       .map((trans, i) => trans > 0.7 ? near.mr[i * 2 + 1] : null)
@@ -189,4 +191,21 @@ describe('late-autumn trees', () => {
     expect(Math.min(...ratios)).toBeLessThan(1.7);
     expect(Math.max(...ratios)).toBeGreaterThan(2.1);
   });
+});
+
+
+test('leaf sprays have matching front/back winding and retain wind without colliders', () => {
+  const b = new PropBuilder();
+  b.leafSpray(2, 5, -3, 0.8, 0.5, 0.7,
+    { color: PropColor.leafOlive, trans: 0.85, wind: 0.12 }, 42, 5);
+  expect(b.triangles).toBe(40);
+  expect(b.collisionProxies).toHaveLength(0);
+  expect(new Set(b.wind)).toEqual(new Set([0.12]));
+  const v = (i: number) => new THREE.Vector3().fromArray(b.pos, b.idx[i] * 3);
+  for (let i = 0; i < b.idx.length; i += 3) {
+    const geometric = v(i + 1).sub(v(i)).cross(v(i + 2).sub(v(i)));
+    const normal = new THREE.Vector3().fromArray(b.nrm, b.idx[i] * 3);
+    expect(geometric.dot(normal)).toBeGreaterThan(0);
+    expect(normal.length()).toBeCloseTo(1, 5);
+  }
 });

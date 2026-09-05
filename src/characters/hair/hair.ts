@@ -53,27 +53,27 @@ export function shellAlphaTexture(): THREE.CanvasTexture {
   g.fillStyle = '#000';
   g.fillRect(0, 0, STRAND_TEX, STRAND_TEX);
   g.fillStyle = '#fff';
-  g.fillRect(0, 0, STRAND_TEX, STRAND_TEX * 0.66);
-  const grad = g.createLinearGradient(0, STRAND_TEX * 0.66, 0, STRAND_TEX);
+  g.fillRect(0, 0, STRAND_TEX, STRAND_TEX * 0.90);
+  const grad = g.createLinearGradient(0, STRAND_TEX * 0.90, 0, STRAND_TEX);
   grad.addColorStop(0, '#ffffff');
   grad.addColorStop(1, '#000000');
   g.fillStyle = grad;
-  g.fillRect(0, STRAND_TEX * 0.66, STRAND_TEX, STRAND_TEX * 0.34);
+  g.fillRect(0, STRAND_TEX * 0.90, STRAND_TEX, STRAND_TEX * 0.10);
   // Ragged tongues of hair reaching past the average hairline, and bites out of
   // the leading edge, so the hair never ends in a straight line on the forehead.
   g.fillStyle = '#fff';
-  for (let i = 0; i < 120; i++) {
+  for (let i = 0; i < 90; i++) {
     const x = rng.next() * STRAND_TEX;
-    const w = rng.range(1.5, 7);
-    const y0 = STRAND_TEX * rng.range(0.55, 0.74);
-    g.fillRect(x, y0, w, rng.range(10, 62));
+    const w = rng.range(0.8, 2.5);
+    const y0 = STRAND_TEX * rng.range(0.88, 0.94);
+    g.fillRect(x, y0, w, rng.range(6, 18));
   }
   g.fillStyle = '#000';
-  for (let i = 0; i < 150; i++) {
+  for (let i = 0; i < 50; i++) {
     const x = rng.next() * STRAND_TEX;
-    const y = STRAND_TEX * rng.range(0.60, 1.0);
+    const y = STRAND_TEX * rng.range(0.94, 1.0);
     g.beginPath();
-    g.arc(x, y, rng.range(2, 12), 0, 7);
+    g.arc(x, y, rng.range(0.6, 2), 0, 7);
     g.fill();
   }
   const tex = new THREE.CanvasTexture(cv);
@@ -228,7 +228,11 @@ export function createHairMaterial(opts: HairMaterialOptions): THREE.MeshPhysica
     roughness: opts.roughness ?? 0.42,
     metalness: 0,
     alphaMap: opts.shell ? shellAlphaTexture() : strandTexture(),
-    transparent: opts.transparent ?? true,
+    bumpMap: opts.shell ? strandTexture() : null,
+    bumpScale: opts.shell ? 0.00018 : 0,
+    // Cutout strands write a stable depth; alpha blending on thousands of
+    // overlapping cards sorts whole meshes and exposes the pale scalp.
+    transparent: opts.transparent ?? false,
     alphaTest: opts.alphaTest ?? 0.34,
     depthWrite: opts.depthWrite ?? true,
     side: THREE.DoubleSide,
@@ -243,7 +247,8 @@ export function createHairMaterial(opts: HairMaterialOptions): THREE.MeshPhysica
       .replace(
         '#include <begin_vertex>',
         `#include <begin_vertex>
-        vStrandT = normalize( mat3( modelMatrix ) * aStrandTangent );
+        // Direct-light directions and the view direction are in view space.
+        vStrandT = normalize( mat3( modelViewMatrix ) * aStrandTangent );
         vStrandInfo = aStrandInfo;`,
       );
     shader.fragmentShader = shader.fragmentShader

@@ -1,25 +1,11 @@
-/** Exposure + cinematic colour grade.
- *
- *  Two effects live here because they are two halves of one decision:
- *
- *  `ExposureEffect` runs BEFORE tone mapping, in linear HDR. Without it the
- *  AgX curve receives a scene that is a stop and a half under and crushes
- *  everything into the toe — which is exactly why the baseline read as black
- *  silhouettes against a bright sky.
- *
- *  `GradeEffect` runs AFTER tone mapping and behaves like a DI grade:
- *  ASC-CDL lift/gamma/gain, a violet-shadow / orange-highlight split tone, and
- *  an explicit toe lift so that nothing in the frame is ever pure black —
- *  rule 1 of the visual target.
+/** Linear HDR exposure before AgX, followed by a restrained display grade.
+ * ArtDirection owns the defaults. Debug shoulders remain available for
+ * look development but do not compress the scene a second time by default.
  */
 
 import { BlendFunction, Effect } from 'postprocessing';
 import { Uniform, Vector3 } from 'three';
 import { Grade } from '../artDirection';
-
-/* ------------------------------------------------------------------ */
-/* Exposure (pre tone mapping)                                         */
-/* ------------------------------------------------------------------ */
 
 const exposureFragment = /* glsl */ `
 uniform float uExposure;
@@ -29,23 +15,6 @@ uniform float uShoulderKnee;
 void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor) {
   vec3 c = max(inputColor.rgb, 0.0) * uExposure;
 
-  /* SOFT-KNEE SHOULDER, NOT A GLOBAL DIVIDE.
-   *
-   * This used to be c / (1 + c * 1.1), which is a hyperbola with a hard
-   * asymptote at 1/1.1 = 0.909. That single line meant NOTHING IN THE GAME
-   * COULD EVER EXCEED 0.909 LINEAR coming out of this pass — the sun disc, the
-   * horizon rip, a window emissive and a moderately lit wall all arrived at
-   * AgX inside the same half stop. That is the mechanism behind two of the
-   * three headline failures: the sun measured 1.25x brighter than sky 120px
-   * away (it cannot measure more), and bloom's luminance threshold sat at 0.92,
-   * ABOVE the ceiling, so the bloom pass was effectively dead.
-   *
-   * The shoulder below leaves everything under the knee completely untouched —
-   * a lit facade at 0.4 stays 0.4 — and compresses only above it, toward a
-   * ceiling near 21. So the sun still lands two orders of magnitude above the
-   * city, clips its core to white through AgX, and drives bloom, while a
-   * window emissive at 4 linear lands near 3.5 and keeps its hue instead of
-   * becoming flat pastel paper. */
   vec3 over = max(c - uShoulderKnee, 0.0);
   c = min(c, vec3(uShoulderKnee)) + over / (1.0 + over * uHighlightRolloff);
 
@@ -59,15 +28,10 @@ export class ExposureEffect extends Effect {
       blendFunction: BlendFunction.SRC,
       uniforms: new Map<string, Uniform<unknown>>([
         ['uExposure', new Uniform(exposure)],
-        // Where the shoulder starts. Below this, values pass through exactly.
-        // A lit facade measures 0.15-0.4 here, so the whole of the city's
-        // ordinary tonal range is untouched and only genuinely emissive things
-        // are compressed.
-        ['uShoulderKnee', new Uniform(0.72)],
-        // Compression above the knee. Ceiling = knee + 1/rolloff ~= 21 linear,
-        // which is roughly AgX's own white point, so the sun clips there and
-        // nothing else does. Sample points: 1 -> 0.996, 4 -> 3.56, 40 -> 14.3.
-        ['uHighlightRolloff', new Uniform(0.048)],
+
+        ['uShoulderKnee', new Uniform(Grade.exposureKnee)],
+
+        ['uHighlightRolloff', new Uniform(Grade.exposureRolloff)],
       ]),
     });
   }
@@ -84,15 +48,10 @@ export class ExposureEffect extends Effect {
     (this.uniforms.get('uHighlightRolloff') as Uniform<number>).value = v;
   }
 
-  /** Where the highlight shoulder starts, in linear post-exposure units. */
   set knee(v: number) {
     (this.uniforms.get('uShoulderKnee') as Uniform<number>).value = v;
   }
 }
-
-/* ------------------------------------------------------------------ */
-/* Grade (post tone mapping)                                           */
-/* ------------------------------------------------------------------ */
 
 const fragment = /* glsl */ `
 uniform vec3 uLift;
@@ -120,7 +79,6 @@ uniform vec3 uFlashColor;
 
 float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 
-// Hash-based film grain — cheap and stable enough at 60fps.
 float grain(vec2 uv, float t) {
   vec3 p3 = fract(vec3(uv.xyx) * 443.8975 + t * 13.13);
   p3 += dot(p3, p3.yzx + 19.19);
@@ -130,99 +88,32 @@ float grain(vec2 uv, float t) {
 void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor) {
   vec3 c = max(inputColor.rgb, 0.0);
 
-  /* SPLIT TONE: shadows go VIOLET-BLUE, highlights go WARM AMBER.
-   *
-   * This is the one mechanism that keeps light and shadow on opposite sides of
-   * the colour wheel after tone mapping, and it only works if the two weights
-   * do not OVERLAP. The previous balance of 1.35 meant the shadow weight was
-   * still 0.35 at mid-grey while the highlight weight was already 0.26 there,
-   * so every mid-tone in the frame — which at dusk is most of the frame,
-   * including the entire sky gradient — got tinted toward BOTH and came out
-   * the average of the two: a desaturated mauve. That is a large part of why
-   * the whole image measured as one hue.
-   *
-   * At 2.2 the shadow tint is gone by luma 0.45 and the highlight tint has not
-   * started until 0.24, so the two act on genuinely different parts of the
-   * tonal range and the split reads as a split.
-   *
-   * HOW HARD IS MEASURED, NOT CHOSEN. Binning the reference frame by luma and
-   * averaging each bin's RGB gives the actual chroma of its tonal ranges:
-   *
-   *    0- 25   [ 16,  17,  22]   deep shadow — near NEUTRAL, faintly violet
-   *   25- 55   [ 41,  37,  47]   shade       — violet, r ~= g < b
-   *   55-100   [ 94,  69,  78]   mid         — warm magenta
-   *  100-160   [177, 115, 111]   upper mid   — orange
-   *  160-255   [234, 169, 141]   highlight   — amber
-   *
-   * So the reference is not "blue shadows against orange light": its darks are
-   * almost achromatic and ALL of its chroma lives from the mids upward. The
-   * tints below are set from those numbers rather than from taste. */
   float l = luma(c);
   float shadowW = pow(1.0 - clamp(l * uSplitBalance, 0.0, 1.0), 2.0);
   float highW  = pow(clamp((l - 0.24) * 1.75, 0.0, 1.0), 1.15);
   c = mix(c, c * uShadowTint, shadowW * uSplitStrength);
   c = mix(c, c * uHighlightTint, highW * uSplitStrength);
 
-  /* TONAL SHAPE — ORDER MATTERS, AND THE OLD ORDER WAS A BUG.
-   *
-   * This used to be "c = c*gain + lift" immediately followed by a linear
-   * contrast about mid-grey, "c = (c - 0.18)*contrast + 0.18". With
-   * contrast 1.145 that second line subtracts a FLAT 0.0261 from every
-   * channel — while the lift it had just added was (0.020, 0.008, 0.042).
-   *
-   * The green lift, 0.008, is a third of what the contrast then took back.
-   * So for any pixel whose scene green was under ~0.018 linear the green
-   * channel went NEGATIVE and clamped to zero. Measured on the shipping
-   * build, the mean colour of everything below luma 25 in a street framing
-   * was [33, 5, 78]: red and blue carrying the whole image and green DEAD.
-   * The reference frame's own shadows measure [16, 17, 22] — near neutral,
-   * barely violet. That single clip is why the shade read as one screaming
-   * magenta with no modelling in it, and why "shadow colour" scored 4/10.
-   *
-   * The rebuild below can never clip a channel, because nothing subtracts:
-   *
-   *   TOE     a MULTIPLIER that only bites below uToeRange. Ratios survive,
-   *           so a dark surface gets darker without losing its hue. This is
-   *           the contrast the frame was missing.
-   *   SHOULDER a soft compression above uShoulderKnee. The wet carriageway
-   *           mirrors the sunset at up to 0.85 linear over half the frame,
-   *           which is what put a sunward street inside a three-stop
-   *           pale-rose band; the shoulder pulls that back about a stop
-   *           while leaving everything below the knee untouched.
-   *   CDL     lift/gain/gamma LAST, so the violet lift is the final word on
-   *           shadow colour instead of being eaten by the contrast.
-   */
   float lt = luma(c);
   c *= 1.0 - uToeDepth * (1.0 - smoothstep(0.0, uToeRange, lt));
-  // Pivoted power. A pivot keeps the mids where the previous linear contrast
-  // put them; the exponent is what steepens either side of it. Ratio
-  // preserving, so it can neither clip nor shift hue.
+
   c = uPivot * pow(max(c, 0.0) / uPivot, vec3(uContrast));
   vec3 over = max(c - uShoulderKnee, 0.0);
   c = min(c, vec3(uShoulderKnee)) + over / (1.0 + over * uShoulder);
 
-  // ASC CDL: (in * gain + lift) ^ gamma
   c = c * uGain + uLift;
   c = pow(max(c, 0.0), 1.0 / uGamma);
 
-  // Saturation, applied after contrast so the magentas survive AgX.
   float g = luma(c);
-  // Chroma rolloff: bright values desaturate the way film and real sensors do.
-  // Without it a saturated key light drives everything it touches to a single
-  // screaming hue — the frame measured 0.82 saturation against the reference
-  // frame's 0.37 before this was added. It also keeps the sun disc and the
-  // window emissives from clipping as pure primaries.
+
   float rolloff = 1.0 - uChromaRolloff * smoothstep(uChromaKnee, 1.0, g);
   c = mix(vec3(g), c, uSaturation * rolloff);
 
-  // Toe lift: a printed-film black that is violet, never zero. Rule 1.
   c = max(c, 0.0);
   c += uToeColor * uToeLift * (1.0 - smoothstep(0.0, 0.42, luma(c)));
 
-  // Broadcast-hijack / damage flash.
   c = mix(c, uFlashColor, uFlash);
 
-  // Grain, stronger in the shadows the way real sensors behave.
   float gr = grain(uv, uTime);
   c += gr * uGrain * (1.0 - smoothstep(0.0, 0.75, luma(c)));
 
@@ -235,98 +126,36 @@ export class GradeEffect extends Effect {
     super('GradeEffect', fragment, {
       blendFunction: BlendFunction.SRC,
       uniforms: new Map<string, Uniform<unknown>>([
-        /* THE LIFT IS 0.16x THE AUTHORED VALUE, AND GREEN IS NOT STARVED.
-         *
-         * `Grade.liftRGB` is (0.020, 0.008, 0.042). Under the old order that
-         * was immediately followed by a contrast that subtracted 0.026 from
-         * every channel, so what actually reached the screen was a lift of
-         * roughly (0.0, -0.018, 0.016) — i.e. a blue-only lift with green
-         * clamped at zero. The subtraction is gone now (see the fragment), so
-         * the authored number would arrive at full strength and put the black
-         * point of the whole game at sRGB [45, 33, 61]. Measured that way the
-         * frame ran p01 27 / p05 32 against the reference's 5 / 13: no blacks
-         * at all, which is the failure this pass exists to fix.
-         *
-         * The reference's own deep shadow decodes to (0.0054, 0.0058, 0.0081)
-         * linear. Subtracting what `uToeColor * uToeLift` contributes leaves
-         * the values below, and red and green are deliberately level: the
-         * reference's darks are violet by having slightly more BLUE, not by
-         * having no green. artDirection.ts is not this agent's file; this is
-         * the local equivalent of correcting it there. */
-        ['uLift', new Uniform(new Vector3(0.0030, 0.0034, 0.0046))],
+
+        ['uLift', new Uniform(new Vector3(...Grade.liftRGB))],
         ['uGain', new Uniform(new Vector3(...Grade.gainRGB))],
         ['uGamma', new Uniform(new Vector3(...Grade.gammaRGB))],
-        /* Saturation was 0.52x the authored intent — a 40% desaturation of the
-         * whole frame on top of AgX, which already desaturates hard. Between
-         * the two, a hot orange horizon and a violet zenith were being dragged
-         * to within a few degrees of each other and the image measured as one
-         * low-chroma mauve wash. Measured hue histogram of the reference: 43%
-         * of its chromatic pixels are warm (red/orange), 36% cool. The frame
-         * this replaced measured 4-6% warm and 91% cool. */
-        ['uSaturation', new Uniform(Grade.saturation * 1.06)],
-        /* Chroma rolloff still exists — it is what lets the sun's core go
-         * genuinely white instead of clipping as a saturated primary — but it
-         * now starts far higher up. At knee 0.34 it was desaturating every
-         * sunlit facade and the entire horizon rip, i.e. removing exactly the
-         * warmth the key light exists to create. */
-        ['uChromaRolloff', new Uniform(0.40)],
-        // High on purpose. The horizon rip lands around 0.8 luma after tone
-        // mapping; a knee below that desaturates the single most important
-        // warm feature in the frame and turns fire into pale peach.
-        ['uChromaKnee', new Uniform(0.78)],
+
+        ['uSaturation', new Uniform(Grade.saturation)],
+
+        ['uChromaRolloff', new Uniform(Grade.chromaRolloff)],
+
+        ['uChromaKnee', new Uniform(Grade.chromaKnee)],
         ['uContrast', new Uniform(Grade.contrast)],
-        /* Pivot of the contrast power, in post-tone-map linear units.
-         * The reference's median pixel decodes to 0.032 linear and its p75 to
-         * 0.11; 0.10 therefore sits in its upper mid-tone, which is where a
-         * grade should hinge — steepening the shade below it and the sky above
-         * it, and leaving the storey-lit facades in the middle alone. */
-        ['uPivot', new Uniform(0.10)],
-        /* THE SHOULDER, AND THE SPECIFIC THING IT IS FOR.
-         *
-         * A wet carriageway mirrors the sunset dome at up to 0.85 linear and
-         * fills the bottom half of any sunward framing with it. Metered, a
-         * street looking down-sun ran p25 68 / p50 98 / mean 107 against the
-         * reference's 28 / 50 / 66 — the whole ground plane sitting inside one
-         * pale band with nothing dark anywhere in it. The knee is above every
-         * lit facade in the city (those meter 0.15-0.40) so only that mirror,
-         * the sun disc and the window emissives are compressed. */
-        ['uShoulderKnee', new Uniform(0.30)],
-        ['uShoulder', new Uniform(2.60)],
-        /* THE TOE. A multiplier, never a subtraction — see the note in the
-         * fragment. Anything under 0.13 luma is pulled down toward half value,
-         * which is the shadow contrast the frame had none of, and because it
-         * is a multiplier the channel ratios in the shade survive it. */
-        ['uToeDepth', new Uniform(0.42)],
-        ['uToeRange', new Uniform(0.13)],
-        /* Violet-blue, from the measured 25-55 band [41, 37, 47]: red and
-         * green nearly equal, blue a sixth above them. The previous azure
-         * (0.62, 0.88, 1.38) put green a stop under blue and red under that
-         * again — a much harder tint than anything in the reference.
-         *
-         * Green is pushed ABOVE unity here rather than merely spared, and that
-         * is a correction for something upstream: the city's facade shader
-         * carries its own hardcoded magenta sky (`C.sky*` in
-         * src/world/city/materials.ts) into every indirect term, so shaded
-         * masonry arrives at this pass measuring [50, 32, 58] — the
-         * reference's blue with half its green, i.e. MAGENTA shade where the
-         * picture has violet shade. That file is not this agent's; this is as
-         * far as the grade can carry it on its own. */
-        ['uShadowTint', new Uniform(new Vector3(0.78, 1.04, 1.12))],
-        // From the measured 160+ band [234, 169, 141] — amber, but not the
-        // near-monochromatic orange the old 0.48 blue produced.
-        ['uHighlightTint', new Uniform(new Vector3(1.30, 1.00, 0.72))],
-        ['uSplitStrength', new Uniform(0.95)],
-        // The printed black, matched to the reference's deep-shadow [16,17,22]:
-        // barely chromatic. The old (0.048, 0.058, 0.170) is a saturated blue
-        // and, at lift 0.06, was adding a visible indigo haze to every dark
-        // area in the game — the "lifted, tinted toe taken until contrast is
-        // gone" the playtest called out.
-        ['uToeColor', new Uniform(new Vector3(0.070, 0.074, 0.098))],
-        ['uToeLift', new Uniform(0.030)],
-        ['uSplitBalance', new Uniform(2.20)],
-        // Grain reads far stronger over a dark, low-contrast frame than the
-        // authored value assumes; it was the dominant texture in the shadows.
-        ['uGrain', new Uniform(Grade.filmGrain * 0.5)],
+
+        ['uPivot', new Uniform(Grade.contrastPivot)],
+
+        ['uShoulderKnee', new Uniform(Grade.shoulderKnee)],
+        ['uShoulder', new Uniform(Grade.shoulderStrength)],
+
+        ['uToeDepth', new Uniform(Grade.toeDepth)],
+        ['uToeRange', new Uniform(Grade.toeRange)],
+
+        ['uShadowTint', new Uniform(new Vector3(...Grade.shadowRGB))],
+
+        ['uHighlightTint', new Uniform(new Vector3(...Grade.highlightRGB))],
+        ['uSplitStrength', new Uniform(Grade.splitStrength)],
+
+        ['uToeColor', new Uniform(new Vector3(...Grade.toeRGB))],
+        ['uToeLift', new Uniform(Grade.toeLift)],
+        ['uSplitBalance', new Uniform(Grade.splitBalance)],
+
+        ['uGrain', new Uniform(Grade.filmGrain)],
         ['uTime', new Uniform(0)],
         ['uFlash', new Uniform(0)],
         ['uFlashColor', new Uniform(new Vector3(1, 0.35, 0.75))],
@@ -334,7 +163,6 @@ export class GradeEffect extends Effect {
     });
   }
 
-  /** 0..1 full-screen colour flash, decays externally. */
   setFlash(amount: number, r = 1, g = 0.35, b = 0.75): void {
     (this.uniforms.get('uFlash') as Uniform<number>).value = amount;
     (this.uniforms.get('uFlashColor') as Uniform<Vector3>).value.set(r, g, b);
@@ -349,31 +177,26 @@ export class GradeEffect extends Effect {
     if (pivot !== undefined) (this.uniforms.get('uPivot') as Uniform<number>).value = pivot;
   }
 
-  /** Highlight compression: where it starts, and how hard it bites. */
   setShoulder(knee: number, strength?: number): void {
     (this.uniforms.get('uShoulderKnee') as Uniform<number>).value = knee;
     if (strength !== undefined) (this.uniforms.get('uShoulder') as Uniform<number>).value = strength;
   }
 
-  /** Shadow crush: how far dark pixels are pulled down, and up to what luma. */
   setToeDepth(depth: number, range?: number): void {
     (this.uniforms.get('uToeDepth') as Uniform<number>).value = depth;
     if (range !== undefined) (this.uniforms.get('uToeRange') as Uniform<number>).value = range;
   }
 
-  /** How hard the brightest values fall back toward neutral. 0 disables it. */
   setChromaRolloff(v: number, knee?: number): void {
     (this.uniforms.get('uChromaRolloff') as Uniform<number>).value = v;
     if (knee !== undefined) (this.uniforms.get('uChromaKnee') as Uniform<number>).value = knee;
   }
 
-  /** Shadow / highlight tints of the split tone, in linear RGB multipliers. */
   setSplitTint(sr: number, sg: number, sb: number, hr: number, hg: number, hb: number): void {
     (this.uniforms.get('uShadowTint') as Uniform<Vector3>).value.set(sr, sg, sb);
     (this.uniforms.get('uHighlightTint') as Uniform<Vector3>).value.set(hr, hg, hb);
   }
 
-  /** Overall weight of the violet-shadow / warm-highlight split tone. */
   setSplitStrength(v: number): void {
     (this.uniforms.get('uSplitStrength') as Uniform<number>).value = v;
   }
@@ -382,7 +205,6 @@ export class GradeEffect extends Effect {
     (this.uniforms.get('uGrain') as Uniform<number>).value = v;
   }
 
-  /** How far the printed black is lifted, and toward which colour. */
   setToe(lift: number, r?: number, g?: number, b?: number): void {
     (this.uniforms.get('uToeLift') as Uniform<number>).value = lift;
     if (r !== undefined) {

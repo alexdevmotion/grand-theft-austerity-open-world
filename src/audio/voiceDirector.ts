@@ -100,14 +100,14 @@ const ACTIVITY_DIALOGUE: Record<
     failure: { speaker: 'Organizator', text: 'Ai pierdut traseul de la Unirii. Clasamentul rămâne neschimbat.', ms: 3800 },
   },
   evadare_centru: {
-    start: { speaker: 'Constructor', text: 'În Centrul Vechi vin trei echipaje. Pierde-le printre străzile înguste.', ms: 4500 },
-    success: { speaker: 'Constructor', text: 'Nu mai apare niciun echipaj pe camere. Ai ieșit curat din centru.', ms: 4100 },
-    failure: { speaker: 'Constructor', text: 'Încă te urmăresc prin centru. Rupe traseul și încearcă din nou.', ms: 4000 },
+    start: { speaker: 'Builder', text: 'În Centrul Vechi vin trei echipaje. Pierde-le printre străzile înguste.', ms: 4500 },
+    success: { speaker: 'Builder', text: 'Nu mai apare niciun echipaj pe camere. Ai ieșit curat din centru.', ms: 4100 },
+    failure: { speaker: 'Builder', text: 'Încă te urmăresc prin centru. Rupe traseul și încearcă din nou.', ms: 4000 },
   },
   evadare_guvern: {
-    start: { speaker: 'Constructor', text: 'Lângă Palat au ridicat tot cartierul guvernamental. Fugi până pierd semnalul.', ms: 4700 },
-    success: { speaker: 'Constructor', text: 'Filtrul guvernamental te-a pierdut. Nici Palatul nu mai știe unde ești.', ms: 4300 },
-    failure: { speaker: 'Constructor', text: 'Camerele de lângă Palat încă te țin. Schimbă mașina și revino.', ms: 4000 },
+    start: { speaker: 'Builder', text: 'Lângă Palat au ridicat tot cartierul guvernamental. Fugi până pierd semnalul.', ms: 4700 },
+    success: { speaker: 'Builder', text: 'Filtrul guvernamental te-a pierdut. Nici Palatul nu mai știe unde ești.', ms: 4300 },
+    failure: { speaker: 'Builder', text: 'Camerele de lângă Palat încă te țin. Schimbă mașina și revino.', ms: 4000 },
   },
   foto_victoriei: {
     start: { speaker: 'Alex Need-Aid', text: 'În Piața Victoriei sunt trei ecrane. Fotografiază mesajele înainte să vină patrula.', ms: 5000 },
@@ -120,9 +120,9 @@ const ACTIVITY_DIALOGUE: Record<
     failure: { speaker: 'Alex Need-Aid', text: 'Lipsește un cadru de la Parlament. Seria nu poate fi publicată încă.', ms: 4100 },
   },
   foto_casa: {
-    start: { speaker: 'Constructor', text: 'Casa Constructorilor are trei ecrane puse peste sigilii. Documentează-le pe toate.', ms: 4800 },
-    success: { speaker: 'Constructor', text: 'Avem dovada de pe Casa Constructorilor. Sigiliile și ecranele sunt în același cadru.', ms: 4800 },
-    failure: { speaker: 'Constructor', text: 'Nu avem toate fațadele Casei Constructorilor. Mai trebuie o trecere.', ms: 4000 },
+    start: { speaker: 'Builder', text: 'Casa Builderilor are trei ecrane puse peste sigilii. Documentează-le pe toate.', ms: 4800 },
+    success: { speaker: 'Builder', text: 'Avem dovada de pe Casa Builderilor. Sigiliile și ecranele sunt în același cadru.', ms: 4800 },
+    failure: { speaker: 'Builder', text: 'Nu avem toate fațadele Casei Builderilor. Mai trebuie o trecere.', ms: 4000 },
   },
 };
 

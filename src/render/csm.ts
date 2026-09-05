@@ -57,15 +57,26 @@ function isLit(m: THREE.Material): boolean {
   );
 }
 
+interface CascadeUniforms {
+  CSM_cascades: { value: THREE.Vector2[] };
+  cameraNear: { value: number };
+  shadowFar: { value: number };
+}
+// Three may reuse an already compiled program when returning to a quality
+// tier. Its uniforms must follow the current rig, not a disposed rig closure.
+const materialUniforms = new WeakMap<THREE.Material, CascadeUniforms>();
+
 export class CascadedShadows {
   private csm: CSM;
   private camera: THREE.PerspectiveCamera;
   private opts: CascadeOptions;
 
   /** Materials already carrying the CSM defines. */
-  private registered = new WeakSet<THREE.Material>();
-  /** Live shader objects, so cascade breaks can be pushed each frame. */
-  private shaders = new Map<THREE.Material, THREE.WebGLProgramParametersWithUniforms>();
+  private registered = new Map<THREE.Material, {
+    previous: THREE.Material['onBeforeCompile'];
+    wrapper: THREE.Material['onBeforeCompile'];
+    uniforms: CascadeUniforms;
+  }>();
   private breaksVec2: THREE.Vector2[] = [];
 
   private sweepTimer = 0;
@@ -152,7 +163,6 @@ export class CascadedShadows {
    */
   setupMaterial(material: THREE.Material): void {
     if (this.registered.has(material) || !isLit(material)) return;
-    this.registered.add(material);
     this.materialCount++;
 
     material.defines = material.defines ?? {};
@@ -160,16 +170,25 @@ export class CascadedShadows {
     material.defines.CSM_CASCADES = this.csm.cascades;
     if (this.csm.fade) material.defines.CSM_FADE = '';
 
+    this.refreshBreaks();
+    let uniforms = materialUniforms.get(material);
+    if (!uniforms) {
+      uniforms = { CSM_cascades: { value: this.breaksVec2 }, cameraNear: { value: this.camera.near },
+        shadowFar: { value: Math.min(this.camera.far, this.csm.maxFar) } };
+      materialUniforms.set(material, uniforms);
+    }
+    uniforms.CSM_cascades.value = this.breaksVec2;
+    uniforms.cameraNear.value = this.camera.near;
+    uniforms.shadowFar.value = Math.min(this.camera.far, this.csm.maxFar);
+    const binding = uniforms;
     const prev = material.onBeforeCompile;
     const self = this;
     material.onBeforeCompile = function (shader, renderer) {
       prev?.call(this, shader, renderer);
       self.refreshBreaks();
-      shader.uniforms.CSM_cascades = { value: self.breaksVec2 };
-      shader.uniforms.cameraNear = { value: self.camera.near };
-      shader.uniforms.shadowFar = { value: Math.min(self.camera.far, self.csm.maxFar) };
-      self.shaders.set(material, shader);
+      Object.assign(shader.uniforms, binding);
     };
+    this.registered.set(material, { previous: prev, wrapper: material.onBeforeCompile, uniforms: binding });
 
     material.needsUpdate = true;
   }
@@ -224,23 +243,24 @@ export class CascadedShadows {
     this.refreshBreaks();
 
     const far = Math.min(this.camera.far, this.csm.maxFar);
-    for (const [, shader] of this.shaders) {
-      if (!shader) continue;
-      const u = shader.uniforms;
-      if (u.CSM_cascades) u.CSM_cascades.value = this.breaksVec2;
-      if (u.cameraNear) u.cameraNear.value = this.camera.near;
-      if (u.shadowFar) u.shadowFar.value = far;
+    for (const { uniforms } of this.registered.values()) {
+      uniforms.CSM_cascades.value = this.breaksVec2;
+      uniforms.cameraNear.value = this.camera.near;
+      uniforms.shadowFar.value = far;
     }
   }
 
   dispose(): void {
-    for (const [material] of this.shaders) {
+    // Include materials that were registered but never rendered. Otherwise a
+    // quality change leaves old cascade closures on offscreen cached meshes.
+    for (const [material, hooks] of this.registered) {
+      if (material.onBeforeCompile === hooks.wrapper) material.onBeforeCompile = hooks.previous;
       delete material.defines?.USE_CSM;
       delete material.defines?.CSM_CASCADES;
       delete material.defines?.CSM_FADE;
       material.needsUpdate = true;
     }
-    this.shaders.clear();
+    this.registered.clear();
     this.csm.remove();
     this.csm.dispose();
   }

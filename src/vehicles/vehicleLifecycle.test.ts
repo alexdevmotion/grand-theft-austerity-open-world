@@ -7,6 +7,7 @@ import { VehicleSystem } from './vehicleSystem';
 interface FakeVehicle {
   id: string;
   occupants: string[];
+  entryReserved?: boolean;
   object: THREE.Object3D;
   collider: { handle: number };
   body: { token: string };
@@ -98,6 +99,11 @@ test('despawn refuses occupied cars and commits cleanup before freeing the body'
   // Once handed back, cache invalidation and collider lookup removal happen
   // before Rapier frees the body.  Every owning collection is then cleared.
   vehicle.occupants.length = 0;
+  vehicle.entryReserved = true;
+  system.despawn(vehicle.id);
+  expect(calls).toEqual([]);
+  expect(system.get(vehicle.id)).toBe(vehicle);
+  vehicle.entryReserved = false;
   system.despawn(vehicle.id);
   expect(calls).toEqual([
     'audio:veh_traffic_17',

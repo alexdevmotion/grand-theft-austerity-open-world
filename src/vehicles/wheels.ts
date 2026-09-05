@@ -9,7 +9,7 @@
  * Two things were badly wrong before and are fixed here:
  *
  *  1. The hubcap/rim detail was only ever built on the +X face, and the same
- *     geometry was used on both sides of the car. Every wheel on the left-hand
+ *     geometry was used on both sides of the car. Every wheel on the negative-X
  *     side therefore presented its blanked-off *inner* face to the camera — a
  *     flat black disc sitting in the arch, which reads exactly like a missing
  *     wheel. `wheelGeometry` now takes a side and mirrors properly.
@@ -27,7 +27,7 @@ import { UV } from './texture';
 
 export type WheelStyle = 'hubcap' | 'steel' | 'alloy' | 'truck' | 'scooter';
 
-const lin = (hex: number) => new THREE.Color(hex).convertSRGBToLinear();
+const lin = (hex: number) => new THREE.Color(hex);
 
 const RUBBER = lin(0x16161b);
 const RUBBER_WORN = lin(0x2a2a31);
@@ -51,10 +51,11 @@ export function wheelGeometry(
   const b = new GeoBuilder();
   const R = radius;
   const W = width;
-  const seg = style === 'scooter' ? 14 : style === 'truck' ? 22 : 20;
+  const seg = style === 'scooter' ? 24 : 32;
+  const rimSeg = 24;
 
   // `side` flips which face carries the rim detail. Everything is authored for
-  // the right-hand side and mirrored by negating X.
+  // the +X (left-hand) side and mirrored by negating X.
   const sx = side;
   const tyre: Surf = { color: RUBBER, rough: 0.95, metal: 0.02, coat: 0.08, uv: UV.tread };
   const wall: Surf = { color: RUBBER_WORN, rough: 0.88, metal: 0.02, coat: 0.05, uv: UV.sidewall };
@@ -62,24 +63,17 @@ export function wheelGeometry(
   /* ---- tyre carcass: a small lathe so the tyre has a real crowned profile ---- */
   const hw = W * 0.5;
   const profile: Array<[number, number]> = [
-    [-hw, R * 0.66],           // inner bead
-    [-hw, R * 0.86],
-    [-hw * 0.86, R * 0.975],   // inner shoulder
-    [-hw * 0.52, R * 1.0],
-    [hw * 0.52, R * 1.0],      // crown
-    [hw * 0.86, R * 0.975],    // outer shoulder
-    [hw, R * 0.86],
-    [hw, R * 0.66],            // outer bead
+    [-hw * .94, R * .66], [-hw, R * .76], [-hw * 1.02, R * .86],
+    [-hw * .96, R * .93], [-hw * .78, R * .982], [-hw * .38, R],
+    [hw * .38, R], [hw * .78, R * .982], [hw * .96, R * .93],
+    [hw * 1.02, R * .86], [hw, R * .76], [hw * .94, R * .66],
   ];
-  // rz = -sx * PI/2 sends the cylinder's +Y (its `rTop` end) to +sx * X, so the
-  // profile is laid out inboard → outboard in the direction the side wants.
-  for (let i = 0; i < profile.length - 1; i++) {
-    const [x0, r0] = profile[i];
-    const [x1, r1] = profile[i + 1];
-    b.cyl(r1, r0, Math.abs(x1 - x0) || 1e-4, seg,
-      T(sx * (x0 + x1) * 0.5, 0, 0, 0, 0, -sx * Math.PI / 2),
-      i === 3 ? tyre : wall, true);
-  }
+  // A continuous lathe carries the toroidal shoulder normals across bands.
+  // Independent frustums previously produced hard rings across the sidewall.
+  const carcass = new THREE.LatheGeometry(profile.map(([x, r]) => new THREE.Vector2(r, x)), rimSeg);
+  b.add(carcass, T(0, 0, 0, 0, 0, -sx * Math.PI / 2), wall);
+  carcass.dispose();
+  b.cyl(R * 1.001, R * 1.001, W * .75, seg, T(0, 0, 0, 0, 0, -sx * Math.PI / 2), tyre, true);
 
   /**
    * The plane the rim detail lives in.
@@ -102,47 +96,32 @@ export function wheelGeometry(
     b.cyl(R * 0.72, R * 0.72, W * 0.55, seg, T(0, 0, 0, 0, 0, Math.PI / 2), { color: RIM_DARK, rough: 0.4, metal: 0.85, coat: 0.3 });
     b.cyl(R * 0.16, R * 0.16, W * 1.4, 8, T(0, 0, 0, 0, 0, Math.PI / 2), { color: RIM_STEEL, rough: 0.3, metal: 0.95, coat: 0.3 });
   } else if (style === 'hubcap') {
-    /**
-     * Steel wheel behind a FULL-FACE CHROME HUBCAP — the Dacia's signature.
-     *
-     * Look at `docs/reference/world/dacia-1300.jpg`: the cap is not a small
-     * button in the middle of a black wheel, it is a dish covering roughly
-     * two thirds of the tyre's diameter, sitting in the plane of the sidewall
-     * with a bright rolled outer flange, a ring of stamped slots and a
-     * polished raised centre. It is the single brightest thing on the lower
-     * half of the car and the reason a parked 1300 does not read as four
-     * black holes.
-     */
-    const capR = apertureR;
-    // metal 0.86, not 1: a fully metallic surface has NO diffuse term, so in the
-    // shadow of its own arch — which is where a wheel spends its life — it has
-    // nothing but the environment lobe to show and goes black. Real hubcaps are
-    // dulled, scratched chrome; leaving a little diffuse in keeps them readable
-    // on the shaded side of the car without making them look painted.
-    const cap: Surf = { color: CHROME, rough: 0.13, metal: 0.86, coat: 0.5, uv: UV.hubcap };
-    const capDull: Surf = { color: CHROME_DULL, rough: 0.26, metal: 0.95, coat: 0.3 };
-    // Rim well behind the cap, so no daylight shows through the slots.
-    b.cyl(R * 0.655, R * 0.655, W * 0.80, seg, T(0, 0, 0, 0, 0, Math.PI / 2),
-      { color: RIM_DARK, rough: 0.55, metal: 0.6, coat: 0.2 });
-    // Full-face dish. Two shallow cones: a rolled flange that catches the sun,
-    // then the dished face that carries the hubcap cell of the atlas.
-    b.cyl(capR * 0.955, capR, W * 0.055, seg, T(faceX - sx * W * 0.028, 0, 0, 0, 0, -sx * Math.PI / 2), cap);
-    b.cyl(capR * 0.62, capR * 0.955, W * 0.05, seg, T(faceX - sx * W * 0.080, 0, 0, 0, 0, -sx * Math.PI / 2), cap);
-    // Bright rolled lip right on the tyre bead — the highlight that separates
-    // chrome from rubber at any distance.
-    b.torus(capR * 0.965, R * 0.022, 5, seg, Math.PI * 2,
-      T(faceX - sx * W * 0.010, 0, 0, 0, Math.PI / 2, 0), cap);
-    // Ring of stamped cooling slots.
+    // Original 13-inch pressed-steel wheel: silver outer rim, eight ventilating
+    // slots, and a SMALL domed chrome cap. A single full-size chrome disc loses
+    // the visible rim well and makes the tire resemble a toy button.
+    const steel: Surf = { color: lin(0xa9acab), rough: .31, metal: .82, coat: .18 };
+    const chrome: Surf = { color: CHROME, rough: .13, metal: .94, coat: .32 };
+    const dark: Surf = { color: RIM_DARK, rough: .58, metal: .58 };
+    b.cyl(apertureR * .99, apertureR * .99, W * .80, seg,
+      T(0, 0, 0, 0, 0, Math.PI / 2), dark);
+    const dishProfile = [[R * .20, hw - W * .04], [R * .34, hw - W * .04],
+      [R * .45, hw - W * .10], [R * .51, hw - W * .15],
+      [R * .57, hw - W * .09], [R * .63, hw - W * .015], [R * .66, hw - W * .025]];
+    const dish = new THREE.LatheGeometry(dishProfile.reverse().map(([r, x]) => new THREE.Vector2(r, x)), rimSeg);
+    b.add(dish, T(0, 0, 0, 0, 0, -sx * Math.PI / 2), steel); dish.dispose();
+    b.torus(R * .645, R * .012, 4, rimSeg, Math.PI * 2, T(faceX, 0, 0, 0, Math.PI / 2), steel);
     for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2 + 0.2;
-      b.cyl(R * 0.052, R * 0.052, W * 0.07, 6,
-        T(faceX - sx * W * 0.070, Math.sin(a) * capR * 0.74, Math.cos(a) * capR * 0.74, 0, 0, -sx * Math.PI / 2),
-        { color: lin(0x0a0a0f), rough: 0.9, metal: 0.1, coat: 0 });
+      const angle = i / 8 * Math.PI * 2;
+      b.sphere(1, 8,
+        T(sx * (hw - W * .085), Math.sin(angle) * R * .525, Math.cos(angle) * R * .525,
+          -angle, 0, 0, W * .0125, R * .037, R * .075),
+        { color: lin(0x111313), rough: .85, metal: .1 });
     }
-    // Polished centre pan and boss.
-    b.cyl(capR * 0.56, capR * 0.62, W * 0.05, seg, T(faceX - sx * W * 0.050, 0, 0, 0, 0, -sx * Math.PI / 2), cap);
-    b.torus(capR * 0.58, R * 0.016, 5, seg, Math.PI * 2, T(faceX - sx * W * 0.040, 0, 0, 0, Math.PI / 2, 0), capDull);
-    b.sphere(capR * 0.30, 12, T(faceX - sx * W * 0.010, 0, 0, 0, 0, 0, 0.44, 1, 1), cap);
+    b.sphere(R * .405, 16, T(faceX, 0, 0, 0, 0, 0, .27, 1, 1), chrome);
+    b.torus(R * .400, R * .009, 4, rimSeg, Math.PI * 2,
+      T(faceX + sx * W * .010, 0, 0, 0, Math.PI / 2), chrome);
+    b.cyl(R * .060, R * .066, W * .025, 20,
+      T(faceX + sx * R * .112, 0, 0, 0, 0, -sx * Math.PI / 2), steel);
   } else if (style === 'alloy') {
     b.cyl(R * 0.74, R * 0.74, W * 0.76, seg, T(0, 0, 0, 0, 0, Math.PI / 2), { color: RIM_DARK, rough: 0.35, metal: 0.9, coat: 0.3 });
     b.cyl(apertureR * 0.92, apertureR, W * 0.10, seg, T(faceX, 0, 0, 0, 0, -sx * Math.PI / 2), { color: RIM_STEEL, rough: 0.22, metal: 0.95, coat: 0.4 });
@@ -182,6 +161,27 @@ export function wheelGeometry(
       b.cyl(R * 0.042, R * 0.042, W * 0.07, 6,
         T(faceX - sx * W * 0.02, Math.sin(a) * R * 0.34, Math.cos(a) * R * 0.34, 0, 0, -sx * Math.PI / 2),
         { color: CHROME, rough: 0.24, metal: 1, coat: 0.3 });
+    }
+  }
+
+  if (style !== 'scooter') {
+    // Molded sidewall rings and a valve retain scale at close inspection.
+    const sidewall: Surf = { color: RUBBER_WORN, rough: 0.93, metal: 0 };
+    for (const ring of [0.73, 0.89]) {
+      b.torus(R * ring, R * 0.006, 4, rimSeg, Math.PI * 2,
+        T(sx * (hw + 0.001), 0, 0, 0, Math.PI / 2), sidewall);
+    }
+    b.cyl(0.006, 0.008, 0.025, 6,
+      T(faceX + sx * 0.011, R * 0.45, R * 0.35, 0, 0, -sx * Math.PI / 2),
+      { color: RUBBER, rough: 0.8, metal: 0.1 });
+    if (style === 'steel') {
+      // Stamped ventilation holes, recessed against the darker rim well.
+      for (let i = 0; i < 8; i++) {
+        const a = i / 8 * Math.PI * 2;
+        b.cyl(R * 0.055, R * 0.055, 0.006, 8,
+          T(faceX + sx * 0.007, Math.sin(a) * R * 0.50, Math.cos(a) * R * 0.50, 0, 0, -sx * Math.PI / 2),
+          { color: RIM_DARK, rough: 0.8, metal: 0.2 });
+      }
     }
   }
 

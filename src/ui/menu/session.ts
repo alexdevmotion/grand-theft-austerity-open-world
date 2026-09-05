@@ -28,6 +28,7 @@ import {
   writeSave,
 } from '../../core/save';
 import type { SaveRecord } from '../../core/services';
+import { t, tp } from '../../core/i18n';
 
 /** The front-end's name for the save record. Same object, same slot. */
 export type SessionRecord = SaveRecord;
@@ -45,16 +46,16 @@ export function isResumable(r: SessionRecord | null): r is SessionRecord {
 
 /** "ACTUL II · NIVEL 3 · 12 MIN" — the yellow sub-label for the CONTINUE row. */
 export function describeSession(r: SessionRecord | null, now = Date.now()): string {
-  if (!isResumable(r)) return 'NICIUN PROGRES SALVAT';
+  if (!isResumable(r)) return t('NICIUN PROGRES SALVAT');
   const bits: string[] = [];
   const act = actNumber(r.actId, r.completed);
-  if (act > 0) bits.push(`ACTUL ${roman(act)}`);
-  if (r.level > 1) bits.push(`NIVEL ${r.level}`);
+  if (act > 0) bits.push(tp('ACTUL {n}', { n: roman(act) }));
+  if (r.level > 1) bits.push(tp('NIVEL {n}', { n: r.level }));
   const mins = Math.floor(r.playSeconds / 60);
-  if (mins >= 1) bits.push(`${mins} MIN`);
+  if (mins >= 1) bits.push(tp('{n} MIN', { n: mins }));
   const ago = agoLabel(now - r.savedAt);
   if (ago) bits.push(ago);
-  return bits.join(' · ') || 'SESIUNE SALVATĂ';
+  return bits.join(' · ') || t('SESIUNE SALVATĂ');
 }
 
 /** Act number from an id like `act3_termsheet`, else one past the completed run. */
@@ -76,9 +77,9 @@ export function roman(n: number): string {
 function agoLabel(ms: number): string {
   if (!(ms > 0)) return '';
   const min = ms / 60000;
-  if (min < 2) return 'ACUM';
-  if (min < 60) return `${Math.round(min)} MIN ÎN URMĂ`;
+  if (min < 2) return t('ACUM');
+  if (min < 60) return tp('{n} MIN ÎN URMĂ', { n: Math.round(min) });
   const h = min / 60;
-  if (h < 24) return `${Math.round(h)} H ÎN URMĂ`;
-  return `${Math.round(h / 24)} ZILE ÎN URMĂ`;
+  if (h < 24) return tp('{n} H ÎN URMĂ', { n: Math.round(h) });
+  return tp('{n} ZILE ÎN URMĂ', { n: Math.round(h / 24) });
 }

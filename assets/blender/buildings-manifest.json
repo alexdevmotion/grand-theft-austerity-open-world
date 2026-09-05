@@ -1,0 +1,221 @@
+{
+  "blender": "5.2.1 LTS",
+  "source_sha256": "308400ed3cc1889563fced87f94e76d8df48097bdc54962708866a248808b9b4",
+  "units": "metres",
+  "coordinate_transform": "Three (x,y,z) to Blender (x,-z,y)",
+  "models": {
+    "socialist-bloc": {
+      "parts": {
+        "facade": {
+          "vertices": 1200,
+          "triangles": 600,
+          "materials": 8,
+          "attributes": [
+            ".select_vert",
+            "position",
+            ".corner_vert",
+            ".corner_edge",
+            ".select_poly",
+            "sharp_face",
+            ".edge_verts",
+            ".select_edge",
+            "FacadeStyle",
+            "FacadeFloorHeight",
+            "FacadeBayWidth",
+            "FacadeSeed",
+            "FacadeBuildingHeight",
+            "FacadeGroundHeight",
+            "FacadeLitBias",
+            "FacadeTint",
+            "RuntimeMetreUV",
+            "custom_normal",
+            "sharp_edge",
+            "material_index"
+          ]
+        },
+        "detail": {
+          "vertices": 12040,
+          "triangles": 6118,
+          "materials": 1,
+          "attributes": [
+            ".select_vert",
+            "position",
+            ".corner_vert",
+            ".corner_edge",
+            ".select_poly",
+            "sharp_face",
+            ".edge_verts",
+            ".select_edge",
+            "DetailMetalness",
+            "DetailRoughness",
+            "FoliageTransmission",
+            "FoliageWind",
+            "RuntimeColor",
+            "RuntimeEmission",
+            "custom_normal",
+            "sharp_edge",
+            "material_index"
+          ]
+        }
+      }
+    },
+    "builders-house": {
+      "parts": {
+        "facade": {
+          "vertices": 836,
+          "triangles": 418,
+          "materials": 8,
+          "attributes": [
+            ".select_vert",
+            "position",
+            ".corner_vert",
+            ".corner_edge",
+            ".select_poly",
+            "sharp_face",
+            ".edge_verts",
+            ".select_edge",
+            "FacadeStyle",
+            "FacadeFloorHeight",
+            "FacadeBayWidth",
+            "FacadeSeed",
+            "FacadeBuildingHeight",
+            "FacadeGroundHeight",
+            "FacadeLitBias",
+            "FacadeTint",
+            "RuntimeMetreUV",
+            "custom_normal",
+            "sharp_edge",
+            "material_index"
+          ]
+        },
+        "detail": {
+          "vertices": 52870,
+          "triangles": 29468,
+          "materials": 1,
+          "attributes": [
+            ".select_vert",
+            "position",
+            ".corner_vert",
+            ".corner_edge",
+            ".select_poly",
+            "sharp_face",
+            ".edge_verts",
+            ".select_edge",
+            "DetailMetalness",
+            "DetailRoughness",
+            "FoliageTransmission",
+            "FoliageWind",
+            "RuntimeColor",
+            "RuntimeEmission",
+            "custom_normal",
+            "sharp_edge",
+            "material_index"
+          ]
+        },
+        "surface": {
+          "vertices": 4,
+          "triangles": 2,
+          "materials": 8,
+          "attributes": [
+            ".select_vert",
+            "position",
+            ".corner_vert",
+            ".corner_edge",
+            ".select_poly",
+            "sharp_face",
+            ".edge_verts",
+            ".select_edge",
+            "SurfaceKind",
+            "SurfaceHalfWidth",
+            "SurfaceLanes",
+            "SurfaceSeed",
+            "RuntimeMetreUV",
+            "custom_normal",
+            "sharp_edge",
+            "material_index"
+          ]
+        }
+      }
+    },
+    "parliament": {
+      "parts": {
+        "facade": {
+          "vertices": 80,
+          "triangles": 40,
+          "materials": 8,
+          "attributes": [
+            ".select_vert",
+            "position",
+            ".corner_vert",
+            ".corner_edge",
+            ".select_poly",
+            "sharp_face",
+            ".edge_verts",
+            ".select_edge",
+            "FacadeStyle",
+            "FacadeFloorHeight",
+            "FacadeBayWidth",
+            "FacadeSeed",
+            "FacadeBuildingHeight",
+            "FacadeGroundHeight",
+            "FacadeLitBias",
+            "FacadeTint",
+            "RuntimeMetreUV",
+            "custom_normal",
+            "sharp_edge",
+            "material_index"
+          ]
+        },
+        "detail": {
+          "vertices": 58776,
+          "triangles": 39148,
+          "materials": 1,
+          "attributes": [
+            ".select_vert",
+            "position",
+            ".corner_vert",
+            ".corner_edge",
+            ".select_poly",
+            "sharp_face",
+            ".edge_verts",
+            ".select_edge",
+            "DetailMetalness",
+            "DetailRoughness",
+            "FoliageTransmission",
+            "FoliageWind",
+            "RuntimeColor",
+            "RuntimeEmission",
+            "custom_normal",
+            "sharp_edge",
+            "material_index"
+          ]
+        },
+        "surface": {
+          "vertices": 4,
+          "triangles": 2,
+          "materials": 8,
+          "attributes": [
+            ".select_vert",
+            "position",
+            ".corner_vert",
+            ".corner_edge",
+            ".select_poly",
+            "sharp_face",
+            ".edge_verts",
+            ".select_edge",
+            "SurfaceKind",
+            "SurfaceHalfWidth",
+            "SurfaceLanes",
+            "SurfaceSeed",
+            "RuntimeMetreUV",
+            "custom_normal",
+            "sharp_edge",
+            "material_index"
+          ]
+        }
+      }
+    }
+  },
+  "shader_parity": "Runtime detail PBR retained; facade/surface GLSL approximated in editable Blender nodes.",
+  "roundtrip_status": "Authoring export only; no mesh import/cook back into runtime exists yet."
+}

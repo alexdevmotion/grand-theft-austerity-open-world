@@ -635,8 +635,8 @@ const EYE_R_FIT = 0.066;
  * covering only a thin annulus left most of the sphere exposed.
  */
 const APEX_PROUD = 0.004;
-/** How far the skin recedes behind the globe inside the aperture. */
-const LID_RECESS = 0.020;
+/** Socket depth must clear the recessed iris, not only the spherical sclera. */
+const LID_RECESS = 0.050;
 /** How proud of the globe the lid skin rides. */
 const LID_THICK = 0.015;
 /**
@@ -732,11 +732,8 @@ function surfacePoint(
     x += side * opts.jawPush * w * Math.min(1, Math.abs(x) / 0.28);
     z += opts.jawPush * 0.25 * w * Math.max(0, ct);
   }
-  if (opts.browPush !== 0) {
-    const w = Math.exp(-Math.pow((y - 0.085) / 0.075, 2)) * Math.max(0, ct);
-    z += opts.browPush * w;
-    y -= opts.browPush * 0.20 * w;
-  }
+  // Brow identity is already included in anatomy.sculpt; applying it again
+  // here adds another shelf above the same fitted eye sockets.
 
   /* Asymmetry — small, but it is what stops the face reading as mirrored.
    *
@@ -794,10 +791,11 @@ function surfacePoint(
       const d = Math.sqrt(u * u + v * v);
       const edge = 1 - smooth(LID_RELEASE_IN, LID_RELEASE_OUT, g);
       if (d < 1) {
-        // Inside the aperture the skin drops behind the globe, so the eye shows
-        // through an almond rather than a circle.
-        const w = (1 - d) * (1 - d);
-        z = Math.min(z, gz - LID_RECESS * w - 0.0015);
+        // Keep the socket open across the pupil. A narrow quadratic dent in
+        // the sphere's front leaves a skin sheet ahead of the concave iris.
+        const rimRecess = 0.020 * (1 - d) * (1 - d);
+        const irisRecess = LID_RECESS * (1 - smooth(0.40, 0.80, d));
+        z = Math.min(z, gz - Math.max(rimRecess, irisRecess) - 0.0015);
       } else {
         // Outside it the lid rides OVER the globe. The upper lid is thicker
         // than the lower and carries the fold that a real eye has above it.
@@ -1175,7 +1173,9 @@ function paintVertices(
     const philtrum = Math.exp(-Math.pow(x / 0.014, 2)) *
       Math.exp(-Math.pow((y + 0.325) / 0.030, 2)) * front;
     cav -= philtrum * 0.20;
-    cav *= ao[i];
+    // Geometric AO and authored crease masks describe overlapping occlusion.
+    // Keep some indirect fill instead of multiplying both at full strength.
+    cav *= 0.25 + ao[i] * 0.75;
     cav = Math.max(0.22, cav);
 
     /* --- roughness: a real oily T-zone against matte cheeks --- */
@@ -1207,8 +1207,8 @@ function paintVertices(
      * capillary, sun damage — and it was running at a third of the amplitude
      * real skin has. In fitted units the head spans about 1.0, so 26 / 90 / 230
      * are roughly 6 mm, 1.7 mm and 0.7 mm features. */
-    const mottle = (valueNoise2D(x * 26 + 11, y * 26 + 7, noiseSeed) - 0.5) * 0.085 +
-      (valueNoise2D(x * 90, y * 90, noiseSeed ^ 0x5f) - 0.5) * 0.055 +
+    const mottle = (valueNoise2D(x * 26 + 11, y * 26 + 7, noiseSeed) - 0.5) * 0.035 +
+      (valueNoise2D(x * 90, y * 90, noiseSeed ^ 0x5f) - 0.5) * 0.018 +
       // Nothing finer than this: the grid spacing on the face is 2-3 mm, so an
       // octave below about 6 mm aliases into per-vertex speckle instead of into
       // skin. Detail past that point is the micro-NORMAL's job, which is
@@ -1296,19 +1296,8 @@ function paintVertices(
       b += (beardCol[2] - b) * t * 0.94;
     }
 
-    /* Cavity is a shading term, not albedo — but a shallow amount of it in the
-     * albedo keeps creases readable in flat ambient light.
-     *
-     * 0.35 was too much, because the shader applies the SAME `cav` again as a
-     * multiplier on both direct and indirect diffuse. A vertex at the 0.22
-     * floor was therefore losing 27% of its paint and then 78% of its light:
-     * 0.16 of what the flat cheek beside it returns, which is a black line, not
-     * a crease. The albedo share comes down to 0.20 and the shading share is
-     * softened in `skinMaterial.ts`; between them a deep crease now lands
-     * around 0.3 of its neighbour, which is what a nasolabial fold measures on
-     * the reference photograph. */
-    const cavAlbedo = 1 - (1 - cav) * 0.20;
-    r *= cavAlbedo; g *= cavAlbedo; b *= cavAlbedo;
+    // Cavity affects illumination, not the intrinsic skin colour. Geometry
+    // and the skin shader already supply crease shadows.
 
     /* ALBEDO FLOOR.
      *
@@ -1395,10 +1384,6 @@ function buildAnchors(
     // lashes, beard — would be seated on a surface that no longer exists.
     sculpt(x, y, z, Math.max(0, ct), sculptOpts(opts), _sculpt);
     x += _sculpt.dx; y += _sculpt.dy; z += _sculpt.dz;
-    if (opts.browPush !== 0) {
-      const w = Math.exp(-Math.pow((y - 0.085) / 0.075, 2)) * Math.max(0, ct);
-      z += opts.browPush * w;
-    }
     const nx = SKULL.rx * cp * st;
     const ny = SKULL.ry * sp;
     const nz = rz * cp * ct;

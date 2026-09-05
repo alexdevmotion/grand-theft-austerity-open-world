@@ -28,7 +28,8 @@ import { Rng } from '../core/rng';
 import type { WheelStyle } from './wheels';
 import type { VehicleClass } from '../core/services';
 
-const lin = (hex: number) => new THREE.Color(hex).convertSRGBToLinear();
+// Hex colours are converted from sRGB by Three's colour management.
+const lin = (hex: number) => new THREE.Color(hex);
 
 /* ------------------------------------------------------------------ */
 /* Shared palette + lamp channels                                      */
@@ -43,7 +44,7 @@ export const LENS_RED = lin(0xd8122a);
 export const LENS_AMBER = lin(0xff9a20);
 export const LENS_CLEAR = lin(0xe8eef6);
 export const LAMP_WHITE = lin(0xfff3d8);
-export const GLASS = lin(0x2c3550);
+export const GLASS = lin(0xb2c2ba);
 export const CABIN_SHADOW = lin(0x0b0a10);
 
 /** 8 emissive channels: head, tail, brake, reverse | indL, indR, interior, aux */
@@ -65,7 +66,7 @@ export const L = {
 
 export type LampStyle =
   | 'rect1300'      // rectangular outboard lamp + round auxiliary below
-  | 'rect1310'      // one wide squared-off lamp, 80s facelift
+  | 'rect1310'      // paired round lamps, 1980s facelift
   | 'roundTwin'     // twin round lamps in chrome bezels (Oltcit, ARO)
   | 'ovalSoft'      // late-90s soft oval (Supernova / Solenza)
   | 'sweptModern'   // Logan / Sandero swept cluster
@@ -90,6 +91,7 @@ export interface PaintScheme {
 
 export interface DoorPart {
   id: string;
+  /** Physical local X sign: +1 left, -1 right when facing +Z. */
   side: -1 | 1;
   row: 0 | 1;
   /** Hinge position in body-local space; the door rotates about +Y here. */
@@ -343,7 +345,7 @@ export function buildCarBody(d: CarDesign, scheme: PaintScheme, rng: Rng, hero =
     hw: d.halfWidth,
     b, g,
     paint: {
-      colorFn: paintFn, rough: 0.28 + scheme.wear * 0.14, metal: 0, coat: 1 - scheme.wear * 0.25,
+      colorFn: paintFn, rough: 0.24 + scheme.wear * 0.13, metal: 0, coat: 0.95 - scheme.wear * 0.24,
       uv: scheme.wear > 0.5 ? UV.bodyBattered : UV.bodyClean,
     },
     glassSurf: { color: GLASS, rough: 0.045, metal: 0, coat: 0, uv: UV.glassGrime },
@@ -395,6 +397,7 @@ function defaultPanels(d: CarDesign, s: PaintScheme): ColorFn {
 
 interface DoorSlot {
   id: string;
+  /** Physical local X sign: +1 left, -1 right when facing +Z. */
   side: -1 | 1;
   row: 0 | 1;
   z0: number;
@@ -497,8 +500,10 @@ function bodyStations(d: CarDesign): Station[] {
       hw: halfWidthAt(d, z),
       yTop: -d.rideHeight + topY(d, z),
       yBottom: -d.rideHeight + archY(d, z),
-      rTop: 0.075,
-      rBottom: 0.05,
+      rTop: 0.125,
+      rBottom: 0.07,
+      crown: z > d.wsBase || z < d.rsBase ? 0.034 : 0.016,
+      sillInset: 0.085,
     }));
 }
 
@@ -507,12 +512,12 @@ function lowerBody(c: Ctx): DoorSlot[] {
   const slots: DoorSlot[] = [];
   if (d.doorRows >= 1) {
     for (const side of [-1, 1] as const) {
-      slots.push({ id: side < 0 ? 'frontLeft' : 'frontRight', side, row: 0, z0: d.frontDoorZ[0], z1: d.frontDoorZ[1], skin: new GeoBuilder(), glassB: new GeoBuilder() });
+      slots.push({ id: side > 0 ? 'frontLeft' : 'frontRight', side, row: 0, z0: d.frontDoorZ[0], z1: d.frontDoorZ[1], skin: new GeoBuilder(), glassB: new GeoBuilder() });
     }
   }
   if (d.doorRows >= 2) {
     for (const side of [-1, 1] as const) {
-      slots.push({ id: side < 0 ? 'rearLeft' : 'rearRight', side, row: 1, z0: d.rearDoorZ[0], z1: d.rearDoorZ[1], skin: new GeoBuilder(), glassB: new GeoBuilder() });
+      slots.push({ id: side > 0 ? 'rearLeft' : 'rearRight', side, row: 1, z0: d.rearDoorZ[0], z1: d.rearDoorZ[1], skin: new GeoBuilder(), glassB: new GeoBuilder() });
     }
   }
 
@@ -530,7 +535,10 @@ function lowerBody(c: Ctx): DoorSlot[] {
     return null;
   };
 
-  b.loft(bodyStations(d), c.paint, { route });
+  b.loft(bodyStations(d), c.paint, { route,
+    omit: (x, y, z) => z > d.rsBase && z < d.wsBase &&
+      Math.abs(x) < d.halfWidth * .75 && y > c.y(d.belt - .075),
+  });
 
   // Floor pan: without it the open door looks straight through the car.
   b.box(d.halfWidth * 1.62, 0.05, d.length * 0.78, T(0, c.y(d.sill + 0.03), -d.length * 0.02), {
@@ -547,9 +555,9 @@ function lowerBody(c: Ctx): DoorSlot[] {
   for (const sx of [-1, 1]) {
     for (const az of [d.frontAxleZ, d.rearAxleZ]) {
       b.cyl(d.archRadius * 0.97, d.archRadius * 0.97, 0.09, 14,
-        T(sx * (d.halfWidth - 0.055), c.y(d.wheelRadius), az, 0, 0, Math.PI / 2), liner, true);
+        T(sx * (d.trackHalf - d.tyreWidth * .68), c.y(d.wheelRadius), az, 0, 0, Math.PI / 2), liner, true);
       b.cyl(d.archRadius * 0.97, d.archRadius * 0.97, 0.02, 14,
-        T(sx * (d.halfWidth - 0.10), c.y(d.wheelRadius), az, 0, 0, Math.PI / 2), liner);
+        T(sx * (d.trackHalf - d.tyreWidth * .85), c.y(d.wheelRadius), az, 0, 0, Math.PI / 2), liner);
     }
   }
   return slots;
@@ -557,142 +565,137 @@ function lowerBody(c: Ctx): DoorSlot[] {
 
 /* ---------------- greenhouse ---------------- */
 
+/** Rounded aperture in parameter space. The surface remains shared with its
+ * surround, so a raked screen and its rubber seal cannot drift apart. */
+export function aperture(
+  glass: GeoBuilder, frame: GeoBuilder, point: (u: number, v: number) => THREE.Vector3,
+  glassSurf: Surf, paint: Surf, seal: Surf, chrome?: Surf,
+): void {
+  const edge: Array<[number, number]> = [];
+  const radius = .09;
+  const corners = [[1 - radius, radius, -Math.PI / 2],
+    [1 - radius, 1 - radius, 0], [radius, 1 - radius, Math.PI / 2],
+    [radius, radius, Math.PI]];
+  for (const [x, y, angle] of corners) for (let i = 0; i <= 5; i++) {
+    const a = angle + i / 5 * Math.PI / 2;
+    edge.push([x + radius * Math.cos(a), y + radius * Math.sin(a)]);
+  }
+  const at = (uv: [number, number], scale: number) => point(
+    .5 + (uv[0] - .5) * scale, .5 + (uv[1] - .5) * scale);
+  for (let i = 0; i < edge.length; i++) {
+    const a = edge[i], z = edge[(i + 1) % edge.length];
+    for (let ring = 0; ring < 5; ring++) {
+      const inner = ring / 5, outer = (ring + 1) / 5;
+      if (ring === 0) {
+        const centre = point(.5, .5), p = at(a, outer), q = at(z, outer);
+        glass.tri(centre.x, centre.y, centre.z, p.x, p.y, p.z, q.x, q.y, q.z,
+          glassSurf, [.5, .5, .5 + (a[0] - .5) * outer, .5 + (a[1] - .5) * outer,
+            .5 + (z[0] - .5) * outer, .5 + (z[1] - .5) * outer]);
+        continue;
+      }
+      glass.smoothQuad(at(a, inner), at(a, outer), at(z, outer), at(z, inner),
+        a[0], z[0], inner, outer, glassSurf,
+        [.5 + (a[0] - .5) * inner, .5 + (a[1] - .5) * inner,
+          .5 + (a[0] - .5) * outer, .5 + (a[1] - .5) * outer,
+          .5 + (z[0] - .5) * outer, .5 + (z[1] - .5) * outer,
+          .5 + (z[0] - .5) * inner, .5 + (z[1] - .5) * inner]);
+    }
+    // A pressed, painted flange around the glass, then a continuous rubber
+    // gasket and (on the original 1300) its thin stainless locking strip.
+    for (const [inner, outer, surf] of [[1, 1.034, seal],
+      [1.034, 1.052, chrome ?? seal], [1.052, 1.17, { ...paint, uv: UV.white }]] as const) {
+      frame.smoothQuad(at(a, inner), at(a, outer), at(z, outer), at(z, inner), 0, 1, 0, 1, surf);
+    }
+  }
+}
+
 function greenhouse(c: Ctx, slots: DoorSlot[]): void {
   const { d, b, g, V } = c;
-  const pillarSurf: Surf = { ...c.paint };
-  const GTOP = d.height - 0.072;
-  const GLASS_TOP = d.height - 0.10;
-  const GLASS_BOT = d.belt + 0.045;
-  const hwTop = d.hwTop;
-  const hwBelt = d.hwBelt;
-
-  /* roof panel, crowned, with the drip rail built in */
-  const roofBackZ = d.rear === 'saloon' ? d.rsTop : d.rsTop - 0.04;
-  const roofStations: Station[] = [
-    { z: roofBackZ - 0.03, hw: hwTop - 0.05, yTop: c.y(d.height - 0.024), yBottom: c.y(d.height - 0.135), rTop: 0.055, rBottom: 0.03 },
-    { z: roofBackZ + (d.wsTop - roofBackZ) * 0.22, hw: hwTop, yTop: c.y(d.height - 0.002), yBottom: c.y(d.height - 0.135), rTop: 0.06, rBottom: 0.03 },
-    { z: (roofBackZ + d.wsTop) * 0.5, hw: hwTop + 0.010, yTop: c.y(d.height + d.roofCrown), yBottom: c.y(d.height - 0.135), rTop: 0.06, rBottom: 0.03 },
-    { z: roofBackZ + (d.wsTop - roofBackZ) * 0.78, hw: hwTop, yTop: c.y(d.height - 0.002), yBottom: c.y(d.height - 0.135), rTop: 0.06, rBottom: 0.03 },
-    { z: d.wsTop + 0.03, hw: hwTop - 0.05, yTop: c.y(d.height - 0.024), yBottom: c.y(d.height - 0.135), rTop: 0.055, rBottom: 0.03 },
-  ];
-  b.loft(roofStations, pillarSurf);
-
-  const pillarW = d.brightwork ? 0.042 : 0.056;
-  for (const sx of [-1, 1] as const) {
-    // A pillar: scuttle → roof rail, leaning back. `strut` derives the lean
-    // from the endpoints so it can never be inverted.
-    b.strut(V(sx * (hwBelt - 0.028), d.belt - 0.02, d.wsBase), V(sx * (hwTop - 0.01), GTOP, d.wsTop), pillarW, pillarW * 1.8, pillarSurf);
-    // B pillar: upright, thickest.
-    if (d.doorRows >= 2) {
-      b.strut(V(sx * hwBelt, d.belt - 0.03, d.bPillarZ), V(sx * (hwTop + 0.006), GTOP, d.bPillarZ), pillarW + 0.006, pillarW * 2.0, pillarSurf);
-    }
-    // C pillar: leans forward on a saloon, back on a hatch/estate.
-    b.strut(V(sx * (hwBelt - 0.012), d.belt - 0.02, d.rsBase), V(sx * (hwTop - 0.02), GTOP, d.rsTop), pillarW, pillarW * (d.rear === 'saloon' ? 3.6 : 2.4), pillarSurf);
-    // header rail + belt rail
-    b.strut(V(sx * (hwTop + 0.004), GTOP - 0.012, d.wsTop - 0.02), V(sx * (hwTop + 0.004), GTOP - 0.012, d.rsTop + 0.02), 0.05, 0.05, pillarSurf);
-    b.strut(V(sx * hwBelt, d.belt + 0.012, d.wsBase - 0.03), V(sx * hwBelt, d.belt + 0.012, d.rsBase + 0.03), 0.052, 0.058, pillarSurf);
-    // rain gutter
-    b.strut(V(sx * (hwTop + 0.019), d.height - 0.052, d.rsTop - 0.02), V(sx * (hwTop + 0.019), d.height - 0.052, d.wsTop + 0.02), 0.026, 0.026, c.trim);
+  const glassBottom = d.belt + .048;
+  const glassTop = d.height - .126;
+  const front = d.wsTop + .055, rear = d.rsTop - .055;
+  // Roof weathering is soft oxidation. Use the clean centre of the paint
+  // atlas; the underside seam and road-spatter band belong to the lower body.
+  const clean = UV.bodyClean;
+  const roofPaint: Surf = { ...c.paint, uv: [
+    THREE.MathUtils.lerp(clean[0], clean[2], .26), clean[1] + .015,
+    THREE.MathUtils.lerp(clean[0], clean[2], .74), clean[3] - .015,
+  ] };
+  const roof = (u: number, v: number, underside = false) => V(
+    u * (d.hwTop + .012 * Math.sin(Math.PI * v)),
+    d.height - .080 + (.080 + d.roofCrown) * (1 - u * u) - .027 * (2 * v - 1) ** 4 - (underside ? .012 : 0),
+    THREE.MathUtils.lerp(rear, front, v));
+  // A thin double-curved sheet, with a folded perimeter. Transverse crown is
+  // geometry, not a flat lid with a bevel around its edge.
+  for (let i = 0; i < 20; i++) for (let j = 0; j < 14; j++) {
+    const u0 = -1 + i / 10, u1 = -1 + (i + 1) / 10, v0 = j / 14, v1 = (j + 1) / 14;
+    b.smoothQuad(roof(u0, v0), roof(u0, v1), roof(u1, v1), roof(u1, v0), v0, v1, (u0 + 1) / 2, (u1 + 1) / 2, roofPaint);
+    b.smoothQuad(roof(u0, v0, true), roof(u1, v0, true), roof(u1, v1, true), roof(u0, v1, true), (u0 + 1) / 2, (u1 + 1) / 2, v0, v1,
+      { color: c.s.interior.clone().lerp(lin(0xb9b29c), .7), rough: .94 });
   }
-
-  if (d.brightwork) {
-    for (const sx of [-1, 1] as const) {
-      b.strut(V(sx * (hwBelt + 0.019), d.belt + 0.040, d.wsBase - 0.05), V(sx * (hwBelt + 0.019), d.belt + 0.040, d.rsBase + 0.05), 0.019, 0.024, c.chrome);
-      b.strut(V(sx * (hwTop + 0.021), GTOP - 0.030, d.wsTop + 0.01), V(sx * (hwTop + 0.021), GTOP - 0.030, d.rsTop - 0.01), 0.019, 0.022, c.chrome);
-      b.strut(V(sx * (hwBelt - 0.021), d.belt + 0.02, d.wsBase + 0.012), V(sx * (hwTop - 0.004), GTOP - 0.02, d.wsTop + 0.012), 0.021, 0.022, c.chrome);
-      b.strut(V(sx * (hwBelt - 0.006), d.belt + 0.02, d.rsBase - 0.012), V(sx * (hwTop - 0.014), GTOP - 0.02, d.rsTop - 0.012), 0.021, 0.022, c.chrome);
-    }
-    b.strut(V(-hwTop * 0.86, d.belt + 0.026, d.wsBase + 0.012), V(hwTop * 0.86, d.belt + 0.026, d.wsBase + 0.012), 0.022, 0.024, c.chrome);
-    b.strut(V(-hwTop * 0.82, GTOP - 0.022, d.wsTop + 0.012), V(hwTop * 0.82, GTOP - 0.022, d.wsTop + 0.012), 0.022, 0.024, c.chrome);
-    b.strut(V(-hwTop * 0.88, d.belt + 0.026, d.rsBase - 0.012), V(hwTop * 0.88, d.belt + 0.026, d.rsBase - 0.012), 0.022, 0.024, c.chrome);
-    b.strut(V(-hwTop * 0.84, GTOP - 0.022, d.rsTop - 0.012), V(hwTop * 0.84, GTOP - 0.022, d.rsTop - 0.012), 0.022, 0.024, c.chrome);
-  } else {
-    // Modern cars: black rubber surrounds instead of chrome.
-    for (const sx of [-1, 1] as const) {
-      b.strut(V(sx * (hwBelt + 0.012), d.belt + 0.038, d.wsBase - 0.05), V(sx * (hwBelt + 0.012), d.belt + 0.038, d.rsBase + 0.05), 0.016, 0.026, c.trim);
-    }
+  for (const side of [-1, 1]) for (let j = 0; j < 14; j++) {
+    const v0 = j / 14, v1 = (j + 1) / 14;
+    b.quad(roof(side, v0), roof(side, v1), roof(side, v1, true), roof(side, v0, true), c.paint);
+    b.strut(roof(side, v0).add(new THREE.Vector3(side * .005, -.005, 0)),
+      roof(side, v1).add(new THREE.Vector3(side * .005, -.005, 0)), .009, .011,
+      d.brightwork ? c.chromeDull : c.paint);
   }
-
-  /* glass
-   *
-   * The screens must reach the PILLARS. Cut them to a fraction of the roof
-   * width and the gap between the glass edge and the A pillar is an open slot
-   * you can see straight through into the cabin — which is exactly how this
-   * car ended up looking as though it had no windscreen at all.
-   */
-  const wsBotHW = hwBelt - 0.030;
-  const wsTopHW = hwTop - 0.028;
-  g.quad(
-    V(-wsBotHW, GLASS_BOT, d.wsBase), V(wsBotHW, GLASS_BOT, d.wsBase),
-    V(wsTopHW, GLASS_TOP, d.wsTop), V(-wsTopHW, GLASS_TOP, d.wsTop), c.glassSurf,
-  );
-  const rsBotHW = hwBelt - 0.030;
-  const rsTopHW = hwTop - 0.030;
-  g.quad(
-    V(rsBotHW, GLASS_BOT, d.rsBase), V(-rsBotHW, GLASS_BOT, d.rsBase),
-    V(-rsTopHW, GLASS_TOP, d.rsTop), V(rsTopHW, GLASS_TOP, d.rsTop), c.glassSurf,
-  );
-  // Header and scuttle cross members, on every car — these are what close the
-  // top and bottom of each screen aperture.
-  b.strut(V(-wsBotHW, d.belt + 0.012, d.wsBase), V(wsBotHW, d.belt + 0.012, d.wsBase), 0.05, 0.055, pillarSurf);
-  b.strut(V(-wsTopHW, GTOP - 0.012, d.wsTop), V(wsTopHW, GTOP - 0.012, d.wsTop), 0.05, 0.05, pillarSurf);
-  b.strut(V(-rsBotHW, d.belt + 0.012, d.rsBase), V(rsBotHW, d.belt + 0.012, d.rsBase), 0.05, 0.055, pillarSurf);
-  b.strut(V(-rsTopHW, GTOP - 0.012, d.rsTop), V(rsTopHW, GTOP - 0.012, d.rsTop), 0.05, 0.05, pillarSurf);
-
-  /* side glass — it belongs to the DOORS, so it swings with them */
-  const gx = d.glassX;
-  const frameSurf: Surf = d.brightwork ? c.chrome : c.trim;
-  for (const s of slots) {
-    const x = s.side * gx;
-    const z0 = s.z0 + (s.row === 1 ? 0.05 : 0.0);
-    const z1 = s.z1 - 0.02;
-    const topFront = s.row === 0
-      ? d.wsTop + (d.wsBase - d.wsTop) * 0.10
-      : d.bPillarZ;
-    const topRear = s.row === 0 ? d.bPillarZ : d.rsTop + 0.02;
-    const gb = s.glassB;
-    const a = V(x, GLASS_BOT, z0), bb = V(x, GLASS_BOT, z1);
-    const cc = V(x, GLASS_TOP, Math.min(z1, topFront));
-    const dd = V(x, GLASS_TOP, Math.max(z0, topRear));
-    if (s.side > 0) gb.quad(a, bb, cc, dd, c.glassSurf);
-    else gb.quad(dd, cc, bb, a, c.glassSurf);
-    // window frame around the pane, on the door
-    const fx = s.side * (gx + 0.016);
-    s.skin.strut(V(fx, GLASS_BOT - 0.012, z0), V(fx, GLASS_BOT - 0.012, z1), 0.016, 0.02, frameSurf);
-    s.skin.strut(V(fx, GLASS_TOP + 0.008, Math.max(z0, topRear)), V(fx, GLASS_TOP + 0.008, Math.min(z1, topFront)), 0.016, 0.018, frameSurf);
-    s.skin.strut(V(fx, GLASS_BOT, z0 + 0.006), V(fx, GLASS_TOP, Math.max(z0, topRear)), 0.016, 0.018, frameSurf);
-    s.skin.strut(V(fx, GLASS_BOT, z1 - 0.006), V(fx, GLASS_TOP, Math.min(z1, topFront)), 0.016, 0.018, frameSurf);
+  for (const v of [0, 1]) for (let i = 0; i < 20; i++) {
+    const a = -1 + i / 10, z = a + .1;
+    b.quad(roof(a, v), roof(z, v), roof(z, v, true), roof(a, v, true), c.paint);
   }
-
-  // Three-door cars keep a fixed rear quarter window in the body.
-  if (d.doorRows === 1) {
-    const [qz0, qz1] = d.rearDoorZ;
-    for (const sx of [-1, 1] as const) {
-      const x = sx * gx;
-      const a = V(x, GLASS_BOT, qz0 + 0.10), bb = V(x, GLASS_BOT, qz1);
-      const cc = V(x, GLASS_TOP - 0.02, qz1), dd = V(x, GLASS_TOP - 0.06, qz0 + 0.26);
-      if (sx > 0) g.quad(a, bb, cc, dd, c.glassSurf); else g.quad(dd, cc, bb, a, c.glassSurf);
-      const fx = sx * (gx + 0.014);
-      b.strut(V(fx, GLASS_BOT - 0.012, qz0 + 0.10), V(fx, GLASS_BOT - 0.012, qz1), 0.014, 0.02, frameSurf);
-      b.strut(V(fx, GLASS_TOP - 0.06, qz0 + 0.26), V(fx, GLASS_TOP - 0.02, qz1), 0.014, 0.018, frameSurf);
-      b.strut(V(fx, GLASS_BOT, qz0 + 0.11), V(fx, GLASS_TOP - 0.06, qz0 + 0.26), 0.014, 0.018, frameSurf);
+  const glassSurf = { ...c.glassSurf, uv: UV.glassGrime };
+  for (const direction of [-1, 1] as const) {
+    const baseZ = direction > 0 ? d.wsBase : d.rsBase;
+    const topZ = direction > 0 ? d.wsTop : d.rsTop;
+    aperture(g, b, (u, v) => {
+      const across = direction * (u * 2 - 1);
+      return V(across * THREE.MathUtils.lerp(d.hwBelt - .062, d.hwTop - .035, v),
+        THREE.MathUtils.lerp(glassBottom, glassTop, v) + .060 * (1 - across * across) * v,
+        THREE.MathUtils.lerp(baseZ, topZ, v) + direction * .045 * (1 - across * across) * Math.sin(Math.PI * v));
+    }, glassSurf, c.paint, c.rubber, d.brightwork ? c.chrome : undefined);
+  }
+  // Tumblehome is shared by door panes, their frames and the fixed pillars.
+  const sidePoint = (side: number, z0: number, z1: number, topRear: number, topFront: number) => (u: number, v: number) => {
+    const across = side > 0 ? 1 - u : u;
+    return V(side * (THREE.MathUtils.lerp(d.hwBelt - .022, d.hwTop - .008, v) + .012 * Math.sin(Math.PI * v)),
+      THREE.MathUtils.lerp(glassBottom, glassTop, v),
+      THREE.MathUtils.lerp(THREE.MathUtils.lerp(z0, z1, across), THREE.MathUtils.lerp(topRear, topFront, across), v));
+  };
+  for (const slot of slots) {
+    const z0 = slot.z0 + .045, z1 = slot.z1 - .035;
+    const topRear = slot.row === 0 ? d.bPillarZ + .048 : d.rsTop + .068;
+    const topFront = slot.row === 0 ? d.wsTop - .034 : d.bPillarZ - .060;
+    const sample = sidePoint(slot.side, z0, z1, Math.max(z0, topRear), Math.min(z1, topFront));
+    aperture(slot.glassB, slot.skin, sample, glassSurf, c.paint, c.rubber,
+      d.brightwork ? c.chrome : undefined);
+    if (d.quarterLight && slot.row === 0) {
+      const u = slot.side > 0 ? .80 : .20;
+      slot.skin.strut(sample(u, -.035), sample(u, 1.04), .011, .014, c.chromeDull);
     }
   }
-
-  // Fixed quarter-light in the front door (a 1300 signature) sits on the door.
-  if (d.quarterLight) {
-    for (const s of slots) {
-      if (s.row !== 0) continue;
-      const zq = s.z1 - (s.z1 - s.z0) * 0.30;
-      s.skin.strut(V(s.side * (gx + 0.018), GLASS_BOT - 0.01, zq), V(s.side * (gx + 0.018), GLASS_TOP + 0.01, zq + 0.055), 0.017, 0.02, frameSurf);
+  if (d.doorRows === 1) for (const side of [-1, 1]) {
+    const [z0, z1] = d.rearDoorZ;
+    aperture(g, b, sidePoint(side, z0 + .1, z1 - .035, d.rsTop + .08, z1 - .04),
+      glassSurf, c.paint, c.rubber, d.brightwork ? c.chrome : undefined);
+  }
+  // Painted A/B/C structures sit between apertures, with rounded edges and
+  // much less cross-section than the old stack of independent square beams.
+  for (const side of [-1, 1]) {
+    for (const [base, top, width] of [[d.wsBase, d.wsTop, .036],
+      [d.rsBase, d.rsTop, d.rear === 'saloon' ? .105 : .060],
+      ...(d.doorRows === 2 ? [[d.bPillarZ, d.bPillarZ, .045]] : [])]) {
+      b.strut(V(side * (d.hwBelt - .02), d.belt + .02, base),
+        V(side * (d.hwTop - .005), d.height - .095, top), .036, width, c.paint);
     }
   }
-
-  /* wipers */
-  for (const wx of [-0.34, 0.20]) {
-    b.box(0.015, 0.011, d.width * 0.26, T(wx * d.width * 0.9, c.y(d.belt + 0.05), d.wsBase - 0.14, -0.32, 0.22, 0), {
-      color: BLACK_TRIM, rough: 0.55, metal: 0.2, coat: 0.2,
-    });
+  for (const wx of [-.34, .20]) {
+    const pivotX = wx * d.width * .9;
+    const pivot = V(pivotX, glassBottom + .005, d.wsBase + .018);
+    const tip = V(pivotX + d.width * .18, glassBottom + .06, d.wsBase - (d.wsBase - d.wsTop) * .14 + .020);
+    b.strut(pivot, tip, .007, .008, c.chromeDull);
+    b.strut(tip.clone().add(new THREE.Vector3(-d.width * .11, -.01, .008)),
+      tip.clone().add(new THREE.Vector3(d.width * .11, .01, -.008)), .010, .008, c.rubber);
   }
 }
 
@@ -732,12 +735,12 @@ function interior(c: Ctx): void {
   // dashboard, with a faintly glowing instrument pack
   b.box(d.halfWidth * 1.62, 0.19, 0.30, T(0, c.y(d.belt - 0.09), d.wsBase - 0.20, 0.22, 0, 0), dashSurf);
   b.box(d.halfWidth * 1.62, 0.06, 0.22, T(0, c.y(d.belt - 0.20), d.wsBase - 0.31), plastic);
-  b.box(0.40, 0.12, 0.02, T(-d.halfWidth * 0.4, c.y(d.belt - 0.075), d.wsBase - 0.34), {
+  b.box(0.40, 0.12, 0.02, T(d.halfWidth * 0.4, c.y(d.belt - 0.075), d.wsBase - 0.34), {
     color: lin(0xffb060), rough: 0.4, metal: 0, uv: UV.dash, light: L.cabin,
   });
 
   // steering wheel (LHD) + column
-  const wx = -d.halfWidth * 0.42, wy = c.y(d.belt - 0.10), wz = d.wsBase - 0.46;
+  const wx = d.halfWidth * 0.42, wy = c.y(d.belt - 0.10), wz = d.wsBase - 0.46;
   b.torus(d.width * 0.098, 0.016, 5, 14, Math.PI * 2, T(wx, wy, wz, Math.PI / 2 - 0.42, 0, 0), { color: lin(0x171219), rough: 0.6, metal: 0.05 });
   for (let i = 0; i < 3; i++) {
     const a = (i / 3) * Math.PI * 2 + 0.4;
@@ -750,16 +753,25 @@ function interior(c: Ctx): void {
   const seatW = Math.min(0.48, d.halfWidth * 0.62);
   const frontZ = cabinZ + (d.wsBase - d.rsBase) * 0.16;
   const seat = (sx: number, sz: number, backH: number) => {
-    b.box(seatW, 0.13, 0.46, T(sx, c.y(seatY), sz), seatSurf);
-    b.box(seatW, backH, 0.13, T(sx, c.y(seatY + backH * 0.5), sz - 0.25, -0.15, 0, 0), seatSurf);
-    b.box(seatW * 0.58, 0.12, 0.10, T(sx, c.y(seatY + backH + 0.04), sz - 0.31), seatSurf);
+    b.roundedBox(seatW, 0.14, 0.47, .055, T(sx, c.y(seatY), sz, -.045), seatSurf);
+    b.roundedBox(seatW, backH, 0.15, .052, T(sx, c.y(seatY + backH * 0.5), sz - 0.25, -0.15, 0, 0), seatSurf);
+    // Piped vinyl bolsters, separate cloth centre and longitudinal stitched
+    // channels retain upholstery depth through the side glass.
+    for (const side of [-1, 1]) b.roundedBox(.072, backH * .90, .12, .028,
+      T(sx + side * seatW * .40, c.y(seatY + backH * .51), sz - .19, -.15),
+      { color: s.interior.clone().multiplyScalar(.72), rough: .62, coat: .12 });
+    for (let i = -2; i <= 2; i++) b.strut(
+      c.V(sx + i * seatW * .105, seatY + .08, sz - .16),
+      c.V(sx + i * seatW * .105, seatY + backH * .90, sz - .21),
+      .004, .004, { color: s.interior.clone().multiplyScalar(.65), rough: .9 });
+    b.roundedBox(seatW * 0.58, 0.12, 0.10, .032, T(sx, c.y(seatY + backH + 0.04), sz - 0.31), seatSurf);
   };
   seat(-seatX, frontZ, 0.46);
   seat(seatX, frontZ, 0.46);
   if (d.seats > 2) {
     const rearZ = cabinZ - (d.wsBase - d.rsBase) * 0.22;
-    b.box(d.halfWidth * 1.4, 0.13, 0.44, T(0, c.y(seatY - 0.02), rearZ), seatSurf);
-    b.box(d.halfWidth * 1.4, 0.44, 0.13, T(0, c.y(seatY + 0.20), rearZ - 0.24, -0.14, 0, 0), seatSurf);
+    b.roundedBox(d.halfWidth * 1.4, 0.13, 0.44, .045, T(0, c.y(seatY - 0.02), rearZ), seatSurf);
+    b.roundedBox(d.halfWidth * 1.4, 0.44, 0.13, .050, T(0, c.y(seatY + 0.20), rearZ - 0.24, -0.14, 0, 0), seatSurf);
   }
 
   // tunnel, lever, handbrake
@@ -778,7 +790,7 @@ function frontEnd(c: Ctx): void {
   const { d, b, V } = c;
   const zF = c.nose + 0.045;
   const hw = halfWidthAt(d, c.nose - 0.10);
-  const lampY = d.belt - (d.belt - d.sill) * 0.42;
+  const lampY = d.belt - (d.belt - d.sill) * 0.30;
   const chrome = c.chrome, chromeDull = c.chromeDull, trim = c.trim;
   const bumperChrome = d.bumpers === 'chrome';
   const bumperSurf: Surf = bumperChrome ? chrome
@@ -803,13 +815,13 @@ function frontEnd(c: Ctx): void {
      * and the slat pitch is fine enough that it reads as texture rather than
      * as five bars.
      */
-    b.box(grilleW + 0.07, 0.032, 0.058, T(0, c.y(grilleY + grilleH * 0.5 + 0.016), zF - 0.018), chrome);
-    b.box(grilleW + 0.07, 0.032, 0.058, T(0, c.y(grilleY - grilleH * 0.5 - 0.016), zF - 0.018), chrome);
-    for (const sx of [-1, 1]) b.box(0.028, grilleH + 0.064, 0.058, T(sx * (grilleW * 0.5 + 0.016), c.y(grilleY), zF - 0.018), chrome);
+    b.roundedBox(grilleW + 0.045, 0.018, 0.050, .008, T(0, c.y(grilleY + grilleH * 0.5 + 0.016), zF - 0.018), chrome);
+    b.roundedBox(grilleW + 0.045, 0.018, 0.050, .008, T(0, c.y(grilleY - grilleH * 0.5 - 0.016), zF - 0.018), chrome);
+    for (const sx of [-1, 1]) b.roundedBox(0.016, grilleH + 0.045, 0.050, .007, T(sx * (grilleW * 0.5 + 0.016), c.y(grilleY), zF - 0.018), chrome);
     const slats = 11;
     for (let i = 0; i < slats; i++) {
       const t = (i + 0.5) / slats - 0.5;
-      b.box(grilleW * 0.985, 0.0065, 0.054, T(0, c.y(grilleY + t * grilleH * 0.92), zF - 0.016), chromeDull);
+      b.box(grilleW * 0.985, 0.005, 0.042, T(0, c.y(grilleY + t * grilleH * 0.92), zF - 0.010), { color: lin(0x383d3e), rough: .42, metal: .55 });
     }
     // Dacia badge: a black centre plinth flanked by two uprights, with a small
     // chrome shield on it — the 1300's grille is split down the middle.
@@ -842,75 +854,62 @@ function frontEnd(c: Ctx): void {
   const lampX = hw - 0.20;
   for (const sx of [-1, 1] as const) {
     const x = sx * lampX;
-    const indL = sx < 0 ? L.indL : L.indR;
+    const indL = sx > 0 ? L.indL : L.indR;
     switch (d.lamps) {
       case 'rect1300': {
-        /**
-         * The 1300's face, per `docs/reference/world/dacia-1300.jpg`:
-         * a RECTANGULAR outboard headlamp ringed by a BRIGHT CHROME SURROUND,
-         * a ROUND auxiliary lamp standing proud of the grille below it, and an
-         * amber indicator in the outer corner.
-         *
-         * The surround is built as four chrome bars around the aperture rather
-         * than as one chrome slab behind the lens. A slab is hidden by the lens
-         * it is supposed to frame, which is exactly how this ended up reading
-         * as "a white block": no visible bezel, no lamp, just a pale rectangle.
-         */
-        const lw = 0.155, lh = 0.058;   // lens half-extents
-        const bez = 0.020;              // chrome frame thickness
-        const zBez = zF - 0.006;
-        const ly = lampY + 0.035;
-        // Four-sided chrome surround, standing 12 mm proud of the lens.
-        b.box(lw * 2 + bez * 2, bez, 0.062, T(x, c.y(ly + lh + bez * 0.5), zBez), chrome);
-        b.box(lw * 2 + bez * 2, bez, 0.062, T(x, c.y(ly - lh - bez * 0.5), zBez), chrome);
-        for (const ex of [-1, 1]) {
-          b.box(bez, lh * 2 + bez * 2, 0.062, T(x + ex * (lw + bez * 0.5), c.y(ly), zBez), chrome);
+        // Original Renault-12 / Dacia-1300 rectangular reflector, with radiused
+        // corners and a silvered bowl visible through the fluted lens.
+        const ly = lampY + .040;
+        b.roundedBox(.350, .172, .075, .031, T(x, c.y(ly), zF - .008), chrome);
+        b.roundedBox(.326, .146, .077, .027, T(x, c.y(ly), zF -.003), c.rubber);
+        b.roundedBox(.309, .129, .050, .022, T(x, c.y(ly), zF + .020), {
+          color: lin(0xc2c9ca), rough: .065, metal: .22, coat: .94,
+          uv: UV.headlampGlass, light: L.head,
+        });
+        for (let rib = -5; rib <= 5; rib++) {
+          b.strut(V(x + rib * .023, ly - .045, zF + .047),
+            V(x + rib * .023, ly + .045, zF + .047), .002, .003,
+            { color: LENS_CLEAR, rough: .1, metal: .25, coat: .95, light: L.head });
         }
-        // Dark reflector housing, so the lens has something behind it and does
-        // not float as a white rectangle painted on the wing.
-        b.box(lw * 2, lh * 2, 0.05, T(x, c.y(ly), zF - 0.030), { color: lin(0x101016), rough: 0.35, metal: 0.5 });
-        // Fluted glass. Dimmer than white by day — it is glass over a silvered
-        // reflector, and the emissive channel is what makes it a LAMP at dusk.
-        b.box(lw * 2 - 0.008, lh * 2 - 0.008, 0.052, T(x, c.y(ly), zF - 0.014), {
-          color: lin(0xb9c2cf), rough: 0.055, metal: 0.15, coat: 0.95, uv: UV.headlampGlass, light: L.head,
+        const iy = lampY - .125;
+        b.roundedBox(.185, .080, .057, .016, T(x + sx * .017, c.y(iy), zF + .006), chromeDull);
+        b.roundedBox(.103, .060, .035, .012, T(x + sx * .048, c.y(iy), zF + .023), {
+          color: LENS_AMBER, rough: .13, coat: .8, uv: UV.tailLens, light: indL,
         });
-        // Chrome centre bar across the lens — the 1300's lamps are split.
-        b.box(lw * 2 - 0.02, 0.008, 0.056, T(x, c.y(ly), zF - 0.004), chromeDull);
-
-        // ROUND auxiliary lamp, inboard and low.
-        //
-        // It has to stand IN FRONT OF THE BUMPER, not level with the grille.
-        // The chrome bumper face is 0.088 proud of `zF`, so an auxiliary at
-        // `zF + 0.026` is buried in it up to its axle and renders as a chrome
-        // semicircle — which is what it was doing.
-        const auxX = x - sx * 0.062;
-        const auxY = lampY - 0.115;
-        const auxZ = zF + 0.086;
-        b.box(0.026, 0.075, 0.05, T(auxX, c.y(auxY + 0.05), auxZ - 0.045), chromeDull);   // bracket
-        b.torus(0.062, 0.017, 5, 14, Math.PI * 2, T(auxX, c.y(auxY), auxZ + 0.012), chrome);
-        b.cyl(0.058, 0.050, 0.062, 14, T(auxX, c.y(auxY), auxZ - 0.012, Math.PI / 2, 0, 0), {
-          color: lin(0xc6cfdd), rough: 0.06, metal: 0.1, coat: 0.95, uv: UV.headlampGlass, light: L.head,
+        b.roundedBox(.052, .060, .035, .012, T(x - sx * .032, c.y(iy), zF + .023), {
+          color: LENS_CLEAR, rough: .12, coat: .9, uv: UV.headlampGlass,
         });
-        // amber indicator in the outer corner, under the headlamp
-        b.box(0.095, 0.07, 0.05, T(sx * (hw - 0.035), c.y(lampY - 0.055), zF - 0.010), {
-          color: LENS_AMBER, rough: 0.12, metal: 0.03, coat: 0.85, uv: UV.tailLens, light: indL,
-        });
-        b.box(0.105, 0.012, 0.052, T(sx * (hw - 0.035), c.y(lampY - 0.096), zF - 0.010), chromeDull);
+        // The hero's period accessory fog lights are mounted on real brackets.
+        if (c.hero) {
+          const ax = x - sx * .18, ay = lampY - .13, az = zF + .105;
+          b.strut(V(ax, ay - .08, az - .025), V(ax, ay, az), .018, .025, chromeDull);
+          b.torus(.061, .009, 8, 32, Math.PI * 2, T(ax, c.y(ay), az), chrome);
+          b.cyl(.056, .051, .040, 32, T(ax, c.y(ay), az, Math.PI / 2), {
+            color: LENS_CLEAR, rough: .065, metal: .12, coat: .92,
+            uv: UV.headlampGlass, light: L.aux,
+          });
+        }
         break;
       }
       case 'rect1310': {
-        b.box(0.36, 0.15, 0.05, T(x - sx * 0.02, c.y(lampY + 0.03), zF - 0.012), trim);
-        b.box(0.325, 0.115, 0.06, T(x - sx * 0.02, c.y(lampY + 0.04), zF - 0.004), {
-          color: LAMP_WHITE, rough: 0.07, metal: 0.02, coat: 0.9, uv: UV.headlampGlass, light: L.head,
-        });
-        b.box(0.325, 0.05, 0.055, T(x - sx * 0.02, c.y(lampY - 0.045), zF - 0.006), {
-          color: LENS_AMBER, rough: 0.12, metal: 0.03, coat: 0.85, uv: UV.tailLens, light: indL,
+        // The 1980s 1310 facelift has FOUR round headlights in paired pods.
+        b.roundedBox(.39, .198, .070, .036, T(x - sx * .025, c.y(lampY + .035), zF), trim);
+        for (const offset of [-.091, .091]) {
+          const lx = x - sx * .025 + offset;
+          b.torus(.077, .009, 8, 32, Math.PI * 2, T(lx, c.y(lampY + .035), zF + .029), chromeDull);
+          b.cyl(.070, .067, .045, 32, T(lx, c.y(lampY + .035), zF + .022, Math.PI / 2), {
+            color: LENS_CLEAR, rough: .08, metal: .16, coat: .92,
+            uv: UV.headlampGlass, light: L.head,
+          });
+        }
+        b.roundedBox(.22, .050, .036, .012, T(x, c.y(lampY - .098), zF + .02), {
+          color: LENS_AMBER, rough: .13, coat: .85, uv: UV.tailLens, light: indL,
         });
         break;
       }
       case 'roundTwin': {
-        b.torus(0.098, 0.02, 5, 14, Math.PI * 2, T(x, c.y(lampY + 0.03), zF - 0.006), chrome);
-        b.cyl(0.09, 0.086, 0.05, 14, T(x, c.y(lampY + 0.03), zF - 0.026, Math.PI / 2, 0, 0), {
+        b.torus(0.098, 0.014, 8, 32, Math.PI * 2, T(x, c.y(lampY + 0.03), zF - 0.006), chrome);
+        b.cyl(0.09, 0.086, 0.05, 32, T(x, c.y(lampY + 0.03), zF - 0.026, Math.PI / 2, 0, 0), {
           color: LAMP_WHITE, rough: 0.06, metal: 0.02, coat: 0.9, uv: UV.headlampGlass, light: L.head,
         });
         b.box(0.11, 0.07, 0.045, T(sx * (hw - 0.045), c.y(lampY - 0.05), zF - 0.012), {
@@ -962,17 +961,17 @@ function frontEnd(c: Ctx): void {
   /* --- bumper --- */
   const bumperY = d.sill + (d.belt - d.sill) * 0.30;
   if (bumperChrome) {
-    b.box(hw * 1.96, 0.10, 0.095, T(0, c.y(bumperY), zF + 0.04), bumperSurf);
+    b.roundedBox(hw * 1.96, 0.075, 0.12, .032, T(0, c.y(bumperY), zF + 0.035), bumperSurf);
     b.box(hw * 1.96, 0.042, 0.05, T(0, c.y(bumperY - 0.055), zF + 0.025), chromeDull);
     for (const sx of [-1, 1]) {
       // rubber-faced overriders — slim, and mostly rubber from the front
       b.box(0.062, 0.175, 0.075, T(sx * hw * 0.46, c.y(bumperY + 0.028), zF + 0.048), chrome);
       b.box(0.052, 0.155, 0.035, T(sx * hw * 0.46, c.y(bumperY + 0.028), zF + 0.088), c.rubber);
-      b.box(0.095, 0.10, 0.20, T(sx * (hw - 0.04), c.y(bumperY), zF - 0.055), chromeDull);
+      b.roundedBox(0.095, 0.075, 0.22, .032, T(sx * (hw - 0.06), c.y(bumperY), zF - 0.045), chrome);
     }
   } else {
     const h = d.bumpers === 'cladding' ? 0.30 : 0.24;
-    b.box(hw * 1.98, h, 0.15, T(0, c.y(bumperY - 0.01), zF - 0.005), bumperSurf);
+    b.roundedBox(hw * 1.98, h, 0.19, .062, T(0, c.y(bumperY - 0.01), zF - 0.005), bumperSurf);
     if (d.bumpers === 'cladding') {
       b.box(hw * 1.86, 0.10, 0.13, T(0, c.y(bumperY - 0.17), zF + 0.01), { color: lin(0x9aa0aa), rough: 0.42, metal: 0.55, coat: 0.3 });
     }
@@ -1011,21 +1010,22 @@ function rearEnd(c: Ctx): void {
   const bumperChrome = d.bumpers === 'chrome';
 
   // rear panel between the lamps
-  b.box(hw * 1.36, 0.22, 0.045, T(0, c.y(lampY), zR + 0.03), { color: BLACK_TRIM, rough: 0.65, metal: 0.2 });
+  b.roundedBox(hw * 1.84, 0.28, 0.11, .042, T(0, c.y(lampY), zR + 0.047),
+    d.lamps === 'rect1300' ? c.paint : { color: BLACK_TRIM, rough: 0.65, metal: 0.2 });
 
   for (const sx of [-1, 1] as const) {
     const x = sx * (hw - 0.20);
-    const indL = sx < 0 ? L.indL : L.indR;
+    const indL = sx > 0 ? L.indL : L.indR;
     if (d.rear === 'saloon' && (d.lamps === 'rect1300' || d.lamps === 'rect1310' || d.lamps === 'roundTwin')) {
       // Three-segment 70s cluster: amber / red / white in a chrome frame.
-      b.box(0.30, 0.185, 0.05, T(x, c.y(lampY), zR - 0.004), { color: BLACK_TRIM, rough: 0.6, metal: 0.3 });
-      b.box(0.285, 0.10, 0.045, T(x, c.y(lampY + 0.036), zR - 0.018), {
+      b.roundedBox(0.31, 0.178, 0.060, .025, T(x, c.y(lampY), zR - 0.004), d.brightwork ? chrome : trim);
+      b.roundedBox(0.285, 0.09, 0.046, .018, T(x, c.y(lampY + 0.034), zR - 0.023), {
         color: LENS_RED, rough: 0.09, metal: 0.02, coat: 0.9, uv: UV.tailLens, light: L.tail,
       });
-      b.box(0.135, 0.06, 0.045, T(x - sx * 0.072, c.y(lampY - 0.054), zR - 0.018), {
+      b.roundedBox(0.135, 0.055, 0.045, .012, T(x - sx * 0.072, c.y(lampY - 0.049), zR - 0.023), {
         color: LENS_AMBER, rough: 0.1, metal: 0.02, coat: 0.9, uv: UV.tailLens, light: indL,
       });
-      b.box(0.115, 0.06, 0.045, T(x + sx * 0.082, c.y(lampY - 0.054), zR - 0.018), {
+      b.roundedBox(0.115, 0.055, 0.045, .012, T(x + sx * 0.082, c.y(lampY - 0.049), zR - 0.023), {
         color: LENS_CLEAR, rough: 0.09, metal: 0.02, coat: 0.9, uv: UV.tailLens, light: L.reverse,
       });
       b.box(0.315, 0.018, 0.048, T(x, c.y(lampY + 0.098), zR - 0.012), chromeDull);
@@ -1055,17 +1055,17 @@ function rearEnd(c: Ctx): void {
 
   // bumper
   if (bumperChrome) {
-    b.box(hw * 1.92, 0.095, 0.09, T(0, c.y(bumperY), zR - 0.035), chrome);
+    b.roundedBox(hw * 1.92, 0.075, 0.12, .032, T(0, c.y(bumperY), zR - 0.030), chrome);
     b.box(hw * 1.92, 0.038, 0.05, T(0, c.y(bumperY - 0.05), zR - 0.025), chromeDull);
     for (const sx of [-1, 1]) {
       b.box(0.08, 0.18, 0.08, T(sx * hw * 0.46, c.y(bumperY + 0.022), zR - 0.045), chrome);
-      b.box(0.095, 0.095, 0.20, T(sx * (hw - 0.04), c.y(bumperY), zR + 0.055), chromeDull);
+      b.roundedBox(0.095, 0.075, 0.22, .032, T(sx * (hw - 0.06), c.y(bumperY), zR + 0.045), chrome);
     }
   } else {
     const surf: Surf = d.bumpers === 'bodyPlastic'
       ? { ...c.paint, coat: 0.7, rough: 0.36 }
       : { color: DARK_PLASTIC, rough: 0.72, metal: 0.06, coat: 0.12 };
-    b.box(hw * 1.96, d.bumpers === 'cladding' ? 0.30 : 0.24, 0.15, T(0, c.y(bumperY - 0.01), zR + 0.01), surf);
+    b.roundedBox(hw * 1.96, d.bumpers === 'cladding' ? 0.30 : 0.24, 0.19, .062, T(0, c.y(bumperY - 0.01), zR + 0.01), surf);
   }
 
   // plate, plate lamp, badge, shut line
@@ -1101,24 +1101,21 @@ function sides(c: Ctx): void {
       });
     }
     // sill / rocker
-    b.box(0.042, 0.085, d.length * 0.56, T(sx * (d.halfWidth - 0.012), c.y(d.sill + 0.025), -d.length * 0.02), {
+    b.box(0.042, 0.085, d.length * 0.56, T(sx * (d.halfWidth - 0.082), c.y(d.sill + 0.025), -d.length * 0.02), {
       color: d.cladding ? lin(0x24242a) : c.s.interior.clone().lerp(lin(0x2f2a24), 0.66),
       rough: 0.9, metal: 0.08, uv: UV.bodyBattered,
     });
-    /**
-     * Wheel-arch lips — struck from the HUB, exactly like `archY`.
-     *
-     * These used to be centred on `sill * 0.92`, i.e. 0.08–0.1 m BELOW the hub,
-     * with the same radius as the opening. The lip therefore did not trace the
-     * arch: its crown fell below the top of the tyre and, seen from the side,
-     * drew a dark arc straight across the upper third of the wheel. That is the
-     * "the rear arch half-skirts the wheel" reading — the opening was open all
-     * along, the trim on it was not.
-     */
     for (const az of [d.frontAxleZ, d.rearAxleZ]) {
-      b.torus(d.archRadius * 0.985, d.cladding ? 0.042 : 0.021, 5, 14, Math.PI * 1.06,
-        T(sx * (d.halfWidth + d.archBlister), c.y(d.wheelRadius), az, 0, (Math.PI / 2) * sx, -0.03),
-        d.cladding ? { color: lin(0x1e1e24), rough: 0.86, metal: 0.05 } : c.trim);
+      for (let j = 0; j < 32; j++) {
+        const z0 = az + d.archRadius * (-1 + j / 16);
+        const z1 = az + d.archRadius * (-1 + (j + 1) / 16);
+        const at = (z: number, outer: boolean) => c.V(
+          sx * (halfWidthAt(d, z) - (outer ? .002 : .018)),
+          archY(d, z) + (outer ? (d.cladding ? .065 : .024) : .004), z);
+        const a = at(z0, false), q = at(z1, false), r = at(z1, true), t = at(z0, true);
+        if (sx > 0) b.quad(t, r, q, a, d.cladding ? c.trim : c.paint);
+        else b.quad(a, q, r, t, d.cladding ? c.trim : c.paint);
+      }
     }
     // Mirror, mounted ON the shoulder at the base of the A pillar rather than
     // hovering in space beside the glass.
@@ -1129,9 +1126,9 @@ function sides(c: Ctx): void {
       new THREE.Vector3(sx * (d.halfWidth + 0.055), c.y(my + 0.03), mz - 0.01),
       0.032, 0.05, d.brightwork ? c.chromeDull : c.trim,
     );
-    b.box(0.045, 0.075, 0.11, T(sx * (d.halfWidth + 0.085), c.y(my + 0.045), mz - 0.02),
+    b.roundedBox(0.115, 0.075, 0.075, .026, T(sx * (d.halfWidth + 0.085), c.y(my + 0.045), mz - 0.02),
       d.brightwork ? { color: CHROME_DULL, rough: 0.16, metal: 0.95, coat: 0.4 } : { ...c.paint, rough: 0.34 });
-    b.box(0.016, 0.055, 0.085, T(sx * (d.halfWidth + 0.109), c.y(my + 0.045), mz - 0.02), { color: lin(0x9fb3d0), rough: 0.04, metal: 1, coat: 0.6 });
+    b.roundedBox(0.093, 0.055, 0.012, .005, T(sx * (d.halfWidth + 0.085), c.y(my + 0.045), mz - 0.061), { color: lin(0x9fb3d0), rough: 0.04, metal: 1, coat: 0.6 });
     // fuel filler
     if (sx < 0) {
       b.cyl(0.046, 0.046, 0.018, 10, T(-(d.halfWidth + 0.006), c.y(d.belt - 0.16), d.rearAxleZ - 0.34, 0, 0, Math.PI / 2), d.brightwork ? c.chrome : { ...c.paint, rough: 0.34 });
@@ -1165,7 +1162,7 @@ function finishDoors(c: Ctx, slots: DoorSlot[]): DoorPart[] {
     const hx = s.side * d.halfWidth;
     const skin = s.skin;
     const midZ = (s.z0 + s.z1) * 0.5;
-    const innerX = s.side * (d.halfWidth - 0.055);
+    const innerX = s.side * (d.halfWidth - 0.14);
 
     // Inner skin so the door has thickness and a card you can see when open.
     skin.box(0.05, d.belt - d.sill - 0.09, s.z1 - s.z0 - 0.03,
@@ -1180,8 +1177,19 @@ function finishDoors(c: Ctx, slots: DoorSlot[]): DoorPart[] {
     const handleSurf: Surf = d.brightwork ? c.chrome : { ...c.paint, rough: 0.35 };
     skin.box(0.028, 0.032, 0.125, T(hx + s.side * 0.018, c.y(d.belt - 0.10), handleZ), handleSurf);
     skin.box(0.02, 0.018, 0.045, T(hx + s.side * 0.032, c.y(d.belt - 0.10), handleZ + 0.042), handleSurf);
-    // Shut-line lip down the trailing edge, so the gap reads as a panel gap.
-    skin.box(0.05, d.belt - d.sill - 0.08, 0.012, T(hx - s.side * 0.02, c.y((d.sill + d.belt) * 0.5 + 0.02), s.z0 + 0.008), c.trim);
+    // A narrow seam follows the tucked door skin. A flat black beam at the
+    // maximum body width would protrude through the curved lower door.
+    const seamZ = s.z0 + .004;
+    const bottom = archY(d, seamZ) + .04;
+    for (let j = 0; j < 12; j++) {
+      const at = (t: number) => {
+        const h = THREE.MathUtils.lerp(bottom, d.belt - .025, t);
+        const fraction = (h - archY(d, seamZ)) / (topY(d, seamZ) - archY(d, seamZ));
+        const hw = halfWidthAt(d, seamZ);
+        return c.V(s.side * (hw - .085 * (1 - fraction) ** 2 + .001), h, seamZ);
+      };
+      skin.strut(at(j / 12), at((j + 1) / 12), .003, .004, c.trim);
+    }
 
     const hinge = new THREE.Vector3(hx, c.y((d.sill + d.belt) * 0.5), hingeZ);
     const shellGeo = skin.build();
@@ -1217,7 +1225,7 @@ function buildDriver(c: Ctx): THREE.BufferGeometry {
   const floor = d.sill + 0.10;
   const cabinZ = (d.wsBase + d.rsBase) * 0.5;
   const sz = cabinZ + (d.wsBase - d.rsBase) * 0.16;
-  const sx = -d.halfWidth * 0.42;
+  const sx = d.halfWidth * 0.42;
   const hipY = floor + 0.30;
   const skin: Surf = { color: lin(0x8a6144), rough: 0.72, metal: 0 };
   const cloth: Surf = { color: lin(0x2b3348), rough: 0.88, metal: 0.02, uv: UV.fabric };
@@ -1246,7 +1254,7 @@ function anchors(c: Ctx): BodyAnchors {
   const { d } = c;
   const hwF = halfWidthAt(d, c.nose - 0.10);
   const hwR = halfWidthAt(d, c.tail + 0.12);
-  const lampY = d.belt - (d.belt - d.sill) * 0.42;
+  const lampY = d.belt - (d.belt - d.sill) * 0.30;
   const tailY = d.rear === 'saloon' ? d.belt - 0.17 : d.belt - 0.10;
   return {
     headlights: [

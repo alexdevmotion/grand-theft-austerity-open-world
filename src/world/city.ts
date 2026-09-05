@@ -184,9 +184,10 @@ export class CitySystem implements System, CityService {
 
     const t0 = performance.now();
     this.importBucharest();
-    this.generateStreets();
     this.generateBlocks();
     this.generateLandmarks();
+    // Street dressing must see the raised decks that overlap road ribbons.
+    this.generateStreets();
     this.bake();
     this.binNodes();
     const ms = performance.now() - t0;
@@ -297,6 +298,7 @@ export class CitySystem implements System, CityService {
 
   private get sink() {
     return {
+      groundHeight: (x: number, z: number) => this.slabTopAt(x, z) ?? undefined,
       surf: (x: number, z: number) => this.chunkFor(x, z).surface,
       detail: (x: number, z: number) => this.chunkFor(x, z).detail,
       facade: (x: number, z: number) => this.chunkFor(x, z).facade,
@@ -388,15 +390,15 @@ export class CitySystem implements System, CityService {
         const off = (l + 0.5) * laneW;
         this.lanes.push({
           fromNode: a, toNode: b, lane: l,
-          ax: na.position.x - px * off, az: na.position.z - pz * off,
-          bx: nb.position.x - px * off, bz: nb.position.z - pz * off,
+          ax: na.position.x + px * off, az: na.position.z + pz * off,
+          bx: nb.position.x + px * off, bz: nb.position.z + pz * off,
           width: laneW,
         });
         if (!e.oneway) {
           this.lanes.push({
             fromNode: b, toNode: a, lane: l,
-            ax: nb.position.x + px * off, az: nb.position.z + pz * off,
-            bx: na.position.x + px * off, bz: na.position.z + pz * off,
+            ax: nb.position.x - px * off, az: nb.position.z - pz * off,
+            bx: na.position.x - px * off, bz: na.position.z - pz * off,
             width: laneW,
           });
         }

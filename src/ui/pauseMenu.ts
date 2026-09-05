@@ -26,6 +26,7 @@
 import type { GameContext, System } from '../core/engine';
 import type { ActionName } from '../core/input';
 import { Services, type RenderService } from '../core/services';
+import { num, onLangChange, t, tp } from '../core/i18n';
 
 type Quality = 'low' | 'medium' | 'high' | 'ultra';
 
@@ -103,7 +104,7 @@ const KEY_GLYPHS: Record<string, string> = {
 };
 
 function glyph(code: string): string {
-  return KEY_GLYPHS[code] ?? code.replace(/^(Key|Digit)/, '');
+  return t(KEY_GLYPHS[code] ?? code.replace(/^(Key|Digit)/, ''));
 }
 
 interface BindingRow {
@@ -164,7 +165,36 @@ export class PauseMenu implements System {
     window.addEventListener('keydown', onKey, true);
     this.disposers.push(() => window.removeEventListener('keydown', onKey, true));
 
+    // The probe result caches the labels it read, so a language switch has to
+    // drop it — otherwise CONTROLS keeps showing whichever language was on
+    // screen the first time the page was opened.
+    this.disposers.push(
+      onLangChange(() => {
+        this.bindings = null;
+        this.paintChrome();
+        if (this.open) this.render();
+      }),
+    );
+
+    this.paintChrome();
     this.applyStored();
+  }
+
+  /** The parts of `TEMPLATE` that are copy rather than layout. */
+  private paintChrome(): void {
+    const set = (sel: string, text: string): void => {
+      const el = this.root.querySelector<HTMLElement>(sel);
+      if (el) el.textContent = text;
+    };
+    set('.pm-eyebrow', t('B★ BUILDERSTAR GAMES — TRANSMISIUNE ÎNTRERUPTĂ'));
+    set('.pm-foot', t('ESC ÎNAPOI · ↑ ↓ NAVIGARE · ← → MODIFICĂ · ENTER SELECTEAZĂ'));
+    const title = this.root.querySelector<HTMLElement>('.pm-title');
+    if (title) {
+      // The chromatic-aberration ghost is `content: attr(data-text)`, so the
+      // attribute has to move with the text or the two layers disagree.
+      title.textContent = t('PAUZĂ');
+      title.dataset.text = t('PAUZĂ');
+    }
   }
 
   /* ---------------------------------------------------------------- */
@@ -239,12 +269,15 @@ export class PauseMenu implements System {
   }
 
   private saveLabel(): string {
-    if (this.saveFlash > 0) return 'progres salvat';
-    if (this.saveFlash < 0) return 'salvarea nu este disponibilă';
+    if (this.saveFlash > 0) return t('progres salvat');
+    if (this.saveFlash < 0) return t('salvarea nu este disponibilă');
     const slot = this.ctx.tryGet(Services.Save)?.peek();
-    if (!slot) return 'scrie progresul în browser';
-    const mins = Math.floor(slot.playSeconds / 60);
-    return `nivel ${slot.level} · ${Math.round(slot.lei).toLocaleString('ro-RO')} lei · ${mins} min`;
+    if (!slot) return t('scrie progresul în browser');
+    return tp('nivel {level} · {lei} lei · {mins} min', {
+      level: slot.level,
+      lei: num(Math.round(slot.lei)),
+      mins: Math.floor(slot.playSeconds / 60),
+    });
   }
 
   /** Called every frame by the engine, paused or not. */
@@ -436,8 +469,10 @@ export class PauseMenu implements System {
   /* ---------------------------------------------------------------- */
 
   private render(): void {
-    this.crumbEl.textContent =
-      this.page === 'main' ? 'MENIU' : this.page === 'settings' ? 'MENIU / SETĂRI' : 'MENIU / COMENZI';
+    this.crumbEl.textContent = t(
+      this.page === 'main' ? 'MENIU' : this.page === 'settings' ? 'MENIU / SETĂRI' : 'MENIU / COMENZI',
+    );
+    this.paintChrome();
 
     if (this.page === 'main') this.bodyEl.innerHTML = this.mainHtml();
     else if (this.page === 'settings') this.bodyEl.innerHTML = this.settingsHtml();
@@ -492,10 +527,10 @@ export class PauseMenu implements System {
 
   private mainHtml(): string {
     const items = [
-      ['REIA JOCUL', 'înapoi în București'],
-      ['SALVEAZĂ', this.saveLabel()],
-      ['SETĂRI', 'imagine, sunet, mouse'],
-      ['COMENZI', 'toate tastele'],
+      [t('REIA JOCUL'), t('înapoi în București')],
+      [t('SALVEAZĂ'), this.saveLabel()],
+      [t('SETĂRI'), t('imagine, sunet, mouse')],
+      [t('COMENZI'), t('toate tastele')],
     ];
     return `<div class="pm-list">${items
       .map(
@@ -509,29 +544,29 @@ export class PauseMenu implements System {
   private settingsHtml(): string {
     const q = this.quality;
     const seg = QUALITIES.map(
-      (k) => `<span class="pm-seg${k === q ? ' on' : ''}" data-step="${QUALITIES.indexOf(k) - QUALITIES.indexOf(q)}">${QUALITY_LABELS[k]}</span>`,
+      (k) => `<span class="pm-seg${k === q ? ' on' : ''}" data-step="${QUALITIES.indexOf(k) - QUALITIES.indexOf(q)}">${t(QUALITY_LABELS[k])}</span>`,
     ).join('');
     const vol = Math.round(this.masterVolume * 100);
     const sens = Math.round(this.ctx.input.lookSensitivity * 1e6);
     const inv = this.ctx.input.invertY;
     return `<div class="pm-list">
       <div class="pm-row" data-row="0">
-        <span class="pm-lab">Calitate imagine</span>
+        <span class="pm-lab">${t('Calitate imagine')}</span>
         <span class="pm-ctl pm-segs">${seg}</span>
       </div>
       <div class="pm-row" data-row="1">
-        <span class="pm-lab">Volum principal</span>
+        <span class="pm-lab">${t('Volum principal')}</span>
         <span class="pm-ctl"><input type="range" min="0" max="100" step="1" value="${vol}" data-row-input="1"><b data-val="vol">${vol}%</b></span>
       </div>
       <div class="pm-row" data-row="2">
-        <span class="pm-lab">Sensibilitate mouse</span>
+        <span class="pm-lab">${t('Sensibilitate mouse')}</span>
         <span class="pm-ctl"><input type="range" min="400" max="7500" step="50" value="${sens}" data-row-input="2"><b data-val="sens">${sensLabel(this.ctx.input.lookSensitivity)}</b></span>
       </div>
       <div class="pm-row" data-row="3">
-        <span class="pm-lab">Inversează axa Y</span>
-        <span class="pm-ctl pm-segs"><span class="pm-seg${inv ? '' : ' on'}" data-step="-1">NU</span><span class="pm-seg${inv ? ' on' : ''}" data-step="1">DA</span></span>
+        <span class="pm-lab">${t('Inversează axa Y')}</span>
+        <span class="pm-ctl pm-segs"><span class="pm-seg${inv ? '' : ' on'}" data-step="-1">${t('NU')}</span><span class="pm-seg${inv ? ' on' : ''}" data-step="1">${t('DA')}</span></span>
       </div>
-      <button class="pm-item pm-back" data-row="4"><span class="pm-item-t">ÎNAPOI</span></button>
+      <button class="pm-item pm-back" data-row="4"><span class="pm-item-t">${t('ÎNAPOI')}</span></button>
     </div>`;
   }
 
@@ -546,8 +581,8 @@ export class PauseMenu implements System {
       )
       .join('');
     return `<div class="pm-keys">${cells}</div>
-      <div class="pm-note">Citite direct din harta de input a jocului — nu dintr-o listă scrisă de mână.</div>
-      <button class="pm-item pm-back" data-row="0"><span class="pm-item-t">ÎNAPOI</span></button>`;
+      <div class="pm-note">${t('Citite direct din harta de input a jocului — nu dintr-o listă scrisă de mână.')}</div>
+      <button class="pm-item pm-back" data-row="0"><span class="pm-item-t">${t('ÎNAPOI')}</span></button>`;
   }
 
   /* ---------------------------------------------------------------- */
@@ -610,13 +645,13 @@ export class PauseMenu implements System {
     const out: BindingRow[] = [];
     const move = (id: string, label: string): void => {
       const keys = byMove.get(id);
-      if (keys?.length) out.push({ label, keys: keys.map(glyph) });
+      if (keys?.length) out.push({ label: t(label), keys: keys.map(glyph) });
     };
     move('forward', 'Înainte');
     move('back', 'Înapoi');
     move('left', 'Stânga');
     move('right', 'Dreapta');
-    out.push({ label: 'Privește', keys: ['MOUSE'] });
+    out.push({ label: t('Privește'), keys: ['MOUSE'] });
 
     for (const a of ALL_ACTIONS) {
       const label = ACTION_LABELS[a];
@@ -624,10 +659,10 @@ export class PauseMenu implements System {
       const keys = byAction.get(a);
       if (!keys?.length) continue;
       if (a === 'handbrake' && handbrakeKeys.length) continue;
-      out.push({ label, keys: keys.map(glyph) });
+      out.push({ label: t(label), keys: keys.map(glyph) });
     }
     if (handbrakeKeys.length) {
-      out.push({ label: ACTION_LABELS.handbrake ?? 'Frână de mână', keys: handbrakeKeys.map(glyph) });
+      out.push({ label: t(ACTION_LABELS.handbrake ?? 'Frână de mână'), keys: handbrakeKeys.map(glyph) });
     }
 
     this.bindings = out;

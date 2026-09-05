@@ -128,7 +128,7 @@ export class TrafficAgent {
     const cross = e.ux * n.uz - e.uz * n.ux;
     let lane: number;
     if (turn < 0.35) lane = Math.min(fromLane === TRAM_LANE ? 0 : fromLane, n.lanes - 1);
-    else if (cross < 0) lane = n.lanes - 1;       // right turn: hug the kerb
+    else if (cross > 0) lane = n.lanes - 1;       // right turn: hug the kerb
     else lane = 0;                                 // left turn: inside lane
     return { edge: chosen, lane: Math.max(0, lane) };
   }
@@ -225,8 +225,8 @@ export class TrafficAgent {
       const w = this.wps[this.wi];
       const t = ((px - w.x) * w.hx + (pz - w.z) * w.hz) / Math.max(0.2, w.len);
       if (t > 1) { this.wi++; continue; }
-      // Positive when we sit to the RIGHT of the path; the driver's Stanley
-      // term steers left to null it out.
+      // Positive when we sit to the LEFT of the path; the driver's Stanley
+      // term steers right to null it out.
       cross = (px - w.x) * w.hz - (pz - w.z) * w.hx;
       return cross;
     }
@@ -531,7 +531,8 @@ export class TrafficAgent {
       : target < 1 ? 'queue' : 'go';
 
     // Kerb-side offset while pulled over / panicking.
-    const extraCross = this.pullOverSide * 1.7;
+    // The steering controller uses positive cross-track to the left.
+    const extraCross = -this.pullOverSide * 1.7;
     this.lastTargetSpeed = target;
 
     this.driver.drive(dt, _a.x, _a.z, target, pathHeading, {

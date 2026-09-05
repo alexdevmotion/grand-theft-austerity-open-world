@@ -43,46 +43,10 @@ import { Atmosphere, Grade } from '../artDirection';
 import { ExposureEffect, GradeEffect } from './gradeEffect';
 import { QUALITY, applyQuality, type Quality } from './renderer';
 
-/* ------------------------------------------------------------------ */
-/* Calibration                                                         */
-/*                                                                     */
-/* artDirection authors the intent; these convert it into values that  */
-/* suit the actual chain (AgX after a real exposure stage). They are   */
-/* renderer setup, not look, so they live with the renderer.           */
-/* ------------------------------------------------------------------ */
-
-/*
- * The scene is lit in physical units; this puts mid-grey where AgX wants it.
- * Calibrated by sweeping against the reference frame's measured histogram
- * (p50 50, mean 66) across both a street-level and a skyline framing — a
- * single framing is not enough, because the two disagree by a stop.
- */
-/*
- * RECALIBRATED when the exposure shoulder changed shape. The old
- * `c / (1 + c * 1.1)` divided EVERY value, not just highlights: a mid-tone at
- * 0.35 came out at 0.25, a 0.5 stop reduction applied across the whole frame,
- * and the 1.76 here existed to pay that back. The shoulder that replaced it
- * leaves everything below 0.72 untouched, so keeping 1.76 double-counted the
- * compensation and blew the frame out — measured p50 67 against the
- * reference's 50, with the entire city sitting in pale peach.
- */
-const EXPOSURE = Grade.exposure * 1.38;
-/*
- * Only genuinely hot things bloom — sun disc, horizon rip, cloud rims, window
- * emissives. A dusk city is full of moderately bright surfaces and a low
- * threshold turns the whole frame into haze, destroying the very contrast the
- * reference depends on.
- *
- * THIS NUMBER USED TO BE UNREACHABLE. At 0.92 it sat ABOVE the 0.909 hard
- * ceiling the old exposure rolloff imposed on every pixel in the game, so
- * nothing ever crossed it fully and the bloom pass contributed almost nothing.
- * Now that the exposure shoulder preserves real HDR headroom (ceiling ~21
- * linear, sun disc landing near 14), the threshold can sit meaningfully above
- * where lit architecture lands and BELOW where the sun and the rip land — so
- * the bloom keys off the sun, which is what it is for.
- */
-const BLOOM_THRESHOLD = 1.05;
-const BLOOM_INTENSITY = Grade.bloomIntensity * 1.95;
+/** Exposure and bloom follow the authored grade without hidden compensations. */
+const EXPOSURE = Grade.exposure;
+const BLOOM_THRESHOLD = Grade.bloomThreshold;
+const BLOOM_INTENSITY = Grade.bloomIntensity;
 
 /* ------------------------------------------------------------------ */
 /* Wet-street screen-space reflection                                  */
@@ -623,7 +587,7 @@ export class PostFXSystem implements System, RenderService {
       intensity: q.bloom ? BLOOM_INTENSITY : 0,
       luminanceThreshold: BLOOM_THRESHOLD,
       luminanceSmoothing: Grade.bloomSmoothing,
-      radius: 0.86,
+      radius: Grade.bloomRadius,
       mipmapBlur: true,
       kernelSize: q.bloom ? KernelSize.LARGE : KernelSize.SMALL,
     });

@@ -469,6 +469,54 @@ export class DetailBuilder {
     this.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
   }
 
+  /** Thin leaf sprays retain sky gaps and branch silhouettes without alpha
+   * textures. The reverse face has its own normal, so lighting and shadow
+   * winding agree on both sides of each leaf. */
+  leafSpray(
+    cx: number, cy: number, cz: number,
+    rx: number, ry: number, rz: number,
+    o: DetailOpts, seedIn = 1, count = 6,
+  ): void {
+    let seed = seedIn >>> 0 || 1;
+    const rnd = (): number => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+    for (let i = 0; i < count; i++) {
+      const azimuth = rnd() * Math.PI * 2;
+      const slope = (rnd() - 0.5) * 1.8;
+      const px = cx + (rnd() - 0.5) * rx * 1.4;
+      const py = cy + (rnd() - 0.5) * ry * 1.4;
+      const pz = cz + (rnd() - 0.5) * rz * 1.4;
+      // A blade is 14–28 cm long, even when its parent spray spans a metre.
+      const length = Math.min(0.12, rx * 0.40) * (0.72 + rnd() * 0.45);
+      const width = length * (0.52 + rnd() * 0.22);
+      const ax = Math.cos(azimuth) * length;
+      const az = Math.sin(azimuth) * length;
+      const ay = slope * length;
+      const bx = -Math.sin(azimuth) * width;
+      const bz = Math.cos(azimuth) * width;
+      // Six-point lamina: shoulders round off the old kite silhouette.
+      const outline = [[-1, 0], [-0.55, 0.68], [0.2, 1], [1, 0], [0.2, -1], [-0.55, -0.68]];
+      const points = outline.map(([u, v]) => [
+        px + ax * u + bx * v,
+        py + ay * u + Math.abs(v) * length * 0.10,
+        pz + az * u + bz * v,
+      ]);
+      const normal = faceNormal(...points[0] as [number, number, number],
+        ...points[1] as [number, number, number], ...points[2] as [number, number, number]);
+      for (const reverse of [false, true]) {
+        const base = this.pos.length / 3;
+        const sign = reverse ? -1 : 1;
+        for (const p of points) this.push(p[0], p[1], p[2], normal.x * sign, normal.y * sign, normal.z * sign, o);
+        for (let k = 1; k < points.length - 1; k++) {
+          if (reverse) this.idx.push(base + k + 1, base + k, base);
+          else this.idx.push(base, base + k, base + k + 1);
+        }
+      }
+    }
+  }
+
   /** Axis-aligned box, optionally rotated about Y. */
   box(
     cx: number, cy: number, cz: number,

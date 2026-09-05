@@ -110,9 +110,9 @@ function scheme(rng: Rng, table: Array<[number, number, number]>, wear: [number,
 /** The hero car: battered yellow with mismatched purple donor panels. */
 export function heroScheme(): PaintScheme {
   return {
-    base: Palette.daciaYellow.clone().offsetHSL(0.004, 0.30, 0.12),
-    alt: Palette.daciaPurple.clone().offsetHSL(0.01, 0.22, 0.08),
-    faded: Palette.daciaYellow.clone().offsetHSL(0.004, 0.10, 0.16).lerp(lin(0xbdb083), 0.28),
+    base: lin(0xc8b36f),
+    alt: lin(0x66516e),
+    faded: lin(0xc6b989),
     interior: lin(0x6d5540),
     wear: 1,
   };
@@ -143,7 +143,7 @@ function heroPanels(d: CarDesign, s: PaintScheme): ColorFn {
 
 const dacia1300 = car({
   id: 'dacia1300', cls: 'dacia', label: 'Dacia 1300',
-  length: 4.35, width: 1.64, height: 1.44,
+  length: 4.34, width: 1.636, height: 1.434,
   frontAxleZ: 1.32, rearAxleZ: -1.12,
   wheelRadius: 0.30, tyreWidth: 0.175, rideHeight: 0.62,
   wheelStyle: 'hubcap', seats: 4,
@@ -331,10 +331,12 @@ function heroDecals(b: GeoBuilder, d: CarDesign, rng: Rng): void {
   sideDecal(1, -1.80, y(0.44), 0.22, UV.stickerCircle, 0.12);
   sideDecal(-1, -1.72, y(0.62), 0.24, UV.stickerArrow, 0.05);
   const rust = (sx: number, cz: number, cy: number, size: number) => sideDecal(sx, cz, cy, size, UV.rustPatch);
-  rust(1, 1.32, y(0.60), 0.46);
-  rust(-1, 1.22, y(0.34), 0.40);
-  rust(1, -1.12, y(0.36), 0.44);
-  rust(-1, -1.34, y(0.66), 0.38);
+  // Rust belongs to metal beside the arches; a decal across the opening
+  // otherwise becomes an opaque patch floating over the spinning tyre.
+  rust(1, 1.84, y(0.40), 0.18);
+  rust(-1, 1.84, y(0.35), 0.14);
+  rust(1, -1.69, y(0.36), 0.18);
+  rust(-1, -1.69, y(0.43), 0.20);
 
   // Duct tape holding the front bumper on.
   const zT = d.length * 0.5 + 0.15;
@@ -392,11 +394,11 @@ function ministryKit(b: GeoBuilder, d: CarDesign): THREE.Vector3[] {
   for (const sx of [-1, 1]) {
     b.box(hw * 0.5, 0.075, 0.17, T(sx * hw * 0.36, y(d.height + 0.10), roofZ), {
       color: sx < 0 ? lin(0x2b6cff) : lin(0xff2020), rough: 0.08, metal: 0.05,
-      light: sx < 0 ? L.indL : L.indR,
+      light: sx > 0 ? L.indL : L.indR,
     });
     b.box(0.16, 0.05, 0.05, T(sx * 0.3, y(d.belt - 0.24), d.length * 0.5 + 0.05), {
       color: sx < 0 ? lin(0x2b6cff) : lin(0xff2020), rough: 0.1, metal: 0.05,
-      light: sx < 0 ? L.indL : L.indR,
+      light: sx > 0 ? L.indL : L.indR,
     });
   }
   b.box(hw * 1.32, 0.055, 0.21, T(0, y(d.height + 0.145), roofZ), { color: lin(0x18181e), rough: 0.5, metal: 0.3 });

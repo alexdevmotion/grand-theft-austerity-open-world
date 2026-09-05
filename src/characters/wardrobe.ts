@@ -902,7 +902,7 @@ export function slotSurface(a: Appearance): Map<SlotId, { roughness: number; met
 }
 
 function slotStyles(a: Appearance): Record<number, ColumnStyle> {
-  return {
+  const styles: Record<number, ColumnStyle> = {
     [SLOT.SKIN]: skinStyle(a),
     [SLOT.HAIR]: hairStyle(a),
     [SLOT.TOP]: topStyle(a),
@@ -912,6 +912,17 @@ function slotStyles(a: Appearance): Record<number, ColumnStyle> {
     [SLOT.ACCENT]: accentStyle(a),
     [SLOT.DETAIL]: detailStyle(a),
   };
+  if (a.cast) {
+    // Dark fabric keeps its dye colour on shoulders. Mixing 10% white into
+    // its atlas was painting a broad grey highlight independent of lighting.
+    for (const slot of [SLOT.TOP, SLOT.OUTER, SLOT.LEGS]) {
+      styles[slot].shadeTop = 1.01;
+      styles[slot].shadeBottom = 0.92;
+      styles[slot].metalness = 0;
+      styles[slot].roughness = Math.max(0.74, styles[slot].roughness);
+    }
+  }
+  return styles;
 }
 
 export interface AppearanceTextures {

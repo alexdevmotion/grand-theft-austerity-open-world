@@ -17,6 +17,7 @@ import { BEARD_TOP, buildBeard, buildBrows, buildHairCards, buildHairShell, buil
 import { HERO_APPEARANCE } from '../wardrobe';
 import { BODY_TYPES, NOMINAL_HEIGHT, bodyMetrics } from '../rig';
 import type { CastId } from './fitData';
+import { L } from './landmarks';
 
 const M = bodyMetrics('average', false);
 const CHIN_Y = M.headY - 0.010;
@@ -134,6 +135,36 @@ test.each(CAST_IDS)('%s: the globe is seated inside the lid aperture', (id: Cast
     expect(s.apertureW).toBeGreaterThan(0.022);
     expect(s.apertureW).toBeLessThan(0.032);
   }
+});
+
+test.each(CAST_IDS)('%s: actual pupil geometry is visible in front of the skin', (id: CastId) => {
+  const { geometry, anchors } = head(id);
+  const material = new THREE.MeshBasicMaterial({ side: THREE.FrontSide });
+  const skin = new THREE.Mesh(geometry, material);
+  const direction = new THREE.Vector3(0, 0, -1);
+  for (const [side, eye] of [anchors.eyeL, anchors.eyeR].entries()) {
+    const yaw = side === 0 ? 0.048 : -0.048;
+    const { globe, cornea } = eyeLayerGeometries(eye, yaw);
+    const iris = new THREE.Mesh(globe, material);
+    const pupil = new THREE.Vector3(0, 0, eye.radius * (Math.cos(0.50) - 0.30))
+      .applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw).add(eye.centre);
+    // Sample the centre and surrounding pupil, not a hypothetical solid ball.
+    for (const [x, y] of [[0, 0], [-0.10, 0], [0.10, 0], [0, -0.10], [0, 0.10]]) {
+      const origin = pupil.clone().add(new THREE.Vector3(x * eye.radius, y * eye.radius, 0.2));
+      const ray = new THREE.Raycaster(origin, direction);
+      const eyeHit = ray.intersectObject(iris)[0];
+      const skinHit = ray.intersectObject(skin)[0];
+      expect(eyeHit).toBeDefined();
+      // The right atlas half contains the iris. This also detects back-face
+      // culling or an accidentally sealed sclera in front of the pupil.
+      expect(eyeHit.uv!.x).toBeGreaterThan(0.5);
+      expect(eyeHit.uv!.x).toBeLessThan(1);
+      if (skinHit) expect(skinHit.distance - eyeHit.distance).toBeGreaterThan(0.0001);
+    }
+    globe.dispose();
+    cornea.dispose();
+  }
+  material.dispose();
 });
 
 /* ------------------------------------------------------------------ */
@@ -309,12 +340,25 @@ test.each(CAST_IDS)('%s: the nose flares — wings wider than the bridge', (id: 
 test.each(CAST_IDS)('%s: the nose is long, straight and projects', (id: CastId) => {
   const n = measureNose(head(id).geometry, head(id).anchors);
 
-  /* Goode's ratio. "The nose is too short" was never about its length — that is
-   * pinned by the landmarks at 56 mm and has been right all along — it was about
-   * projection, which was 0.44 against a normal 0.55-0.60. A nose that does not
-   * stand out of the face reads short however long it measures. */
-  expect(n.projectionRatio).toBeGreaterThan(0.48);
-  expect(n.projectionRatio).toBeLessThan(0.68);
+  // measureNose measures relief above an 18 mm Gaussian-blurred surface,
+  // not the clinical alar-plane projection used by Goode's ratio. Applying
+  // that ratio here forced an extra generic nose onto the photographed fit.
+  // Bound the built tip against this subject's actual fitted nose instead.
+  const { geometry, anchors } = head(id);
+  const cloud = CAST[id].cloud();
+  const f = anchors.frame;
+  const tipX = cloud[L.noseTip * 3] * f.scale + f.ox;
+  const tipY = cloud[L.noseTip * 3 + 1] * f.scale + f.oy;
+  const tipZ = cloud[L.noseTip * 3 + 2] * f.scale + f.oz;
+  const positions = geometry.getAttribute('position');
+  let builtTip = -Infinity;
+  for (let i = 0; i < positions.count; i++) {
+    if (Math.abs(positions.getX(i) - tipX) < 0.012 && Math.abs(positions.getY(i) - tipY) < 0.008) {
+      builtTip = Math.max(builtTip, positions.getZ(i));
+    }
+  }
+  expect(builtTip).toBeGreaterThan(tipZ - 0.002);
+  expect(builtTip).toBeLessThan(tipZ + 0.010);
 
   /* And it has to project along its whole length, not just at the tip. The
    * reference's dorsum starts between the brows. */

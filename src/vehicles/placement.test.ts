@@ -8,6 +8,7 @@ import {
   vehicleFootprintsOverlap,
   vehiclePlacementIsClear,
   type VehiclePlacementFootprint,
+  type VehicleDoors,
 } from './vehicleSystem';
 
 function footprint(
@@ -134,6 +135,28 @@ function vehicleSystem(phys: PhysicsWorld, ctx: GameContext): VehicleSystem {
   internals.atlas = new THREE.Texture();
   return system;
 }
+
+test('driver door alias resolves to physical left and passenger to right after rotation', async () => {
+  const restoreDocument = installCanvasStub();
+  const { phys, ctx } = await physicsWorld();
+  try {
+    const system = vehicleSystem(phys, ctx);
+    for (const heading of [0, Math.PI / 2, Math.PI, -Math.PI / 2, .73]) {
+      const car = system.spawn('dacia', new THREE.Vector3(heading * 30, 0, 0), heading) as VehicleHandle & VehicleDoors;
+      const right = new THREE.Vector3(0, 0, 1).applyQuaternion(car.rotation).cross(new THREE.Vector3(0, 1, 0));
+      const driver = car.seatAnchor('driver', new THREE.Vector3())!;
+      const left = car.seatAnchor('frontLeft', new THREE.Vector3())!;
+      const passenger = car.seatAnchor('passenger', new THREE.Vector3())!;
+      expect(driver.distanceTo(left)).toBeLessThan(1e-6);
+      expect(driver.clone().sub(car.position).dot(right)).toBeLessThan(0);
+      expect(passenger.sub(car.position).dot(right)).toBeGreaterThan(0);
+      expect(car.doorAnchor('driver', new THREE.Vector3())!.sub(driver).dot(right)).toBeLessThan(0);
+    }
+  } finally {
+    phys.dispose();
+    restoreDocument();
+  }
+}, 20_000);
 
 function installStraightRoad(ctx: GameContext): void {
   const nodes = [

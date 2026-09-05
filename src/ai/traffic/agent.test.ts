@@ -19,6 +19,21 @@ function node(id: number, x: number, links: number[]): RoadNode {
   };
 }
 
+test('right turns choose the kerb lane and left turns choose the inside lane', () => {
+  for (const side of [-1, 1]) {
+    const nodes = [node(0, 0, [1]), node(1, 100, [0, 2]), node(2, 100, [1])];
+    nodes[2].position.z = side * 100;
+    const graph = new TrafficGraph({ roadNodes: nodes, tramLines: [], spatial: {
+      isBlocked: () => false,
+    } } as unknown as CityService);
+    const vehicle = { id: 'turn-probe', kind: 'dacia' } as ControllableVehicle;
+    const agent = new TrafficAgent(vehicle, graph, graph.edgeBetween(0, 1), 1, new Rng('turn-probe'));
+    // East (+X) to +Z is a right turn when viewed from above with Y up.
+    const plan = agent as unknown as { planLanes: number[] };
+    expect(plan.planLanes[0]).toBe(side > 0 ? 2 : 0);
+  }
+});
+
 test('a displaced tram re-seats level and tangent-aligned on its physical track', () => {
   const nodes = [node(0, 0, [1]), node(1, 100, [0, 2]), node(2, 200, [1])];
   const city = {

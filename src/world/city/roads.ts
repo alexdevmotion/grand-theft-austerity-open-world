@@ -230,14 +230,14 @@ export function buildRoads(opt: RoadBuildOptions): void {
       const off = (l + 0.5) * laneW;
       opt.lanes.push({
         fromNode: from, toNode: to, lane: l,
-        ax: ax - px * off, az: az - pz * off,
-        bx: bx - px * off, bz: bz - pz * off,
+        ax: ax + px * off, az: az + pz * off,
+        bx: bx + px * off, bz: bz + pz * off,
         width: laneW,
       });
       opt.lanes.push({
         fromNode: to, toNode: from, lane: l,
-        ax: bx + px * off, az: bz + pz * off,
-        bx: ax + px * off, bz: az + pz * off,
+        ax: bx - px * off, az: bz - pz * off,
+        bx: ax - px * off, bz: az - pz * off,
         width: laneW,
       });
     }
@@ -325,7 +325,7 @@ export function buildRoads(opt: RoadBuildOptions): void {
         const sbx = cx + ux * dir * (depth / 2 + 0.55);
         const sbz = cz + uz * dir * (depth / 2 + 0.55);
         zs.ribbon(
-          sbx, sbz, sbx - px * (width / 2 - 0.5), sbz - pz * (width / 2 - 0.5),
+          sbx, sbz, sbx - px * dir * (width / 2 - 0.5), sbz - pz * dir * (width / 2 - 0.5),
           0.45, 0.013, 0,
           { kind: Surf.zebra, a: 1e6, b: 0, seed: 1 }, 1,
           CAMBER, 0, -(width / 2 - 0.5) / (width / 2),

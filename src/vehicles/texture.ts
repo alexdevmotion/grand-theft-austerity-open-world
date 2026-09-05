@@ -167,10 +167,13 @@ function paintBody(g: CanvasRenderingContext2D, rect: UVRect, battered: boolean)
 
     if (battered) {
       // Rust blooms with a darker core and a feathered halo.
-      for (let i = 0; i < 34; i++) {
-        const x = rng.range(0, w);
+      for (let i = 0; i < 26; i++) {
+        // Corrosion starts at the underside seams, not in giant blooms
+        // across the roof. The loft UV seam is on the bottom of the body.
+        const edge = rng.bool(0.5) ? 0 : w;
+        const x = edge === 0 ? rng.range(0, w * 0.19) : rng.range(w * 0.81, w);
         const y = rng.range(0, h);
-        const r = rng.range(6, 34);
+        const r = rng.range(3, 18);
         rustBlob(c, rng, x, y, r);
       }
       // Mud spatter.
@@ -200,11 +203,6 @@ function paintBody(g: CanvasRenderingContext2D, rect: UVRect, battered: boolean)
         c.stroke();
       }
     } else {
-      for (let i = 0; i < 10; i++) {
-        const x = rng.range(0, w);
-        const y = rng.range(0, h);
-        rustBlob(c, rng, x, y, rng.range(3, 11));
-      }
       for (let i = 0; i < 250; i++) {
         const x = rng.range(0, w);
         const y = rng.range(0, h);

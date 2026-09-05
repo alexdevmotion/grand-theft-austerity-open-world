@@ -345,6 +345,10 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
   const torsoSlot: SlotId = hasOuter ? SLOT.OUTER : SLOT.TOP;
   const sleeveSlot: SlotId = hasOuter && OUTER_SLEEVES[a.outer] ? SLOT.OUTER : SLOT.TOP;
   const sleeveBulk = sleeveSlot === SLOT.OUTER ? bulk * 0.75 : 0.006;
+  // Named cast is inspected close up; crowd geometry keeps its existing cost.
+  const torsoRadial = a.cast ? 32 : 12;
+  const collarRadial = a.cast ? 28 : 10;
+  const armRadial = a.cast ? 20 : 8;
 
   /* ---------------- torso ---------------- */
   {
@@ -417,7 +421,7 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
         v: pr.v,
       };
     });
-    b.tube(rings, 12, torsoSlot, { capStart: hem < 0.4, capEnd: true });
+    b.tube(rings, torsoRadial, torsoSlot, { capStart: hem < 0.4, capEnd: true });
 
     // Open coat/apron hem: a short inner skirt so the silhouette has depth.
     if (hem > 0.4) {
@@ -427,7 +431,7 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
           { ...inner, rx: inner.rx * 0.86, rzF: inner.rzF * 0.86, rzB: (inner.rzB ?? inner.rzF) * 0.86, v: 0.52 },
           { ...rings[1], rx: rings[1].rx * 0.9, rzF: rings[1].rzF * 0.9, rzB: (rings[1].rzB ?? rings[1].rzF) * 0.9, v: 0.42 },
         ],
-        12, torsoSlot, { capStart: true },
+        torsoRadial, torsoSlot, { capStart: true },
       );
     }
 
@@ -435,13 +439,17 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
     if (hasOuter) {
       const y0 = m.neckY - 0.02;
       const w = spineWeights(y0, m);
-      b.tube(
-        [
-          { c: V(0, y0, 0.006), dir: UPV, rx: m.neckR * 1.55, rzF: m.neckR * 1.5, n: 2.4, b0: w[0], w0: w[1], b1: w[2], w1: w[3], v: 0.03 },
-          { c: V(0, m.neckY + 0.045, 0.004), dir: UPV, rx: m.neckR * 1.22, rzF: m.neckR * 1.2, n: 2.2, b0: BI.neck, w0: 1, v: 0.005 },
-        ],
-        10, SLOT.TOP, {},
-      );
+      // A raised cast collar has one exposed rim. The taller shirt tube
+      // otherwise cuts across it as the neck and upper-chest weights diverge.
+      if (!(a.cast && a.collarUp)) {
+        b.tube(
+          [
+            { c: V(0, y0, 0.006), dir: UPV, rx: m.neckR * 1.55, rzF: m.neckR * 1.5, n: 2.4, b0: w[0], w0: w[1], b1: w[2], w1: w[3], v: 0.03 },
+            { c: V(0, m.neckY + 0.045, 0.004), dir: UPV, rx: m.neckR * 1.22, rzF: m.neckR * 1.2, n: 2.2, b0: BI.neck, w0: 1, v: 0.005 },
+          ],
+          collarRadial, SLOT.TOP, {},
+        );
+      }
 
       /* COLLAR UP. The shirt neckline above tops out 25 mm below the chin, which
        * on a bearded man leaves a bare column of neck as the brightest thing in
@@ -471,7 +479,7 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
             { c: V(0, lerp(m.neckY, top, 0.5), -0.002), dir: UPV, rx: m.neckR * 1.52, rzF: m.neckR * 1.42, rzB: m.neckR * 1.62, n: 2.3, b0: BI.neck, w0: 0.85, b1: BI.upperChest, w1: 0.15, v: 0.02 },
             { c: V(0, top, -0.008), dir: UPV, rx: m.neckR * 1.70, rzF: m.neckR * 1.40, rzB: m.neckR * 1.82, n: 2.2, b0: BI.neck, w0: 1, v: 0.008 },
           ],
-          12, SLOT.OUTER, {},
+          a.cast ? collarRadial : 12, SLOT.OUTER, {},
         );
       }
     }
@@ -497,7 +505,7 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
         { c: V(0, chinY + 0.006, 0.005), dir: UPV, rx: m.neckR * 1.05, rzF: m.neckR * 1.10, b0: BI.neck, w0: 0.55, b1: BI.head, w1: 0.45, v: 0.52 },
         { c: V(0, chinY + 0.026, 0.006), dir: UPV, rx: m.neckR * 1.00, rzF: m.neckR * 1.08, b0: BI.neck, w0: 0.25, b1: BI.head, w1: 0.75, v: 0.5 },
       ],
-      10, SLOT.SKIN, {},
+      a.cast ? 28 : 10, SLOT.SKIN, {},
     );
   }
 
@@ -657,7 +665,7 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
 
     if (!bare) {
       // Long sleeve: shoulder to cuff, one surface, one slot.
-      b.tube(armTaper.map(armRing), 8, sleeveSlot, { capStart: true });
+      b.tube(armTaper.map(armRing), armRadial, sleeveSlot, { capStart: true });
     } else {
       /* A short sleeve is a real edge in the world, so it gets a real seam here.
        * The two chains share the cut ring exactly (same centre, same direction,
@@ -669,14 +677,14 @@ export function buildHumanoidGeometry(a: Appearance, rig: Rig): THREE.BufferGeom
       const cutRow: ArmRow = [cutT, m.upperArmR * 1.02, upper, 1, upper];
       const sleeve = armTaper.filter((r) => r[0] < cutT).map(armRing);
       sleeve.push(armRing(cutRow));
-      b.tube(sleeve, 8, sleeveSlot, { capStart: true });
+      b.tube(sleeve, armRadial, sleeveSlot, { capStart: true });
 
       const skin = [cutRow, ...armTaper.filter((r) => r[0] > cutT)].map((row) => {
         const ring = armRing(row);
         // Same centres, no cloth bulk, and the SKIN column's own v ramp.
         return { ...ring, rx: row[1], rzF: row[1] * 0.97, rzB: row[1] * 1.02, v: 0.30 + (row[0] - 1) * 0.19 };
       });
-      b.tube(skin, 8, SLOT.SKIN, {});
+      b.tube(skin, armRadial, SLOT.SKIN, {});
     }
 
     buildHand(b, m, rig, L, hand);

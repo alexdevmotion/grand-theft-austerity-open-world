@@ -4,6 +4,13 @@ dist/
 *.log
 .vite/
 tools/out/
+tools/blender/input/
+tools/blender/__pycache__/
+assets/blender/*.blend1
+assets/blender/exports/
+# Studio portraits without redistribution grants; sources are documented.
+docs/reference/likeness/alex-nedea.jpg
+docs/reference/likeness/alexandru-agatinei.jpg
 bun.lock
 bun.lockb
 

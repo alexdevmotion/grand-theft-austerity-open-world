@@ -119,7 +119,7 @@ function eyeTexture(opts: EyeOptions): THREE.CanvasTexture {
   // Dark brown eyes. Lerping the highlight 40% toward white turned the outer
   // stroma pale grey, which at this distance is the whole iris — the reference
   // has deep-set dark eyes and pale ones read as somebody else entirely.
-  const light = base.clone().lerp(new THREE.Color(0xffffff), 0.22);
+  const light = base.clone().lerp(new THREE.Color(0xffffff), 0.065);
 
   g.fillStyle = '#000';
   g.fillRect(half, 0, half, TEX);
@@ -148,7 +148,8 @@ function eyeTexture(opts: EyeOptions): THREE.CanvasTexture {
     const wob = rng.range(-0.10, 0.10);
     const bright = rng.next();
     const c = bright > 0.62 ? light : bright > 0.28 ? base : dark;
-    g.strokeStyle = `rgba(${(c.r * 255) | 0},${(c.g * 255) | 0},${(c.b * 255) | 0},${rng.range(0.14, 0.5).toFixed(3)})`;
+    g.strokeStyle = css(c);
+    g.globalAlpha = rng.range(0.14, 0.5);
     g.lineWidth = rng.range(0.7, 2.4);
     g.beginPath();
     g.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0);
@@ -158,6 +159,7 @@ function eyeTexture(opts: EyeOptions): THREE.CanvasTexture {
     );
     g.stroke();
   }
+  g.globalAlpha = 1;
   // Collarette — the ruff around the pupil.
   g.strokeStyle = 'rgba(255,240,220,0.20)';
   g.lineWidth = R * 0.05;
@@ -197,7 +199,7 @@ function eyeTexture(opts: EyeOptions): THREE.CanvasTexture {
 }
 
 function css(c: THREE.Color): string {
-  return `rgb(${(c.r * 255) | 0},${(c.g * 255) | 0},${(c.b * 255) | 0})`;
+  return c.getStyle(THREE.SRGBColorSpace);
 }
 
 /* ------------------------------------------------------------------ */
@@ -407,11 +409,13 @@ export function buildEyes(eyeL: EyeAnchor, eyeR: EyeAnchor, opts: EyeOptions): E
     // scene's key is a low sun aimed straight at it. At 0xf2ece2 the eyes
     // rendered as two lamps set into the face — the opposite failure to the
     // dead black hollow the first pass produced, and just as wrong.
-    color: 0xbdb2a2,
-    roughness: 0.30,
+    color: 0xffffff,
+    roughness: 0.65,
     metalness: 0,
+    specularIntensity: 0.0,
+    envMapIntensity: 0.12,
     // The sclera is faintly translucent — light bleeds through its rim.
-    sheen: 0.25,
+    sheen: 0,
     sheenRoughness: 0.7,
     sheenColor: new THREE.Color(0xffb0a0),
     clearcoat: 0.0,
@@ -443,10 +447,12 @@ export function buildEyes(eyeL: EyeAnchor, eyeR: EyeAnchor, opts: EyeOptions): E
     blending: THREE.AdditiveBlending,
     roughness: 0.025,
     metalness: 0,
-    clearcoat: 1.0,
+    clearcoat: 0.0,
     clearcoatRoughness: 0.02,
     ior: 1.376,                    // the actual index of refraction of cornea
-    specularIntensity: 1.0,
+    specularIntensity: 0.30,
+    envMapIntensity: 0.07,
+    fog: false,
     depthWrite: false,
     side: THREE.FrontSide,
     dithering: true,

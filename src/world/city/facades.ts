@@ -61,14 +61,14 @@ const lin = srgb;
 export const DetailColor = {
   stone: lin(0xa89b86),
   stoneDark: lin(0x6f6558),
-  concrete: lin(0x726c76),
-  concreteDark: lin(0x4a4650),
+  concrete: lin(0x77776e),
+  concreteDark: lin(0x4c4d46),
   metal: lin(0x3d434c),
   metalPale: lin(0x8d949c),
   alu: lin(0x9aa2ab),
-  bitumen: lin(0x1b1820),
+  bitumen: lin(0x242421),
   rust: lin(0x6d4326),
-  glassDark: lin(0x141a2c),
+  glassDark: lin(0x1a242a),
   awning: lin(0x7a2338),
   sodium: PAL.sodiumLamp,
   purple: PAL.builderPurple,
@@ -1772,95 +1772,14 @@ export function parkedCar(
 /* Street trees                                                        */
 /* ------------------------------------------------------------------ */
 
-/** Metalness/roughness for foliage. Leaves are waxy, not chalk. */
-const LEAF_MR: [number, number] = [0.0, 0.66];
-/**
- * Radians of normal scatter on a leaf cluster.
- *
- * Some scatter is essential: a lobe whose normals all agree is a smooth ball
- * that goes uniformly dark the moment the sun is behind it. But past about a
- * third of a radian adjacent facets shade to wildly different values and the
- * lobe stops reading as one soft mass — every facet becomes a separate flat
- * chip, and a crown of chips looks like folded paper, which is the failure
- * this was pushed to 0.62 chasing and then caused.
- */
-const LEAF_NJITTER = 0.30;
+const LEAF_MR: [number, number] = [0.0, 0.82];
 
-/**
- * CANOPY CLOSURE — the number this whole file turns on.
- *
- * A crown is a MASS. It stops being one the instant you can see sky between
- * neighbouring lobes, and the previous authoring could not avoid that because
- * it fixed the lobe RADIUS (0.78 m) and the lobe COUNT (24-30) independently of
- * the crown SIZE. Run the numbers on what that produced: a 2.35 m crown seen
- * from the side is a disc of area pi*R^2 = 17 m^2; the ~15 lobes that survive
- * `thin` and face the camera project pi*r^2 = 1.9 m^2 each, so 28 m^2 of leaf
- * over 17 m^2 of disc — but scattered over shell radii 0.52..1.0, half of it
- * landing INSIDE the crown where it covers nothing. The silhouette came out
- * roughly half holes. At lod 1 the budget dropped to 10 lobes and at lod 0 to
- * 5, and since those two tiers cover everything more than 260 m from the hero
- * crossroads — which at street level is most of what you are ever looking at —
- * the game shipped trees that were literally a handful of detached lozenges
- * hung in the air near a stick.
- *
- * So SIZE IS DERIVED, NEVER AUTHORED. Given a lobe count N and a crown whose
- * side silhouette is an ellipse with semi-axes (crownR, crownHalfH), the N/2
- * lobes facing the camera close that ellipse when
- *
- *     (N/2) * pi*r^2  >=  COVER * pi * crownR * crownHalfH
- *
- * with COVER ~1.6 to allow for the overlap random placement wastes. Hence
- *
- *     r = sqrt(2 * COVER * crownR * crownHalfH / N)
- *
- * and the LOD tiers become a choice of GRANULARITY rather than of coverage:
- * few big lobes far away, many small ones near. The crown is the same solid,
- * correctly-sized mass at every tier, which is what makes the transitions
- * invisible and what stops a distant avenue turning into confetti.
- *
- * COVER carries one more factor: lobes are authored OBLATE (a leaf cluster
- * hangs, it is not a ball), which costs about a fifth of their projected area,
- * so 1.6 becomes 2.0 and the constant below is 2 * 2.0.
- */
 const LOBE_COVER = 4.0;
 
-/**
- * Nominal lobe radius per LOD tier, in metres. Drives the lobe COUNT.
- *
- * A real plane-leaf cluster is 40-60 cm across, and the near tier is authored
- * at that. Anything much above it reads as folded card from the three to eight
- * metres a third-person camera actually spends its life at, however well the
- * crown closes — which is the second half of the "opaque balloons" complaint
- * and the reason a 0.78 m lobe was never going to be good enough.
- */
-/*
- * The MID tier is the one that matters most and the one that was starved.
- * Foliage LOD here is spatial, not camera-relative — see the note at the call
- * sites in roads.ts — so "lod 1" means 260-700 m from the hero crossroads,
- * which at street level is most of the trees in most frames, at 15-60 m from
- * the camera. That is well inside resolving distance, so it is authored only
- * one step coarser than the near tier rather than two.
- */
 const LOBE_R: Record<0 | 1 | 2, number> = { 2: 0.70, 1: 0.86, 0: 1.36 };
 
-/**
- * Hard ceiling on lobes per crown, so a big park tree cannot run away.
- *
- * High, because the budget is now spent on COUNT rather than on roundness:
- * a single-ring six-sided lobe is 12 triangles against the 32 the previous
- * authoring spent on an eight-sided two-ring one. For a fixed triangle count
- * that buys 2.6x the lobes at 0.6x the radius, and for a crown made of forty
- * overlapping pieces the union's outline is all you can see — the shape of any
- * individual piece is invisible, so paying for it is pure waste.
- */
 const LOBE_MAX = 100;
 
-/**
- * A leaf cluster's material. `trans` is the sub-surface term that makes a
- * backlit crown glow; the tiny emissive is a FLOOR so a crown in full shadow
- * holds a dim olive instead of going to zero. It is deliberately small — the
- * look comes from `trans`, not from self-illumination.
- */
 function leafOpt(c: THREE.Color, trans: number, wind: number): DetailOpts {
   return {
     color: c,
@@ -1871,66 +1790,30 @@ function leafOpt(c: THREE.Color, trans: number, wind: number): DetailOpts {
   };
 }
 
-/**
- * One seasonal family per tree. Picking from all five hues for every lobe made
- * a crown read as confetti; neighbouring clusters on a real tree turn together.
- */
 const TREE_PALETTES = [
   { tones: [DetailColor.leaf, DetailColor.leafGold, DetailColor.leafPale], weights: [6, 3, 0.7] },
   { tones: [DetailColor.leafRust, DetailColor.leaf, DetailColor.leafGold], weights: [5, 2.2, 0.8] },
   { tones: [DetailColor.leafOlive, DetailColor.leaf, DetailColor.leafGold], weights: [6, 2.0, 0.5] },
 ] as const;
 
-/**
- * Autumn street tree — the CITY's mass foliage. There are several thousand of
- * these and they appear in essentially every street-level frame, so they cost
- * more realism than any other single object in the game.
- *
- * WHAT WAS WRONG, TWICE OVER.
- *   SILHOUETTE. The crown was a stack of 10-sided frusta: a bipyramid, which
- *   from the low camera this game uses projects as a hard-edged rhombus. Every
- *   street tree in Bucharest rendered as an angular slab floating on a stick.
- *   SHADING. The leaf material was opaque at roughness 0.95 with no
- *   sub-surface term. The sun sits three degrees above the horizon, so every
- *   crown is backlit; an opaque crown under that key is a black hole punched
- *   in a magenta sky. A real backlit autumn canopy is the brightest amber in
- *   the reference frame.
- *
- * WHAT FIXES IT.
- *   1. A REAL ARMATURE. Tapered trunk with a root flare, three orders of
- *      branch (limb, secondary, twig) whose bare tips fringe the outline.
- *   2. MANY SMALL MASSES, never one big one. Clusters are 0.4-0.9 m across in
- *      absolute metres — not a fraction of the crown, or a park tree grows
- *      two-metre cabbages — hung on branch ENDS. The outline is then ragged at
- *      every scale and the sky shows through it.
- *   3. TRANSLUCENCY (DetailOpts.trans) so backlit clusters glow amber, plus
- *      per-cluster colour so the crown is a mosaic of tones.
- *   4. WIND (DetailOpts.wind), largest at the tips, zero at the trunk.
- *   5. SPECIES AND THINNING. Broad plane, columnar poplar, small ornamental,
- *      and every one of them can be half bare — it is late autumn.
- *
- * Budget: ~330 triangles at lod 2, ~170 at lod 1, ~80 at lod 0.
- */
+/** Deterministic autumn trees: branching armature with thin two-sided leaf
+ * sprays. Shared detail material keeps wind, transmission and batched shadows. */
 export function planeTree(
   d: DetailBuilder,
   x: number, z: number,
   rng: Rng,
   scale = 1,
-  /** 2 = near the hero area, 1 = mid city, 0 = far field. */
+
   lod: 0 | 1 | 2 = 2,
 ): void {
-  /*
-   * SCALE, cross-checked against the two things always in frame beside a tree:
-   * a 1.8 m person reaches about a third of the way up the clear trunk, and
-   * the 7.2-9.4 m lamp heads sit level with the top of an average crown.
-   */
+
   const species = rng.weighted([0, 1, 2], [6, 1.6, 2.4]) as 0 | 1 | 2;
   const palette = rng.weighted(TREE_PALETTES, [5, 2.2, 1.8]);
   let h: number;
   let trunkH: number;
   let crownR: number;
   let trunkR: number;
-  /** Vertical squash of the crown ellipsoid, as a fraction of the crown span. */
+
   let halfHK: number;
   if (species === 1) {
     // Columnar poplar — tall, narrow, and the thing that breaks up a whole
@@ -1950,17 +1833,7 @@ export function planeTree(
     trunkR = 0.088 * scale;
     halfHK = 0.44;
   } else {
-    /*
-     * Mature plane / linden. 8.5-11 m over a 2.7-3.5 m clear trunk — a 1.8 m
-     * person reaches half way up the clear trunk and the 7.2-9.4 m lamp heads
-     * sit level with the top of the crown, which is the pair of cross-checks
-     * that matter because both are in frame constantly.
-     *
-     * Crown 3.6-4.6 m ACROSS. Bucharest street planes are pollarded back off
-     * the trolleybus wires every few years and simply do not carry the 5-6 m
-     * crown this used to author; that extra width was also what made the lobe
-     * budget unable to close the silhouette.
-     */
+
     h = rng.range(8.5, 11.0) * scale;
     trunkH = rng.range(2.7, 3.5) * scale;
     crownR = rng.range(1.80, 2.30) * scale;
@@ -1975,14 +1848,6 @@ export function planeTree(
   d.collisionBox('tree-trunk', x, 0.17 + trunkH / 2, z,
     trunkR * 2.35, trunkH, trunkR * 2.35);
 
-  /*
-   * BARK. Authored DARK. A trunk is the one part of a tree with no translucency
-   * at all, so under a three-degree key its sunward side is the brightest thing
-   * on the tree unless the albedo is low — and the previous values (0x4a3b31 /
-   * 0x5e4e40 plus a 6% emissive floor) put a white-hot stick under every crown
-   * in the city. That white stick is half of why distant trees read as floating
-   * confetti: the confetti had a bright pole under it drawing the eye.
-   */
   const bark: DetailOpts = {
     color: rng.bool(0.32) ? DetailColor.barkPale : DetailColor.bark,
     mr: [0, 0.96],
@@ -1990,29 +1855,11 @@ export function planeTree(
   };
   const limbOpt: DetailOpts = { ...bark, wind: 0.006 * scale };
   const secOpt: DetailOpts = { ...bark, wind: 0.018 * scale };
-  /*
-   * TWIGS ARE THE "WHITE HAIRS". Verified by flood-filling this one option
-   * green and re-shooting: every pale spike poking out of every crown in the
-   * game is a twig. They were authored at trunkR * 0.13 — a 19 mm rod — which
-   * from twenty metres is under two pixels wide, so it never resolves as a
-   * shaded cylinder and instead aliases into a hard bright line wherever it
-   * crosses anything darker or brighter than itself.
-   *
-   * The fix is not to delete them: bare twigs past the last leaf are what keeps
-   * a crown from meeting the sky along a machined arc, and on a half-bare tree
-   * they ARE the outline. It is to author them as what you actually see at
-   * street distance — a BUNCH of twigs, ~5 cm, resolvable — and to give them
-   * the same translucency the leaves have, so they glow the same warm amber in
-   * the same light instead of reading as a different material stuck on.
-   */
+
   const twigOpt: DetailOpts = { ...bark, wind: 0.038 * scale, trans: 0.3 };
 
   const y0 = 0.17;
-  /*
-   * TRUNK. Two stacked frusta with a lean between them rather than one straight
-   * cylinder: a dead-vertical stick is the single loudest procedural tell on an
-   * object this familiar, and the second segment costs 12 triangles.
-   */
+
   const leanA = rng.range(0, Math.PI * 2);
   const leanR = rng.range(0.04, 0.16) * trunkH;
   const forkX = x + Math.cos(leanA) * leanR;
@@ -2028,14 +1875,9 @@ export function planeTree(
   const cx = forkX;
   const cz = forkZ;
 
-  /*
-   * BRANCHING. The armature is what you see THROUGH the canopy and where it
-   * has thinned, and it is what stops a crown floating off its trunk. It is
-   * deliberately kept cheap — its job is structure, not mass.
-   */
   const nLimb = lod === 2 ? 4 + rng.int(0, 2) : lod === 1 ? 3 + rng.int(0, 2) : 3;
   const lean = rng.range(0, Math.PI * 2);
-  /** Flat [x,y,z] triples: where the armature ends and the fringe should hang. */
+
   const twigTips: number[] = [];
   // A poplar's limbs rise steeply and reach barely at all; a plane's spread.
   const reachK = species === 1 ? 0.30 : 0.62;
@@ -2048,11 +1890,7 @@ export function planeTree(
     const lx = cx + Math.cos(a) * reach;
     const lz = cz + Math.sin(a) * reach;
     const ly = crownY + rise;
-    /*
-     * A limb is not a straight rod. At lod 2 it leaves the fork steeply and
-     * then flattens out, which is the shape that reads as a tree even when the
-     * canopy has thinned off it; 8 extra triangles per limb.
-     */
+
     if (lod === 2) {
       const ex = cx + Math.cos(a) * reach * 0.42 + rng.range(-0.1, 0.1);
       const ez = cz + Math.sin(a) * reach * 0.42 + rng.range(-0.1, 0.1);
@@ -2071,13 +1909,7 @@ export function planeTree(
       const sz = lz + Math.sin(a2) * crownR * rng.range(0.26, 0.52) * (species === 1 ? 0.5 : 1);
       const sy = ly + crownH * rng.range(0.14, 0.34);
       d.tube(lx, ly, lz, sx, sy, sz, trunkR * 0.34, 3, secOpt);
-      /*
-       * BARE TWIGS past the last leaf cluster. These are the cheapest thing in
-       * the whole tree — 6 triangles — and they do the most: they are what
-       * stops the canopy meeting the sky along a hard arc, and on a half-bare
-       * late-autumn tree they ARE the outline. Emitted at lod 1 as well now,
-       * because lod 1 is what you are actually looking at down most streets.
-       */
+
       if (lod >= 1 && rng.bool(lod === 2 ? 0.85 : 0.45)) {
         const a3 = a2 + rng.range(-1.2, 1.2);
         const tx = sx + Math.cos(a3) * crownR * rng.range(0.18, 0.40) * (species === 1 ? 0.5 : 1);
@@ -2094,76 +1926,18 @@ export function planeTree(
     cz + rng.range(-0.3, 0.3) * scale,
     trunkR * 0.44, 4, limbOpt);
 
-  /*
-   * THE CANOPY — a SHELL OF OVERLAPPING LOBES, not beads on branch tips.
-   *
-   * Hanging one small cluster per branch tip is the obvious construction and
-   * it is wrong: the offsets between tips are larger than the clusters, so
-   * the crown never closes and every tree reads as popcorn threaded on wire.
-   * A crown is a MASS. Lobes are placed on a squashed ellipsoid shell at
-   * 0.42 x the crown radius each, spaced closer than their own diameter, so
-   * they merge into one body whose outline is a chain of arcs — ragged at
-   * every scale, and never the smooth ellipse a single hull would give.
-   *
-   * Late autumn then punches holes in it: `thin` drops whole lobes, which is
-   * how a real canopy thins (it does not shrink uniformly), and one tree in
-   * nine is a bare skeleton. That is what guarantees sky through the crown.
-   */
-  /*
-   * THINNING. `thin` used to reach 0.44 and dropped lobes uniformly across the
-   * shell, which is a hole punched straight through the silhouette — the exact
-   * mechanism that detached the crown into floating pieces. Real late autumn
-   * strips a crown from the INSIDE and the BOTTOM outwards: the outer tips
-   * keep their leaves longest, so a half-bare tree still has a continuous, if
-   * ragged and see-through, outer shell. So thinning is now biased downward
-   * and capped, and the sky comes through the crown via the outer band's
-   * roughened outline and the bare twigs instead of via missing lobes.
-   */
   const thin = rng.range(0.05, 0.26);
   const bare = rng.bool(0.09);
   const crownHalfH = crownH * halfHK;
   const crownMidY = crownY + crownH * (species === 1 ? 0.52 : 0.46);
 
-  /*
-   * COUNT AND SIZE, DERIVED TOGETHER (see LOBE_COVER above). `LOBE_R` fixes the
-   * granularity wanted at this tier; the count then follows from how much
-   * silhouette there is to close, and the radius is solved back from the count
-   * so that rounding never opens the shell. A poplar's tall narrow ellipse and
-   * a plane's flat wide one therefore get the same size of leaf cluster and
-   * different numbers of them, which is what actually happens on a street.
-   */
   const silh = crownR * crownHalfH;             // side-silhouette area / pi
   const rWanted = LOBE_R[lod];
-  /*
-   * SOLVE THE FULL CROWN FIRST, THEN THIN IT. Deriving the radius from a
-   * reduced count is the trap: a `bare` tree asking for four lobes came back
-   * with r = sqrt(COVER * silh / 4) = 2.1 m, so one tree in eleven grew four
-   * four-metre cabbages and, at scale 1.25, filled the screen with them. The
-   * coverage identity sizes a CLOSED crown; anything that wants fewer lobes
-   * than that wants fewer lobes OF THE SAME SIZE, which is what a tree that
-   * has dropped most of its leaves actually looks like.
-   */
+
   const nFull = Math.max(6, Math.min(LOBE_MAX, Math.round((LOBE_COVER * silh) / (rWanted * rWanted))));
   const lobeR = Math.sqrt((LOBE_COVER * silh) / nFull);
   const nSurf = bare ? Math.max(3, Math.round(nFull * 0.22)) : nFull;
-  /*
-   * TWO SCALES, AND THE SECOND ONE IS WHERE THE MONEY GOES.
-   *
-   * These structural lobes are five segments and two rings — 20 triangles, a
-   * real if crude ellipsoid — and they exist to be the crown's MASS. They are
-   * roughly a metre across, which is bigger than a leaf cluster and would read
-   * as folded card if it were all there was; it is not. The tuft pass below
-   * skins the outside of this mass in 0.3 m single-ring lobes at 10 triangles
-   * each, and those are what the eye actually resolves at the three to eight
-   * metres a third-person camera lives at.
-   *
-   * Spending the whole budget at ONE scale fails both ways round: all big
-   * lobes give a crown of plates, all small ones (tried, measured, looked at)
-   * give a cloud of flat kites with nothing holding them together. A tree is
-   * lumps of foliage with finer foliage on the outside of the lumps.
-   */
-  const rings: 1 | 2 = lod === 0 ? 1 : 2;
-  const lobeSeg = lod === 0 ? 6 : 5;
+
   // Golden-angle spiral: the cheapest way to get points that are evenly
   // spread over a sphere without clumping or banding.
   const GOLD = Math.PI * (3 - Math.sqrt(5));
@@ -2175,22 +1949,10 @@ export function planeTree(
     const sr = Math.sqrt(Math.max(0, 1 - cyy * cyy));
     // Drop from the bottom of the crown first, and never from the top third.
     if (!bare && rng.next() < thin * (1.0 - cyy) ) continue;
-    /*
-     * The spiral needs BREAKING, not just following. A golden-angle sequence
-     * spreads points evenly, which on a tall narrow crown (a poplar) lays them
-     * down as a visible helix — you can count the turns winding up the tree.
-     * Nearly a radian of angular jitter plus a radial wobble costs nothing and
-     * keeps the even spread while destroying the pattern.
-     */
+
     const ang = i * GOLD + rng.range(-0.9, 0.9);
     const wob = rng.range(0.88, 1.12);
-    /*
-     * ON THE SURFACE, not scattered through the volume. Lobes buried at 0.5 of
-     * the shell radius cover no silhouette and cost the same as ones that do;
-     * spending half the budget there is why the old crown never closed. The
-     * band is 0.86..1.06 with per-lobe jitter, which keeps the outline a chain
-     * of arcs — ragged at every scale — without opening gaps.
-     */
+
     const shell = rng.range(0.86, 1.06);
     const lx = cx + Math.cos(ang) * sr * crownR * shell * wob;
     const lz = cz + Math.sin(ang) * sr * crownR * shell * wob;
@@ -2199,42 +1961,19 @@ export function planeTree(
     const ly = crownMidY + cyy * crownHalfH * shell - lobeR * 0.22;
 
     const tone = rng.weighted(palette.tones, palette.weights);
-    /*
-     * Lobes on the underside of a canopy are shaded by the whole crown above
-     * them; the shader cannot know that, so it is authored off the lobe's
-     * height in the shell. Without it a crown is one flat value and reads as a
-     * cut-out however good its outline is.
-     */
+
     const depth = 0.60 + 0.40 * (0.5 + 0.5 * cyy);
     const c = tone.clone().multiplyScalar(depth);
     // Wind grows up the crown; the fork barely moves, the top tips do.
     const wind = 0.035 + 0.11 * Math.max(0, (ly - crownY) / Math.max(crownH, 0.5));
     const r = lobeR * rng.range(0.80, 1.18);
-    d.blob(
-      lx, ly, lz,
-      r, r * rng.range(0.70, 0.92), r * rng.range(0.86, 1.14),
+    d.leafSpray(
+      lx, ly, lz, r, r * 0.82, r,
       leafOpt(c, rng.range(0.72, 1.0) * (0.72 + 0.28 * (0.5 + 0.5 * cyy)), wind),
-      /*
-       * Position jitter roughens the outline, and at 0.5 it was doing more
-       * harm than good: on a five-segment two-ring lobe a vertex pulled to
-       * 0.75r leaves its neighbours' quad nearly planar, so the big structural
-       * lobes flattened into the hard cards you can see filling the frame
-       * whenever the camera gets inside a crown. 0.32 keeps them convex; the
-       * ragged outline is the tuft pass's job, not this one's.
-       */
-      0.32, 1 + ((i * 7919 + seedBase * 104729) >>> 0), rings, LEAF_NJITTER,
-      lobeSeg,
+      1 + ((i * 7919 + seedBase * 104729) >>> 0), lod === 0 ? 3 : 6,
     );
   }
 
-  /*
-   * THE BACKING. A closed outer shell still shows its own inside wherever the
-   * thinning has opened it, and what you see through the gap must be more
-   * canopy in shadow — never sky, and never the bright trunk. A handful of
-   * cheap 5-sided lobes at half the shell radius does that for 10 triangles
-   * each. They are invisible on a full crown and they are what keeps a thinned
-   * one from turning back into detached pieces.
-   */
   if (lod >= 1 && !bare) {
     const nCore = lod === 2 ? 8 : 4;
     for (let i = 0; i < nCore; i++) {
@@ -2243,7 +1982,7 @@ export function planeTree(
       const ang = i * GOLD * 2.3 + rng.range(-0.5, 0.5);
       const shell = rng.range(0.28, 0.62);
       const r = lobeR * rng.range(1.0, 1.45);
-      d.blob(
+      d.leafSpray(
         cx + Math.cos(ang) * sr * crownR * shell,
         crownMidY + cyy * crownHalfH * shell,
         cz + Math.sin(ang) * sr * crownR * shell,
@@ -2252,39 +1991,22 @@ export function planeTree(
           palette.tones[0].clone().multiplyScalar(0.48),
           0.35, 0.03,
         ),
-        0.45, 1 + ((i * 15486 + seedBase * 39769) >>> 0), 1, LEAF_NJITTER * 0.7, 5,
+        1 + ((i * 15486 + seedBase * 39769) >>> 0), 4,
       );
     }
   }
 
-  /*
-   * THE FRINGE. The main lobes give the crown its mass; on their own the
-   * outline is a chain of half-metre arcs, which from three metres away — the
-   * distance a third-person camera actually spends its life at — still reads
-   * as a machined edge. A scatter of third-size lobes pushed just outside the
-   * shell breaks that outline at a finer scale for 10 triangles each, which is
-   * the cheapest silhouette detail available anywhere in this tree. Extended
-   * to lod 1: a tree 300 m from the hero crossroads can still be 15 m from the
-   * camera, and the whole point of this pass is that the tier you happen to be
-   * looking at must never be the thing you notice.
-   */
   if (lod >= 1) {
     const nTip = twigTips.length / 3;
     const nFringe = nTip
-      + (bare ? 0 : Math.round(nFull * (lod === 2 ? 1.7 : 1.0)));
+      + (bare ? 0 : Math.round(nFull * (lod === 2 ? 1.35 : 0.85)));
     for (let i = 0; i < nFringe; i++) {
       let fx: number;
       let fy: number;
       let fz: number;
       const fr = lobeR * rng.range(0.28, 0.46);
       if (i < nTip) {
-        /*
-         * HUNG ON A TWIG TIP. Two things at once: the fringe is anchored to the
-         * armature instead of floating near it, and the bare end of the twig —
-         * the thing that used to read as a white hair sticking out of the
-         * crown — is buried inside a cluster of leaves, which is where a real
-         * twig ends.
-         */
+
         fx = twigTips[i * 3] + rng.range(-0.12, 0.12);
         fy = twigTips[i * 3 + 1] - fr * 0.35;
         fz = twigTips[i * 3 + 2] + rng.range(-0.12, 0.12);
@@ -2293,22 +2015,17 @@ export function planeTree(
         const cyy = rng.range(-0.7, 0.95);
         const sr = Math.sqrt(Math.max(0, 1 - cyy * cyy));
         // On the OUTSIDE of the structural mass, where the outline is.
-        /*
-         * Just proud of the structural shell (which reaches 1.06), never far
-         * enough to come off it. Pushing the radial and the vertical out
-         * INDEPENDENTLY is what let tufts near the poles float clear of the
-         * crown, so both use the same modest overshoot.
-         */
+
         const sh = rng.range(1.0, 1.13);
         fx = cx + Math.cos(a) * sr * crownR * sh;
         fz = cz + Math.sin(a) * sr * crownR * sh;
         fy = crownMidY + cyy * crownHalfH * sh - fr * 0.3;
       }
       const tone = rng.weighted(palette.tones, palette.weights);
-      d.blob(
+      d.leafSpray(
         fx, fy, fz, fr, fr * rng.range(0.6, 0.86), fr,
         leafOpt(tone, rng.range(0.9, 1.0), 0.15 + 0.06 * rng.next()),
-        0.6, 1 + ((i * 22691 + seedBase * 6353) >>> 0), 1, LEAF_NJITTER, 5,
+        1 + ((i * 22691 + seedBase * 6353) >>> 0), 3,
       );
     }
   }

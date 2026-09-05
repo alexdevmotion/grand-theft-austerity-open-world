@@ -388,15 +388,15 @@ export class CitySystem implements System, CityService {
         const off = (l + 0.5) * laneW;
         this.lanes.push({
           fromNode: a, toNode: b, lane: l,
-          ax: na.position.x - px * off, az: na.position.z - pz * off,
-          bx: nb.position.x - px * off, bz: nb.position.z - pz * off,
+          ax: na.position.x + px * off, az: na.position.z + pz * off,
+          bx: nb.position.x + px * off, bz: nb.position.z + pz * off,
           width: laneW,
         });
         if (!e.oneway) {
           this.lanes.push({
             fromNode: b, toNode: a, lane: l,
-            ax: nb.position.x + px * off, az: nb.position.z + pz * off,
-            bx: na.position.x + px * off, bz: na.position.z + pz * off,
+            ax: nb.position.x - px * off, az: nb.position.z - pz * off,
+            bx: na.position.x - px * off, bz: na.position.z - pz * off,
             width: laneW,
           });
         }

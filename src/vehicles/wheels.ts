@@ -9,7 +9,7 @@
  * Two things were badly wrong before and are fixed here:
  *
  *  1. The hubcap/rim detail was only ever built on the +X face, and the same
- *     geometry was used on both sides of the car. Every wheel on the left-hand
+ *     geometry was used on both sides of the car. Every wheel on the negative-X
  *     side therefore presented its blanked-off *inner* face to the camera — a
  *     flat black disc sitting in the arch, which reads exactly like a missing
  *     wheel. `wheelGeometry` now takes a side and mirrors properly.
@@ -27,7 +27,7 @@ import { UV } from './texture';
 
 export type WheelStyle = 'hubcap' | 'steel' | 'alloy' | 'truck' | 'scooter';
 
-const lin = (hex: number) => new THREE.Color(hex).convertSRGBToLinear();
+const lin = (hex: number) => new THREE.Color(hex);
 
 const RUBBER = lin(0x16161b);
 const RUBBER_WORN = lin(0x2a2a31);
@@ -51,10 +51,10 @@ export function wheelGeometry(
   const b = new GeoBuilder();
   const R = radius;
   const W = width;
-  const seg = style === 'scooter' ? 14 : style === 'truck' ? 22 : 20;
+  const seg = style === 'scooter' ? 20 : 32;
 
   // `side` flips which face carries the rim detail. Everything is authored for
-  // the right-hand side and mirrored by negating X.
+  // the +X (left-hand) side and mirrored by negating X.
   const sx = side;
   const tyre: Surf = { color: RUBBER, rough: 0.95, metal: 0.02, coat: 0.08, uv: UV.tread };
   const wall: Surf = { color: RUBBER_WORN, rough: 0.88, metal: 0.02, coat: 0.05, uv: UV.sidewall };
@@ -182,6 +182,27 @@ export function wheelGeometry(
       b.cyl(R * 0.042, R * 0.042, W * 0.07, 6,
         T(faceX - sx * W * 0.02, Math.sin(a) * R * 0.34, Math.cos(a) * R * 0.34, 0, 0, -sx * Math.PI / 2),
         { color: CHROME, rough: 0.24, metal: 1, coat: 0.3 });
+    }
+  }
+
+  if (style !== 'scooter') {
+    // Molded sidewall rings and a valve retain scale at close inspection.
+    const sidewall: Surf = { color: RUBBER_WORN, rough: 0.93, metal: 0 };
+    for (const ring of [0.73, 0.89]) {
+      b.torus(R * ring, R * 0.006, 4, seg, Math.PI * 2,
+        T(sx * (hw + 0.001), 0, 0, 0, Math.PI / 2), sidewall);
+    }
+    b.cyl(0.006, 0.008, 0.025, 6,
+      T(faceX + sx * 0.011, R * 0.45, R * 0.35, 0, 0, -sx * Math.PI / 2),
+      { color: RUBBER, rough: 0.8, metal: 0.1 });
+    if (style === 'steel') {
+      // Stamped ventilation holes, recessed against the darker rim well.
+      for (let i = 0; i < 8; i++) {
+        const a = i / 8 * Math.PI * 2;
+        b.cyl(R * 0.055, R * 0.055, 0.006, 8,
+          T(faceX + sx * 0.007, Math.sin(a) * R * 0.50, Math.cos(a) * R * 0.50, 0, 0, -sx * Math.PI / 2),
+          { color: RIM_DARK, rough: 0.8, metal: 0.2 });
+      }
     }
   }
 

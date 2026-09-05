@@ -5,10 +5,9 @@
  * lighting, fog, aerial perspective and tone mapping all keep working, with the
  * skin-specific physics injected around three's own render equations:
  *
- *   - albedo arrives as a per-vertex colour authored in `headMesh.ts`. It is
- *     de-lit by construction: nothing is ever sampled out of a photograph, so
- *     no studio shadow or highlight can survive into base colour and get
- *     multiplied a second time by the game's sunset key.
+ *   - per-vertex albedo supplies the cast palette. Anatomical heads add a
+ *     normalized CC0 skin-detail map through `anatomicalAlbedo.ts`; reference
+ *     portraits constrain geometry and are never projected as face textures.
  *   - direct diffuse goes through the pre-integrated scattering LUT rather than
  *     Lambert, so the terminator wraps and reddens the way flesh does.
  *   - thin parts (ears, nostrils, lips, eyelids) transmit the key light. That
@@ -25,7 +24,6 @@
  * ~15 m the scattering and micro-detail fade out, and past ~30 m the caller
  * swaps in the cheap standard material entirely.
  *
- * OWNER: characters agent.
  */
 
 import * as THREE from 'three';
@@ -167,7 +165,9 @@ void RE_Direct_Skin( const in IncidentLight directLight, const in vec3 geometryP
 	vec3 sss = texture2D( uSssLut, vec2( dotNL * 0.5 + 0.5, curv ) ).rgb * uSssTint;
 	vec3 wrapped = mix( vec3( max( dotNL, 0.0 ) ), sss, uSssStrength );
 
-	float cavity = mix( 1.0, vSkinAttr.z, uCavityStrength );
+	// Direct shadows already describe the broad facial relief. Keep only
+	// a small crease term here; full cavity strength makes the skin look carved.
+	float cavity = mix( 1.0, vSkinAttr.z, uCavityStrength * 0.30 );
 	vec3 irradiance = wrapped * directLight.color * cavity;
 
 	// Dual-lobe specular. A single lobe is exactly what makes CG skin read as
@@ -320,16 +320,9 @@ export function createSkinMaterial(opts: SkinMaterialOptions = {}): SkinMaterial
       .replace('#include <lights_physical_pars_fragment>', `#include <lights_physical_pars_fragment>\n${SKIN_RE}`)
       .replace('#include <aomap_fragment>', `#include <aomap_fragment>
         {
-          // Cavity against the AMBIENT, softened. The same term is already a
-          // multiplier on direct diffuse and a 0.20 multiplier on the authored
-          // albedo, so applying it here at full strength was the third bite out
-          // of the same vertex: a crease at the 0.22 floor was returning 0.16 of
-          // its neighbour, which renders as a drawn black line rather than as a
-          // fold. Ambient occlusion is also the wrong place to be aggressive on
-          // this head — the key is low and often behind it, so ambient IS the
-          // light, and crushing ambient crushes the face.
+          // Crease occlusion belongs mainly to indirect lighting.
           float cav = mix( 1.0, vSkinAttr.z, uCavityStrength );
-          reflectedLight.indirectDiffuse *= mix( 1.0, cav, 0.72 );
+          reflectedLight.indirectDiffuse *= mix( 1.0, cav, 0.60 );
           reflectedLight.indirectSpecular *= mix( 1.0, cav, 0.55 );
         }`)
       .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>\n${TRANSMISSION}`);

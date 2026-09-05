@@ -155,6 +155,28 @@ function nearestPublishedTrack(
   };
 }
 
+test('opposing traffic stays to the driver’s right on cardinal and diagonal roads', () => {
+  const up = new THREE.Vector3(0, 1, 0);
+  for (let heading = 0; heading < Math.PI * 2; heading += Math.PI / 4) {
+    const end = new THREE.Vector3(Math.sin(heading) * 100, 0, Math.cos(heading) * 100);
+    const graph = new TrafficGraph(city([node(0, 0, 0, 3, [1]), node(1, end.x, end.z, 3, [0])], []));
+    for (const edge of graph.edges) {
+      const forward = new THREE.Vector3(edge.ux, 0, edge.uz);
+      // A chase camera's screen-right is forward cross world-up.
+      const right = forward.clone().cross(up);
+      const centre = new THREE.Vector3((edge.ex + edge.xx) / 2, 0, (edge.ez + edge.xz) / 2);
+      let previous = 0;
+      for (let lane = 0; lane < edge.lanes; lane++) {
+        const offset = graph.lanePoint(edge, lane, 0.5, new THREE.Vector3()).sub(centre);
+        const lateral = offset.dot(right);
+        expect(lateral).toBeGreaterThan(previous);
+        expect(Math.abs(offset.dot(forward))).toBeLessThan(1e-6);
+        previous = lateral;
+      }
+    }
+  }
+});
+
 describe('explicit tram routing', () => {
   test('a wide rank-2 road without rendered rails is never tram-routable', () => {
     const graph = new TrafficGraph(city([
@@ -206,15 +228,15 @@ describe('explicit tram routing', () => {
     expect(phantom.tram).toBe(false);
     expect(east.tramStraight).toBe(bend.index);
     expect(returnBend.tramStraight).toBe(west.index);
-    expect(east.tramOffset).toBeCloseTo(-railZ, 6);
-    expect(west.tramOffset).toBeCloseTo(railZ, 6);
+    expect(east.tramOffset).toBeCloseTo(railZ, 6);
+    expect(west.tramOffset).toBeCloseTo(-railZ, 6);
 
     const forward = graph.lanePoint(east, TRAM_LANE, 0.5, new THREE.Vector3());
     const reverse = graph.lanePoint(west, TRAM_LANE, 0.5, new THREE.Vector3());
     expect(forward.x).toBeCloseTo(50, 6);
-    expect(forward.z).toBeCloseTo(railZ - TRAM_OFFSET, 6);
+    expect(forward.z).toBeCloseTo(railZ + TRAM_OFFSET, 6);
     expect(reverse.x).toBeCloseTo(50, 6);
-    expect(reverse.z).toBeCloseTo(railZ + TRAM_OFFSET, 6);
+    expect(reverse.z).toBeCloseTo(railZ - TRAM_OFFSET, 6);
 
     const range = laneSpawnRange(east, 7.7);
     expect(range).not.toBeNull();
@@ -267,6 +289,14 @@ describe('explicit tram routing', () => {
     const built = new CitySystem();
     built.init(ctx);
     const graph = new TrafficGraph(built);
+    const wrongSide = built.lanes.filter((lane) => {
+      const from = built.roadNodes[lane.fromNode].position;
+      const to = built.roadNodes[lane.toNode].position;
+      const right = to.clone().sub(from).normalize().cross(new THREE.Vector3(0, 1, 0));
+      return new THREE.Vector3(lane.ax - from.x, 0, lane.az - from.z).dot(right) <= 0;
+    });
+    expect(built.lanes.length).toBeGreaterThan(100);
+    expect(wrongSide).toHaveLength(0);
     const rails = graph.edges.filter((edge) => edge.tram);
     const continuing = rails.filter((edge) => edge.tramStraight >= 0);
     const plainRank2 = graph.edges.filter((edge) => edge.rank === 2 && !edge.tram);

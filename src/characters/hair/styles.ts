@@ -101,24 +101,19 @@ export const PLAYER_HAIR: HairSpec = {
    * forehead either side of it: devil horns, not a receding hairline. Recession
    * reads far better as a UNIFORMLY higher line with only a few degrees of
    * temple lift, which is also what the reference frame actually shows. */
-  hairline: hairlineFn(33 * DEG, 37 * DEG, 4 * DEG, -18 * DEG),
+  hairline: hairlineFn(36 * DEG, 44 * DEG, 18 * DEG, -18 * DEG),
   volume: (az, el) => {
     const a = Math.abs(wrapAz(az)) / Math.PI;
     // Close at the sides, a little more on top — a real short back and sides.
     // The first pass gave 3 mm of shell, which at head scale is a shaved scalp
     // with a scribble on it rather than cropped hair.
     const top = smoothstep(26 * DEG, 68 * DEG, el);
-    return 0.034 + 0.052 * top * (1 - 0.45 * smoothstep(0.25, 0.6, a) * (1 - top));
+    return 0.020 + 0.043 * top * (1 - 0.45 * smoothstep(0.25, 0.6, a) * (1 - top));
   },
-  /* 460 cards over a whole scalp is one strand every few millimetres, which is
-   * what "thin and wispy" measures: the shell shows through everywhere between
-   * them and the silhouette is a scribble rather than a mass. A dense short
-   * crop needs the cards to OVERLAP, so the count is tripled and each card is
-   * wider — and the flyaway count comes DOWN, because flyaways are what make
-   * sparse hair look sparse rather than what makes dense hair look real. */
-  cards: 1500,
-  cardSpan: 24 * DEG,
-  cardHalf: 0.0058,
+  // Short, narrow clumps expose the dark shell between separate fibres.
+  cards: 1100,
+  cardSpan: 14 * DEG,
+  cardHalf: 0.0021,
   wander: 8 * DEG,
   curl: 0.005,
   curlFreq: 2.2,
@@ -135,22 +130,22 @@ export const PLAYER_HAIR: HairSpec = {
  * is what makes him silhouette-distinct from the player at a glance.
  */
 export const NICUSOR_HAIR: HairSpec = {
-  hairline: hairlineFn(36 * DEG, 55 * DEG, 2 * DEG, -20 * DEG),
+  hairline: hairlineFn(35 * DEG, 42 * DEG, 18 * DEG, -18 * DEG),
   volume: (az, el) => {
     const a = Math.abs(wrapAz(az)) / Math.PI;
     const top = smoothstep(18 * DEG, 62 * DEG, el);
     // Two lobes: the mass is heaviest just behind the temple recess.
     const lobe = Math.exp(-Math.pow((a - 0.33) / 0.24, 2));
-    return 0.040 + 0.185 * top * (0.55 + 0.85 * lobe);
+    return 0.020 + 0.080 * top * (0.85 + 0.15 * lobe);
   },
   cards: 1250,
-  cardSpan: 34 * DEG,
-  cardHalf: 0.0056,
-  wander: 22 * DEG,
-  curl: 0.030,
-  curlFreq: 4.6,
-  lift: 0.048,
-  flyaways: 90,
+  cardSpan: 18 * DEG,
+  cardHalf: 0.0024,
+  wander: 14 * DEG,
+  curl: 0.024,
+  curlFreq: 6.0,
+  lift: 0.010,
+  flyaways: 32,
   greyTemple: 0.48,
   greyOverall: 0.30,
   sideburn: -8 * DEG,
@@ -158,20 +153,20 @@ export const NICUSOR_HAIR: HairSpec = {
 
 /** Alex: tousled dark wavy hair swept back and up, loose strands at the front. */
 export const ALLY_HAIR: HairSpec = {
-  hairline: hairlineFn(33 * DEG, 41 * DEG, 4 * DEG, -18 * DEG),
+  hairline: hairlineFn(33 * DEG, 41 * DEG, 18 * DEG, -18 * DEG),
   volume: (az, el) => {
     const a = Math.abs(wrapAz(az)) / Math.PI;
     const top = smoothstep(24 * DEG, 66 * DEG, el);
     return 0.020 + 0.062 * top * (1 - 0.30 * smoothstep(0.3, 0.7, a));
   },
   cards: 950,
-  cardSpan: 32 * DEG,
-  cardHalf: 0.0054,
+  cardSpan: 22 * DEG,
+  cardHalf: 0.0030,
   wander: 15 * DEG,
   curl: 0.016,
   curlFreq: 3.0,
-  lift: 0.030,
-  flyaways: 70,
+  lift: 0.014,
+  flyaways: 42,
   greyTemple: 0.10,
   greyOverall: 0.04,
   sideburn: -14 * DEG,
@@ -217,9 +212,10 @@ export function buildHairShell(anchors: HeadAnchors, spec: HairSpec): THREE.Buff
       // texture's solid end at v = 1, so v has to RISE toward the crown.
       uv.push((i / AZ) * 14, 0.08 + t * 0.92);
       tan.push(tg.x, tg.y, tg.z);
-      const templeGrey = Math.exp(-Math.pow((Math.abs(wrapAz(az)) / Math.PI - 0.26) / 0.15, 2)) *
+      const templeGrey = Math.exp(-Math.pow((Math.abs(wrapAz(az)) / Math.PI - 0.36) / 0.09, 2)) *
         (1 - smoothstep(0.1, 0.5, t));
-      info.push(0.25 + 0.75 * t, Math.min(1, spec.greyOverall + spec.greyTemple * templeGrey));
+      // The base remains dark between grey fibres; a pale shell makes a cap.
+      info.push(0.25 + 0.75 * t, Math.min(1, spec.greyOverall * 0.20 + spec.greyTemple * templeGrey * 0.35));
     }
   }
   for (let j = 0; j < EL; j++) {
@@ -304,9 +300,10 @@ export function buildHairCards(anchors: HeadAnchors, spec: HairSpec, seed: strin
       normals.push(q.clone().sub(centre).normalize());
     }
     const a = Math.abs(wrapAz(az0)) / Math.PI;
-    const templeGrey = Math.exp(-Math.pow((a - 0.26) / 0.15, 2)) * (1 - smoothstep(4 * DEG, 40 * DEG, el0 - spec.hairline(az0)));
-    const grey = Math.min(1, spec.greyOverall + spec.greyTemple * templeGrey + rng.range(-0.08, 0.14));
-    rb.add({ pts, half: halves, normal: normals, grey: Math.max(0, grey), repeat: flyaway ? 0.2 : 1 } as Guide);
+    const templeGrey = Math.exp(-Math.pow((a - 0.36) / 0.09, 2)) * (1 - smoothstep(4 * DEG, 40 * DEG, el0 - spec.hairline(az0)));
+    const greyChance = Math.min(1, spec.greyOverall + spec.greyTemple * templeGrey);
+    const grey = rng.bool(greyChance) ? rng.range(0.50, 0.90) : 0;
+    rb.add({ pts, half: halves, normal: normals, grey, repeat: flyaway ? 0.2 : 1 } as Guide);
   };
 
   for (let i = 0; i < spec.cards; i++) {
@@ -328,11 +325,19 @@ export function buildHairCards(anchors: HeadAnchors, spec: HairSpec, seed: strin
   }
   // Sideburns: short, dense, and they matter — they are where the hairline
   // meets the jaw and a head without them reads as a helmet.
-  for (let i = 0; i < 60; i++) {
-    const side = i < 30 ? 1 : -1;
-    const az = side * rng.range(64 * DEG, 86 * DEG);
+  for (let i = 0; i < 100; i++) {
+    const side = i < 50 ? 1 : -1;
+    const az = side * rng.range(60 * DEG, 72 * DEG);
     const el = rng.range(spec.sideburn, spec.sideburn + 18 * DEG);
-    emit(az, el, spec.cardHalf * 0.55, 14 * DEG, 0.002, 0.002, false);
+    const root = anchors.surface(az, el, 0.002, new THREE.Vector3());
+    const tip = anchors.surface(az + side * 0.5 * DEG, el - rng.range(2, 4) * DEG, 0.003, new THREE.Vector3());
+    const mid = root.clone().lerp(tip, 0.5);
+    rb.add({
+      pts: [root, mid, tip], half: [0.00025, 0.00020, 0.00004],
+      normal: [root, mid, tip].map((p) => p.clone().sub(centre).normalize()),
+      grey: rng.bool(spec.greyTemple * 0.4) ? 0.6 : 0,
+      repeat: 1 / 22,
+    });
   }
 
   return rb.build();
@@ -387,9 +392,9 @@ export interface BrowSpec {
  *
  * `angle` also goes up: the down-turned outer end is what makes the pair read
  * as flat-and-scowling rather than as arched. */
-export const HEAVY_BROW: BrowSpec = { thickness: 0.0056, angle: 0.0078, innerDrop: 0.0026, hairs: 420, extend: 0.14, asymmetry: 0.0022 };
-export const LEAN_BROW: BrowSpec = { thickness: 0.0021, angle: 0.0018, innerDrop: 0.0010, hairs: 68, extend: 0.06, asymmetry: 0.0008 };
-export const SOFT_BROW: BrowSpec = { thickness: 0.0019, angle: 0.000, innerDrop: 0.0008, hairs: 62, extend: 0.05, asymmetry: 0.0006 };
+export const HEAVY_BROW: BrowSpec = { thickness: 0.0032, angle: 0.0038, innerDrop: 0.0026, hairs: 220, extend: 0.08, asymmetry: 0.0022 };
+export const LEAN_BROW: BrowSpec = { thickness: 0.0028, angle: 0.0018, innerDrop: 0.0010, hairs: 160, extend: 0.06, asymmetry: 0.0008 };
+export const SOFT_BROW: BrowSpec = { thickness: 0.0026, angle: 0.000, innerDrop: 0.0008, hairs: 140, extend: 0.05, asymmetry: 0.0006 };
 
 function resample(curve: THREE.Vector3[], n: number, extend: number): THREE.Vector3[] {
   const out: THREE.Vector3[] = [];
@@ -419,6 +424,14 @@ export function buildBrows(anchors: HeadAnchors, spec: BrowSpec, seed: string): 
 
   for (const [curve, side] of [[anchors.browL, -1], [anchors.browR, 1]] as Array<[THREE.Vector3[], number]>) {
     const line = resample(curve, 11, spec.extend);
+    const eye = side < 0 ? anchors.eyeL : anchors.eyeR;
+    const eyeTop = Math.max(...eye.ring.map((p) => p.y));
+    const eyeMin = Math.min(...eye.ring.map((p) => p.x)) - 0.005;
+    const eyeMax = Math.max(...eye.ring.map((p) => p.x)) + 0.005;
+    const browMin = Math.min(...line.map((p) => p.x));
+    const browSpan = Math.max(...line.map((p) => p.x)) - browMin;
+    const browMean = line.reduce((sum, p) => sum + p.y, 0) / line.length;
+    const lowerToRidge = Math.max(0, browMean - (eyeTop + 0.014));
     // The fitted brow curve is the upper edge of the hair, so drop it onto the
     // ridge and tilt the outer end.
     const shaped = line.map((p, i) => {
@@ -426,6 +439,9 @@ export function buildBrows(anchors: HeadAnchors, spec: BrowSpec, seed: string): 
       const q = p.clone();
       const n = q.clone().sub(centre).normalize();
       q.addScaledVector(n, 0.0022);
+      // Raw landmark tails can extend past the narrowed sculpted forehead.
+      q.x = eyeMin + ((p.x - browMin) / Math.max(0.001, browSpan)) * (eyeMax - eyeMin);
+      q.y -= lowerToRidge;
       q.y -= spec.innerDrop * (1 - t) + spec.angle * t * t;
       /* The lopsided set. `side` is +1 for the character's right, and the pull
        * is weighted toward the inner end because that is where a corrugator
@@ -433,61 +449,59 @@ export function buildBrows(anchors: HeadAnchors, spec: BrowSpec, seed: string): 
        * head reads as a frown. */
       const asym = spec.asymmetry ?? 0;
       if (asym !== 0) q.y -= (side > 0 ? asym : -asym * 0.35) * (0.45 + 0.55 * (1 - t));
+      q.y = THREE.MathUtils.clamp(q.y, eyeTop + 0.014, eyeTop + 0.020);
+      seatOnForehead(anchors, q);
       return q;
     });
 
-    // Three stacked ribbons rather than two: with two, the alpha test punched
-    // holes clean through the mass wherever the strand texture's gaps lined up.
-    for (let layer = 0; layer < 3; layer++) {
-      const pts = shaped.map((p, i) => {
-        const t = i / (shaped.length - 1);
-        return p.clone().add(new THREE.Vector3(0, -spec.thickness * (layer * 0.62 - 0.28) * (0.6 + t * 0.6), 0));
-      });
-      rb.add({
-        pts,
-        half: pts.map((_, i) => {
-          const t = i / (pts.length - 1);
-          return spec.thickness * (0.55 + 1.05 * Math.sin(Math.PI * Math.min(1, Math.max(0, t * 0.9 + 0.05))));
-        }),
-        normal: pts.map((p) => p.clone().sub(centre).normalize()),
-        grey: 0,
-        // The strand texture carries 22 columns per tile. At repeat 3 that is
-        // 66 strands across a 4.6 mm ribbon — 0.07 mm each, an order of
-        // magnitude under a pixel at this range — so the alpha test dissolved
-        // them into a uniform grey haze and the heaviest brows in the cast
-        // rendered as a pencil smudge. One strand has to be worth about half a
-        // millimetre for the mass to read as hair.
-        repeat: 0.5,
-      });
-    }
-
     // Individual hairs, angled outward along the brow, denser at the head.
-    for (let i = 0; i < spec.hairs; i++) {
+    for (let i = 0; i < spec.hairs * 3; i++) {
       const t = Math.pow(rng.next(), 0.7);
       const f = Math.min(shaped.length - 1.001, t * (shaped.length - 1));
       const j = Math.floor(f);
       const p0 = shaped[j].clone().lerp(shaped[j + 1], f - j);
+      p0.y -= spec.thickness * rng.range(-0.35, 0.80);
+      seatOnForehead(anchors, p0);
       const dir = shaped[Math.min(shaped.length - 1, j + 1)].clone().sub(shaped[Math.max(0, j - 1)]).normalize();
       const n = p0.clone().sub(centre).normalize();
       const up = new THREE.Vector3(0, 1, 0);
-      const len = spec.thickness * rng.range(2.4, 5.0);
+      const len = spec.thickness * rng.range(0.8, 1.4);
       const tip = p0.clone()
         .addScaledVector(dir, side * len * rng.range(0.3, 1.0) * -1)
         .addScaledVector(up, len * rng.range(0.25, 0.9) * (1 - t * 0.8))
         .addScaledVector(n, len * 0.25);
       const mid = p0.clone().lerp(tip, 0.5).addScaledVector(n, len * 0.15);
-      p0.addScaledVector(n, 0.0006);
-      p0.y -= spec.thickness * rng.range(-0.6, 0.9);
       rb.add({
         pts: [p0, mid, tip],
-        half: [spec.thickness * 0.16, spec.thickness * 0.13, spec.thickness * 0.05],
+        half: [0.00016, 0.00011, 0.000035],
         normal: [n, n, n],
-        grey: rng.bool(0.10) ? rng.range(0.3, 0.8) : 0,
-        repeat: 0.25,
+        grey: rng.bool(0.025) ? rng.range(0.3, 0.6) : 0,
+        repeat: 1 / 22,
       });
     }
   }
   return rb.build();
+}
+
+/** Refit the guide to the sculpted skin after lowering it from photo landmarks. */
+function seatOnForehead(anchors: HeadAnchors, point: THREE.Vector3): void {
+  let az = Math.asin(THREE.MathUtils.clamp((point.x - anchors.frame.ox) / anchors.templeHalf, -0.95, 0.95));
+  let el = 0.15;
+  const p = new THREE.Vector3(), dx = new THREE.Vector3(), dy = new THREE.Vector3();
+  for (let i = 0; i < 8; i++) {
+    anchors.surface(az, el, 0, p);
+    anchors.surface(az + 0.001, el, 0, dx);
+    anchors.surface(az, el + 0.001, 0, dy);
+    dx.sub(p).multiplyScalar(1000);
+    dy.sub(p).multiplyScalar(1000);
+    const det = dx.x * dy.y - dx.y * dy.x;
+    if (Math.abs(det) < 1e-8) break;
+    const ex = point.x - p.x, ey = point.y - p.y;
+    az += THREE.MathUtils.clamp((ex * dy.y - ey * dy.x) / det, -0.20, 0.20);
+    el += THREE.MathUtils.clamp((ey * dx.x - ex * dx.y) / det, -0.20, 0.20);
+  }
+  anchors.surface(az, el, 0, p);
+  point.z = p.z + 0.0012;
 }
 
 /** Lashes: short dark alpha strips along the upper lid, plus a sparse lower set. */
@@ -497,27 +511,29 @@ export function buildLashes(anchors: HeadAnchors, seed: string): THREE.BufferGeo
   const centre = new THREE.Vector3(0, (anchors.chinY + anchors.crownY) * 0.5, -anchors.headDepth * 0.12);
 
   for (const eye of [anchors.eyeL, anchors.eyeR]) {
-    const ring = eye.ring;
-    for (let i = 0; i < ring.length; i++) {
-      const p = ring[i];
-      const out = p.clone().sub(eye.centre).normalize();
-      const upper = out.y > -0.15;
-      const count = upper ? 4 : 2;
+    const minX = Math.min(...eye.ring.map((p) => p.x)), maxX = Math.max(...eye.ring.map((p) => p.x));
+    const minY = Math.min(...eye.ring.map((p) => p.y)), maxY = Math.max(...eye.ring.map((p) => p.y));
+    const halfX = (maxX - minX) * 0.53;
+    const halfY = Math.max((maxY - minY) * 0.5, 0.0292 * anchors.frame.scale);
+    for (const upper of [true, false]) {
+      const count = upper ? 18 : 6;
       for (let k = 0; k < count; k++) {
-        const root = p.clone().addScaledVector(out, 0.0004);
-        const len = (upper ? 0.0042 : 0.0022) * rng.range(0.7, 1.35);
-        const dir = out.clone().multiplyScalar(0.55);
-        dir.y += upper ? 0.75 : -0.55;
-        dir.z += 0.45;
-        dir.normalize();
+        const x = ((k + rng.range(0.2, 0.8)) / count * 2 - 1) * eye.radius * 0.85;
+        const y = halfY * (upper ? 0.80 : -1.26) * Math.sqrt(Math.max(0, 1 - (x / halfX) ** 2));
+        const z = Math.sqrt(Math.max(0, eye.radius ** 2 - x * x - y * y));
+        // Attach to the sculpted lid margin, whose skin rides above the globe.
+        const lidThickness = anchors.frame.scale * 0.015 * (upper ? 1.22 : 0.75);
+        const root = eye.centre.clone().add(new THREE.Vector3(x, y, z + lidThickness));
+        const len = (upper ? 0.0022 : 0.0009) * rng.range(0.7, 1.1);
+        const dir = new THREE.Vector3(x / eye.radius * 0.12, upper ? 0.35 : -0.25, 0.85).normalize();
         const tip = root.clone().addScaledVector(dir, len);
         const n = root.clone().sub(centre).normalize();
         rb.add({
           pts: [root, root.clone().lerp(tip, 0.55), tip],
-          half: [0.00055, 0.00042, 0.00016],
+          half: [0.00010, 0.00007, 0.000015],
           normal: [n, n, n],
           grey: 0,
-          repeat: 0.2,
+          repeat: 1 / 22,
         });
       }
     }
@@ -611,25 +627,14 @@ export function buildBeard(anchors: HeadAnchors, spec: BeardSpec, seed: string):
       normal: [n, n, n],
       grey: Math.max(0, Math.min(1, grey)),
       // Same sub-pixel-strand problem as the brows, at a smaller scale.
-      repeat: 0.25,
+      repeat: 1 / 22,
     });
   };
 
-  /* WHY THE COUNTS ARE WHAT THEY ARE.
-   *
-   * A trimmed beard is a CONTINUOUS mass with a hard edge along its upper
-   * boundary. Cards that do not overlap render as a scatter of specks, and
-   * every previous pass at this — 340 cards, then 2200 — was still below the
-   * overlap threshold. At 0.85 mm half-width a card covers about 1.7 mm of
-   * jaw; the beard region is roughly 90 x 45 mm of surface, so continuous
-   * coverage at one layer needs order 1500 cards and a mass that survives the
-   * alpha test needs three layers of that. The cards are also wider now, which
-   * buys coverage far more cheaply than count does.
-   *
-   * The distribution is stratified in azimuth rather than uniformly random, so
-   * no band is left bald by chance — with 44 bands and uniform sampling the
-   * emptiest band routinely came out at half the mean. */
-  const count = Math.round(6200 * spec.density);
+  // The skin already carries beard coverage. Cards add separate short fibres
+  // instead of repeatedly covering the whole jaw with millimetre-wide plates.
+  const greyFibre = (): number => rng.bool(spec.grey * 0.45) ? rng.range(0.40, 0.70) : 0;
+  const count = Math.round(4300 * spec.density);
   const AZ_BANDS = 56;
   for (let i = 0; i < count; i++) {
     const band = i % AZ_BANDS;
@@ -639,13 +644,13 @@ export function buildBeard(anchors: HeadAnchors, spec: BeardSpec, seed: string):
     // Bias toward the top of the band so the mass is densest just under the
     // jawline edge, which is where a trimmed beard actually is.
     const el = bot + (top - bot) * Math.pow(rng.next(), 0.6);
-    emit(az, el, spec.length * rng.range(0.7, 1.25), spec.grey + rng.range(-0.20, 0.26), 0.00125);
+    emit(az, el, spec.length * rng.range(0.55, 0.95), greyFibre(), 0.00030);
   }
 
   /* Moustache: a separate patch above the lip, never on it, and connected to
    * the beard at the corners of the mouth — an unconnected moustache is the
    * loudest thing wrong with a CG beard. */
-  const stache = Math.round(1700 * spec.density);
+  const stache = Math.round(900 * spec.density);
   for (let i = 0; i < stache; i++) {
     const az = rng.range(-27 * DEG, 27 * DEG);
     if (Math.abs(az) < 2.0 * DEG && rng.bool(0.5)) continue;   // the philtrum groove
@@ -658,16 +663,16 @@ export function buildBeard(anchors: HeadAnchors, spec: BeardSpec, seed: string):
      * why the front view had no mouth at all. The band is raised to clear the
      * lip and the cards are shortened to two thirds, which is also what a
      * trimmed moustache is: shorter than the beard, not the same length. */
-    emit(az, el, spec.length * rng.range(0.42, 0.72), spec.grey + rng.range(-0.18, 0.28), 0.00105);
+    emit(az, el, spec.length * rng.range(0.35, 0.62), greyFibre(), 0.00024);
   }
 
   /* A soul patch under the lower lip, which is where a trimmed beard is
    * heaviest and what makes the chin read as bearded rather than shaded. */
-  const patch = Math.round(1400 * spec.density);
+  const patch = Math.round(650 * spec.density);
   for (let i = 0; i < patch; i++) {
     const az = rng.range(-21 * DEG, 21 * DEG);
     const el = rng.range(-47 * DEG, -37 * DEG);
-    emit(az, el, spec.length * rng.range(0.7, 1.3), spec.grey + rng.range(-0.22, 0.32), 0.00125);
+    emit(az, el, spec.length * rng.range(0.60, 1.0), greyFibre(), 0.00030);
   }
 
   return rb.build();

@@ -294,6 +294,12 @@ export function sculpt(
   // The back of the skull also sits lower than the crown of an ellipsoid.
   dy -= 0.030 * smooth(-0.18, -0.42, z) * smooth(0.20, 0.55, y);
 
+  // Preserve the measured cranial envelope while limiting relief added on top
+  // of the photographed landmark fit. Full-strength generic cheek/nose carving
+  // added roughly 13 mm to the dorsum and overwhelmed individual anatomy.
+  const cranialY = dy, cranialZ = dz;
+  const facialRelief = 0.55;
+
   /* ---------------------------------------------------------------- *
    * 2. BONY LANDMARKS OF THE FACE
    * ---------------------------------------------------------------- */
@@ -471,7 +477,7 @@ export function sculpt(
   // band the nasal bones actually occupy, and released again before the cheek,
   // so this narrows a nose rather than pinching a face.
   const dorsalCore = 1 - smooth(0.026, 0.096, ax);
-  dx -= side * 0.030 * dorsalRun * front *
+  dx -= side * 0.018 * dorsalRun * front *
     smooth(0.010, 0.062, ax) * (1 - smooth(0.070, 0.120, ax));
 
   /* Projection, as a RAMP. This is what "straight dorsum" means: the profile
@@ -627,8 +633,10 @@ export function sculpt(
     dz -= 0.0055 * furrow * age * (1 - i * 0.18);
   }
 
+  // Preserve the measured frontal silhouette and mandibular taper. Relief
+  // normal to the face is what creates the over-carved cheek/nose planes.
   out.dx = dx * k;
-  out.dy = dy * k;
-  out.dz = dz * k;
+  out.dy = (cranialY + (dy - cranialY) * facialRelief) * k;
+  out.dz = (cranialZ + (dz - cranialZ) * facialRelief) * k;
   return out;
 }

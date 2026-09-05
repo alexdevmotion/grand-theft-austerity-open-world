@@ -616,8 +616,8 @@ class Vehicle implements VehicleHandle {
   }
 
   private findDoor(id: string): DoorState | undefined {
-    if (id === 'driver') return this.doors.find((d) => d.part.row === 0 && d.part.side < 0) ?? this.doors[0];
-    if (id === 'passenger') return this.doors.find((d) => d.part.row === 0 && d.part.side > 0);
+    if (id === 'driver') return this.doors.find((d) => d.part.row === 0 && d.part.side > 0);
+    if (id === 'passenger') return this.doors.find((d) => d.part.row === 0 && d.part.side < 0);
     return this.doors.find((d) => d.part.id === id);
   }
 

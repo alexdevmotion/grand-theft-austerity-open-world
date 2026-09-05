@@ -17,6 +17,7 @@
  */
 
 import { expect, test } from 'bun:test';
+import * as THREE from 'three';
 import {
   bodyTravel,
   cameraTravel,
@@ -24,11 +25,40 @@ import {
   footSurface,
   playerSpawnFromPlace,
   travelBodyYaw,
+  driverSeatX,
+  driverDoorPoint,
+  driverExitPoint,
 } from './player';
 import { PLACES } from '../content/places';
 import { CHARACTER_SKIN, capsuleRestHeight } from '../physics/physics';
 
 const DEG = Math.PI / 180;
+
+test('driver boarding and exit stay on physical left through all headings', () => {
+  const up = new THREE.Vector3(0, 1, 0);
+  const position = new THREE.Vector3(17, 2, -9);
+  for (const kind of ['dacia', 'sedan', 'hatch', 'police', 'van', 'truck', 'bus', 'tram', 'scooter'] as const) {
+    expect(driverSeatX(kind)).toBeGreaterThanOrEqual(0);
+    for (const heading of [0, Math.PI / 2, Math.PI, -Math.PI / 2, 0.73, -2.4]) {
+      const rotation = new THREE.Quaternion().setFromAxisAngle(up, heading);
+      const right = new THREE.Vector3(0, 0, 1).applyQuaternion(rotation).cross(up);
+      const vehicle = { kind, position, rotation };
+      expect(driverDoorPoint(vehicle, new THREE.Vector3()).sub(position).dot(right)).toBeLessThan(0);
+      expect(driverExitPoint(vehicle, new THREE.Vector3()).sub(position).dot(right)).toBeLessThan(0);
+      const anchored = {
+        ...vehicle,
+        doorAnchor: (id: string, out: THREE.Vector3) => {
+          expect(id).toBe('driver');
+          return out.set(1.8, -0.6, 1.2).applyQuaternion(rotation).add(position);
+        },
+      };
+      const door = driverDoorPoint(anchored, new THREE.Vector3());
+      const expected = new THREE.Vector3(1.8, -0.6, 1.2).applyQuaternion(rotation).add(position);
+      expect(door.distanceTo(expected)).toBeLessThan(1e-6);
+      expect(driverExitPoint(anchored, new THREE.Vector3()).sub(door).dot(right)).toBeLessThan(0);
+    }
+  }
+});
 
 /** Shortest signed angle from `b` to `a`. */
 function delta(a: number, b: number): number {

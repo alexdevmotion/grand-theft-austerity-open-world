@@ -6,10 +6,11 @@ image; they are a checklist, not a replacement for looking.
 
 ## Approach, and its limits
 
-There is no photo-to-3D pipeline in this project and no scanned head data.
-Likeness is achieved the way game caricature has always been achieved: identify
-the handful of features that carry recognition, then author them into the
-shared humanoid rig with enough exaggeration to survive at gameplay distance.
+The offline fitter measures real photographs, then deforms a shared head.
+Blender refines that mesh and produces runtime eyelid shape keys. This is
+landmark-guided reconstruction, not scanned head data. Use natural proportions
+and restrained shading; the current direction is in `VISUAL_TARGET.md` and the
+reproducible workflow is in `BLENDER.md`.
 
 Recognition at 5–20 m comes from **silhouette, hairline, brow and build** — not
 from skin pores. Get those right and the character reads instantly; get them
@@ -24,14 +25,14 @@ use the photos only as things to look at.
 
 ### Ilie Bolojan-Agatinei — the player
 
-A fusion of two real people. `docs/reference/likeness/ref-lead-head.png`
-(cropped from the target frame) is the **primary** silhouette; the Bolojan
-traits are pushed into it.
+A fictional fusion of two real people.
+`docs/reference/likeness/alexandru-agatinei.jpg` supplies the lead anatomy;
+`likeness/bolojan.jpg` supplies the broader jaw and heavier brows. The old
+concept crop is a clothing reference only.
 
-From `ref-lead-head.png` (the Agatinei half, and the visual target):
+From the Agatinei photograph:
 - Short dark hair, cut close at the sides, distinctly greying at the temples.
-- Full but short, well-trimmed salt-and-pepper beard — much greyer than the
-  hair, heaviest on the chin.
+- Full but short, dark beard with discrete grey strands, heaviest on the chin.
 - Permanently furrowed brow; a vertical crease between the brows.
 - Deep-set dark eyes, prominent cheekbones, strong straight nose.
 - Olive/tanned skin, mid-40s to 50s, lean but solid.
@@ -68,10 +69,10 @@ frame** against the player's **cropped hair + heavy build**.
 
 ### Alex Need-Aid — Recorder operative
 
-From `docs/reference/likeness/ref-ally-head.png` (cropped from the target frame;
-no freely-licensed photo exists, so this is the only reference):
-- Dark brown wavy hair, tousled and swept back and upward with real volume,
-  loose strands at the front.
+From `docs/reference/likeness/alex-nedea.jpg`, identified by Recorder
+on its team page (studio reference only):
+- Short dark brown hair swept to the side, with restrained volume.
+- Blue-grey eyes with dark pupils and a subtle limbal ring.
 - Clean-shaven with a faint stubble shadow along the jaw.
 - Lean, angular face; high cheekbones; prominent straight nose; thin lips.
 - Alert, mildly sceptical expression. Early 40s, slim athletic build.
@@ -157,6 +158,11 @@ warm travertine-clad podium, purple/magenta-lit interiors visible through the
 glass, facade-mounted political screens, and an enterable ground-floor lobby.
 
 ## Attribution
+
+The Agatinei and Nedea photographs come from their speaker and team pages.
+Their inclusion as studio reference does not imply a redistribution licence.
+Exact sources and rights boundaries are in `reference/ATTRIBUTION.md`.
+
 
 `likeness/bolojan.jpg`, `likeness/nicusor-dan.jpg`, `world/dacia-1300.jpg`,
 `world/parliament.jpg`, `world/unirii-boulevard.jpg`, `world/lipscani-oldtown.jpg`

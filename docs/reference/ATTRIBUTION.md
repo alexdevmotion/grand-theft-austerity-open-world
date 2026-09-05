@@ -1,8 +1,9 @@
 # Reference image attribution
 
-These files are **studio reference only** — held so that modellers (human or
-agent) can look at them while authoring procedural geometry. They are **not**
-shipped as game textures and are not redistributed as part of any build.
+The photographs and concept images below are **studio reference only**, held
+for modelling and offline landmark fitting. They are not shipped as game
+textures. The separate CC0 runtime mesh and skin assets are identified in the
+MakeHuman section below.
 
 ## Wikimedia Commons
 
@@ -40,9 +41,9 @@ Wikivoyage file page preserves the photographer and CC BY 2.0 attribution.
 
 The cast are fictional composites drawn from public figures, in the tradition
 of political satire. They carry altered names (Bolojan-Agatinei, Nicușor LAN,
-Alex Need-Aid, George Georgescu) and are authored as stylised caricatures
-rather than photoreal digital doubles — no photograph is projected onto face
-geometry.
+Alex Need-Aid, George Georgescu). The three main heads use photo-fitted
+anatomical geometry and generic skin maps. They are not validated digital
+doubles, and no subject photograph is projected onto face geometry.
 
 ## Audio
 
@@ -84,9 +85,9 @@ contributors, licensed **ODbL 1.0** — https://www.openstreetmap.org/copyright
 It contains *data*, not art: building footprints with storey counts, street
 centrelines with classification, tram routes, parks and squares for central
 Bucharest, projected to metres on a local tangent plane centred on Piața
-Universității. Every mesh in the game is still generated procedurally from that
-data in the game's own style, so nothing third-party is shipped as geometry or
-texture.
+Universității. City building meshes are generated procedurally from those
+footprints. The separately sourced CC0 character geometry and textures are
+documented below.
 
 ODbL requires attribution wherever the derived work is shown — the credits
 screen must carry "© OpenStreetMap contributors".
@@ -100,3 +101,48 @@ Scraped 3D building models (Sketchfab and similar) and Google's photogrammetric
 and would need clearing model by model; the latter are forbidden by Google's
 terms. Both would also import baked lighting and arbitrary topology, which would
 read as imported furniture against a procedurally generated, stylised city.
+
+## Real portrait refresh — 4 September 2026
+
+The following publicly displayed photographs replace concept-art crops as
+inputs to the offline landmark fitter. They are studio reference only, retain
+their owners' copyright, and are not licensed here for redistribution as game
+textures. Their pixels are not included in the runtime assets.
+
+| Local file | Identity and source | Use |
+| --- | --- | --- |
+| `likeness/alex-nedea.jpg` | [Recorder team page](https://recorder.ro/cine-suntem/), [portrait](https://recorder.ro/wp-content/uploads/2023/05/DSC03352-RESIZE-1024x1024.jpg); photographer not identified on team listing | Proportions, blue-grey eyes, swept short hair for fictional Alex Need-Aid |
+| `likeness/alexandru-agatinei.jpg` | [TechConnect speaker listing](https://techconnectfestival.eu/speakeri/), [portrait](https://techconnectfestival.eu/wp-content/uploads/2025/09/Alexandru-Agatinei-1.jpg); photographer not identified on listing | Player silhouette and face landmarks, blended with the existing Bolojan reference |
+
+The existing Bolojan and Nicușor photographs above were inspected and refitted
+in the same run. The old concept crops remain available for costume/fictional
+character design history. George Georgescu remains the story's invented
+composite broadcast antagonist; no single real-person identity was assigned.
+
+## MakeHuman anatomical mesh and skin — 5 September 2026
+
+The three main character heads derive from MakeHuman Community's CC0 HM08
+`base.obj`, retained unmodified at `assets/source/hm08/base.obj`. The pinned
+upstream source is [MPFB2 commit 437dd513888a92399d1d3200d2e80859fae55abc](https://github.com/makehumancommunity/mpfb2/blob/437dd513888a92399d1d3200d2e80859fae55abc/src/mpfb/data/3dobjs/base.obj).
+The [local mesh provenance](../../assets/source/hm08/README.md) and
+[CC0 license](../../assets/source/hm08/LICENSE.CC0.md) record the source and
+separate the CC0 asset from GPL addon code; no addon program code is copied into
+the runtime.
+
+The generic male skin textures come from the [official MakeHuman system asset
+pack](https://static.makehumancommunity.org/assets/assetpacks/makehuman_system_assets.html),
+which lists both assets as CC0. The retained original materials explicitly
+record the September 2020 CC0 release, naming Data Collection AB, Joel Palmius
+and Jonas Hauquier as copyright holders at release.
+
+| Material asset | Runtime texture |
+| --- | --- |
+| `middleage_caucasian_male` | `public/textures/characters/middleage_lightskinned_male_diffuse.png` |
+| `young_caucasian_male` | `public/textures/characters/young_lightskinned_male_diffuse.png` |
+
+Both 2048 × 2048 PNGs are unmodified. Original PNGs and `.mhmat` references,
+license and [source notes](../../assets/source/hm08/skin/README.md) are retained
+under `assets/source/hm08/skin/`; the [provenance manifest](../../assets/source/hm08/skin/provenance.json)
+records exact archive members, CRCs and SHA-256 hashes. Runtime copies are
+byte-identical. These maps supply generic skin colour and detail on preserved
+HM08 UVs, not the photographed subject's albedo or a claim of scanned likeness.

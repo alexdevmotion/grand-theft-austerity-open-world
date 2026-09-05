@@ -1,0 +1,100 @@
+{
+  "blender": "5.2.1 LTS",
+  "models": {
+    "dacia1300": {
+      "parts": 14,
+      "doors": 4,
+      "triangles": 16824
+    },
+    "dacia1300.hero": {
+      "parts": 14,
+      "doors": 4,
+      "triangles": 16844
+    },
+    "dacia1310": {
+      "parts": 14,
+      "doors": 4,
+      "triangles": 12588
+    },
+    "dacia1310break": {
+      "parts": 14,
+      "doors": 4,
+      "triangles": 12696
+    },
+    "oltcit": {
+      "parts": 10,
+      "doors": 2,
+      "triangles": 12342
+    },
+    "supernova": {
+      "parts": 14,
+      "doors": 4,
+      "triangles": 15652
+    },
+    "sandero": {
+      "parts": 14,
+      "doors": 4,
+      "triangles": 11324
+    },
+    "duster": {
+      "parts": 14,
+      "doors": 4,
+      "triangles": 11492
+    },
+    "logan": {
+      "parts": 14,
+      "doors": 4,
+      "triangles": 15780
+    },
+    "loganTaxi": {
+      "parts": 14,
+      "doors": 4,
+      "triangles": 16164
+    },
+    "sedanModern": {
+      "parts": 14,
+      "doors": 4,
+      "triangles": 11348
+    },
+    "ministry": {
+      "parts": 14,
+      "doors": 4,
+      "triangles": 11436
+    },
+    "aro24": {
+      "parts": 14,
+      "doors": 4,
+      "triangles": 15180
+    },
+    "dacia1304": {
+      "parts": 10,
+      "doors": 2,
+      "triangles": 9128
+    },
+    "panelVan": {
+      "parts": 10,
+      "doors": 2,
+      "triangles": 10118
+    },
+    "roman": {
+      "parts": 12,
+      "doors": 2,
+      "triangles": 13192
+    },
+    "ratb": {
+      "parts": 8,
+      "doors": 0,
+      "triangles": 14286
+    },
+    "tram": {
+      "parts": 14,
+      "doors": 0,
+      "triangles": 24758
+    },
+    "escooter": {
+      "parts": 4,
+      "doors": 0,
+      "triangles": 1304
+    }
+  }
+}

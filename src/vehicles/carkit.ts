@@ -28,7 +28,8 @@ import { Rng } from '../core/rng';
 import type { WheelStyle } from './wheels';
 import type { VehicleClass } from '../core/services';
 
-const lin = (hex: number) => new THREE.Color(hex).convertSRGBToLinear();
+// Hex colours are converted from sRGB by Three's colour management.
+const lin = (hex: number) => new THREE.Color(hex);
 
 /* ------------------------------------------------------------------ */
 /* Shared palette + lamp channels                                      */
@@ -43,7 +44,7 @@ export const LENS_RED = lin(0xd8122a);
 export const LENS_AMBER = lin(0xff9a20);
 export const LENS_CLEAR = lin(0xe8eef6);
 export const LAMP_WHITE = lin(0xfff3d8);
-export const GLASS = lin(0x2c3550);
+export const GLASS = lin(0xb2c2ba);
 export const CABIN_SHADOW = lin(0x0b0a10);
 
 /** 8 emissive channels: head, tail, brake, reverse | indL, indR, interior, aux */
@@ -90,6 +91,7 @@ export interface PaintScheme {
 
 export interface DoorPart {
   id: string;
+  /** Physical local X sign: +1 left, -1 right when facing +Z. */
   side: -1 | 1;
   row: 0 | 1;
   /** Hinge position in body-local space; the door rotates about +Y here. */
@@ -343,7 +345,7 @@ export function buildCarBody(d: CarDesign, scheme: PaintScheme, rng: Rng, hero =
     hw: d.halfWidth,
     b, g,
     paint: {
-      colorFn: paintFn, rough: 0.28 + scheme.wear * 0.14, metal: 0, coat: 1 - scheme.wear * 0.25,
+      colorFn: paintFn, rough: 0.30 + scheme.wear * 0.24, metal: 0, coat: 1 - scheme.wear * 0.60,
       uv: scheme.wear > 0.5 ? UV.bodyBattered : UV.bodyClean,
     },
     glassSurf: { color: GLASS, rough: 0.045, metal: 0, coat: 0, uv: UV.glassGrime },
@@ -395,6 +397,7 @@ function defaultPanels(d: CarDesign, s: PaintScheme): ColorFn {
 
 interface DoorSlot {
   id: string;
+  /** Physical local X sign: +1 left, -1 right when facing +Z. */
   side: -1 | 1;
   row: 0 | 1;
   z0: number;
@@ -497,7 +500,7 @@ function bodyStations(d: CarDesign): Station[] {
       hw: halfWidthAt(d, z),
       yTop: -d.rideHeight + topY(d, z),
       yBottom: -d.rideHeight + archY(d, z),
-      rTop: 0.075,
+      rTop: 0.095,
       rBottom: 0.05,
     }));
 }
@@ -507,12 +510,12 @@ function lowerBody(c: Ctx): DoorSlot[] {
   const slots: DoorSlot[] = [];
   if (d.doorRows >= 1) {
     for (const side of [-1, 1] as const) {
-      slots.push({ id: side < 0 ? 'frontLeft' : 'frontRight', side, row: 0, z0: d.frontDoorZ[0], z1: d.frontDoorZ[1], skin: new GeoBuilder(), glassB: new GeoBuilder() });
+      slots.push({ id: side > 0 ? 'frontLeft' : 'frontRight', side, row: 0, z0: d.frontDoorZ[0], z1: d.frontDoorZ[1], skin: new GeoBuilder(), glassB: new GeoBuilder() });
     }
   }
   if (d.doorRows >= 2) {
     for (const side of [-1, 1] as const) {
-      slots.push({ id: side < 0 ? 'rearLeft' : 'rearRight', side, row: 1, z0: d.rearDoorZ[0], z1: d.rearDoorZ[1], skin: new GeoBuilder(), glassB: new GeoBuilder() });
+      slots.push({ id: side > 0 ? 'rearLeft' : 'rearRight', side, row: 1, z0: d.rearDoorZ[0], z1: d.rearDoorZ[1], skin: new GeoBuilder(), glassB: new GeoBuilder() });
     }
   }
 
@@ -569,11 +572,11 @@ function greenhouse(c: Ctx, slots: DoorSlot[]): void {
   /* roof panel, crowned, with the drip rail built in */
   const roofBackZ = d.rear === 'saloon' ? d.rsTop : d.rsTop - 0.04;
   const roofStations: Station[] = [
-    { z: roofBackZ - 0.03, hw: hwTop - 0.05, yTop: c.y(d.height - 0.024), yBottom: c.y(d.height - 0.135), rTop: 0.055, rBottom: 0.03 },
-    { z: roofBackZ + (d.wsTop - roofBackZ) * 0.22, hw: hwTop, yTop: c.y(d.height - 0.002), yBottom: c.y(d.height - 0.135), rTop: 0.06, rBottom: 0.03 },
-    { z: (roofBackZ + d.wsTop) * 0.5, hw: hwTop + 0.010, yTop: c.y(d.height + d.roofCrown), yBottom: c.y(d.height - 0.135), rTop: 0.06, rBottom: 0.03 },
-    { z: roofBackZ + (d.wsTop - roofBackZ) * 0.78, hw: hwTop, yTop: c.y(d.height - 0.002), yBottom: c.y(d.height - 0.135), rTop: 0.06, rBottom: 0.03 },
-    { z: d.wsTop + 0.03, hw: hwTop - 0.05, yTop: c.y(d.height - 0.024), yBottom: c.y(d.height - 0.135), rTop: 0.055, rBottom: 0.03 },
+    { z: roofBackZ - 0.03, hw: hwTop - 0.05, yTop: c.y(d.height - 0.024), yBottom: c.y(d.height - 0.072), rTop: 0.055, rBottom: 0.03 },
+    { z: roofBackZ + (d.wsTop - roofBackZ) * 0.22, hw: hwTop, yTop: c.y(d.height - 0.002), yBottom: c.y(d.height - 0.072), rTop: 0.06, rBottom: 0.03 },
+    { z: (roofBackZ + d.wsTop) * 0.5, hw: hwTop + 0.010, yTop: c.y(d.height + d.roofCrown), yBottom: c.y(d.height - 0.072), rTop: 0.06, rBottom: 0.03 },
+    { z: roofBackZ + (d.wsTop - roofBackZ) * 0.78, hw: hwTop, yTop: c.y(d.height - 0.002), yBottom: c.y(d.height - 0.072), rTop: 0.06, rBottom: 0.03 },
+    { z: d.wsTop + 0.03, hw: hwTop - 0.05, yTop: c.y(d.height - 0.024), yBottom: c.y(d.height - 0.072), rTop: 0.055, rBottom: 0.03 },
   ];
   b.loft(roofStations, pillarSurf);
 
@@ -622,16 +625,26 @@ function greenhouse(c: Ctx, slots: DoorSlot[]): void {
    */
   const wsBotHW = hwBelt - 0.030;
   const wsTopHW = hwTop - 0.028;
-  g.quad(
-    V(-wsBotHW, GLASS_BOT, d.wsBase), V(wsBotHW, GLASS_BOT, d.wsBase),
-    V(wsTopHW, GLASS_TOP, d.wsTop), V(-wsTopHW, GLASS_TOP, d.wsTop), c.glassSurf,
-  );
+  const screen = (bottomHW: number, topHW: number, baseZ: number, topZ: number, direction: 1 | -1) => {
+    const point = (u: number, v: number) => {
+      const hw = THREE.MathUtils.lerp(bottomHW, topHW, v);
+      const bow = Math.sin(Math.PI * u) * Math.sin(Math.PI * v) * 0.034;
+      return V(direction * (u * 2 - 1) * hw,
+        THREE.MathUtils.lerp(GLASS_BOT, GLASS_TOP, v),
+        THREE.MathUtils.lerp(baseZ, topZ, v) + direction * bow);
+    };
+    // A shallow compound curve gives reflections shape while all four edges
+    // stay on the aperture. UVs span the screen once, including the wiper dirt.
+    for (let i = 0; i < 10; i++) for (let j = 0; j < 4; j++) {
+      const u0 = i / 10, u1 = (i + 1) / 10, v0 = j / 4, v1 = (j + 1) / 4;
+      g.smoothQuad(point(u0, v0), point(u1, v0), point(u1, v1), point(u0, v1),
+        u0, u1, v0, v1, c.glassSurf);
+    }
+  };
+  screen(wsBotHW, wsTopHW, d.wsBase, d.wsTop, 1);
   const rsBotHW = hwBelt - 0.030;
   const rsTopHW = hwTop - 0.030;
-  g.quad(
-    V(rsBotHW, GLASS_BOT, d.rsBase), V(-rsBotHW, GLASS_BOT, d.rsBase),
-    V(-rsTopHW, GLASS_TOP, d.rsTop), V(rsTopHW, GLASS_TOP, d.rsTop), c.glassSurf,
-  );
+  screen(rsBotHW, rsTopHW, d.rsBase, d.rsTop, -1);
   // Header and scuttle cross members, on every car — these are what close the
   // top and bottom of each screen aperture.
   b.strut(V(-wsBotHW, d.belt + 0.012, d.wsBase), V(wsBotHW, d.belt + 0.012, d.wsBase), 0.05, 0.055, pillarSurf);
@@ -688,11 +701,14 @@ function greenhouse(c: Ctx, slots: DoorSlot[]): void {
     }
   }
 
-  /* wipers */
+  /* Parked wipers follow the actual windscreen plane. */
   for (const wx of [-0.34, 0.20]) {
-    b.box(0.015, 0.011, d.width * 0.26, T(wx * d.width * 0.9, c.y(d.belt + 0.05), d.wsBase - 0.14, -0.32, 0.22, 0), {
-      color: BLACK_TRIM, rough: 0.55, metal: 0.2, coat: 0.2,
-    });
+    const pivotX = wx * d.width * 0.9;
+    const pivot = V(pivotX, GLASS_BOT + 0.005, d.wsBase + 0.016);
+    const tip = V(pivotX + d.width * 0.18, GLASS_BOT + 0.055, d.wsBase - (d.wsBase - d.wsTop) * 0.13 + 0.014);
+    b.strut(pivot, tip, 0.009, 0.009, c.chromeDull);
+    b.strut(tip.clone().add(new THREE.Vector3(-d.width * 0.115, -0.010, 0.008)),
+      tip.clone().add(new THREE.Vector3(d.width * 0.115, 0.010, -0.008)), 0.012, 0.009, c.rubber);
   }
 }
 
@@ -732,12 +748,12 @@ function interior(c: Ctx): void {
   // dashboard, with a faintly glowing instrument pack
   b.box(d.halfWidth * 1.62, 0.19, 0.30, T(0, c.y(d.belt - 0.09), d.wsBase - 0.20, 0.22, 0, 0), dashSurf);
   b.box(d.halfWidth * 1.62, 0.06, 0.22, T(0, c.y(d.belt - 0.20), d.wsBase - 0.31), plastic);
-  b.box(0.40, 0.12, 0.02, T(-d.halfWidth * 0.4, c.y(d.belt - 0.075), d.wsBase - 0.34), {
+  b.box(0.40, 0.12, 0.02, T(d.halfWidth * 0.4, c.y(d.belt - 0.075), d.wsBase - 0.34), {
     color: lin(0xffb060), rough: 0.4, metal: 0, uv: UV.dash, light: L.cabin,
   });
 
   // steering wheel (LHD) + column
-  const wx = -d.halfWidth * 0.42, wy = c.y(d.belt - 0.10), wz = d.wsBase - 0.46;
+  const wx = d.halfWidth * 0.42, wy = c.y(d.belt - 0.10), wz = d.wsBase - 0.46;
   b.torus(d.width * 0.098, 0.016, 5, 14, Math.PI * 2, T(wx, wy, wz, Math.PI / 2 - 0.42, 0, 0), { color: lin(0x171219), rough: 0.6, metal: 0.05 });
   for (let i = 0; i < 3; i++) {
     const a = (i / 3) * Math.PI * 2 + 0.4;
@@ -778,7 +794,7 @@ function frontEnd(c: Ctx): void {
   const { d, b, V } = c;
   const zF = c.nose + 0.045;
   const hw = halfWidthAt(d, c.nose - 0.10);
-  const lampY = d.belt - (d.belt - d.sill) * 0.42;
+  const lampY = d.belt - (d.belt - d.sill) * 0.30;
   const chrome = c.chrome, chromeDull = c.chromeDull, trim = c.trim;
   const bumperChrome = d.bumpers === 'chrome';
   const bumperSurf: Surf = bumperChrome ? chrome
@@ -842,7 +858,7 @@ function frontEnd(c: Ctx): void {
   const lampX = hw - 0.20;
   for (const sx of [-1, 1] as const) {
     const x = sx * lampX;
-    const indL = sx < 0 ? L.indL : L.indR;
+    const indL = sx > 0 ? L.indL : L.indR;
     switch (d.lamps) {
       case 'rect1300': {
         /**
@@ -1015,7 +1031,7 @@ function rearEnd(c: Ctx): void {
 
   for (const sx of [-1, 1] as const) {
     const x = sx * (hw - 0.20);
-    const indL = sx < 0 ? L.indL : L.indR;
+    const indL = sx > 0 ? L.indL : L.indR;
     if (d.rear === 'saloon' && (d.lamps === 'rect1300' || d.lamps === 'rect1310' || d.lamps === 'roundTwin')) {
       // Three-segment 70s cluster: amber / red / white in a chrome frame.
       b.box(0.30, 0.185, 0.05, T(x, c.y(lampY), zR - 0.004), { color: BLACK_TRIM, rough: 0.6, metal: 0.3 });
@@ -1217,7 +1233,7 @@ function buildDriver(c: Ctx): THREE.BufferGeometry {
   const floor = d.sill + 0.10;
   const cabinZ = (d.wsBase + d.rsBase) * 0.5;
   const sz = cabinZ + (d.wsBase - d.rsBase) * 0.16;
-  const sx = -d.halfWidth * 0.42;
+  const sx = d.halfWidth * 0.42;
   const hipY = floor + 0.30;
   const skin: Surf = { color: lin(0x8a6144), rough: 0.72, metal: 0 };
   const cloth: Surf = { color: lin(0x2b3348), rough: 0.88, metal: 0.02, uv: UV.fabric };
@@ -1246,7 +1262,7 @@ function anchors(c: Ctx): BodyAnchors {
   const { d } = c;
   const hwF = halfWidthAt(d, c.nose - 0.10);
   const hwR = halfWidthAt(d, c.tail + 0.12);
-  const lampY = d.belt - (d.belt - d.sill) * 0.42;
+  const lampY = d.belt - (d.belt - d.sill) * 0.30;
   const tailY = d.rear === 'saloon' ? d.belt - 0.17 : d.belt - 0.10;
   return {
     headlights: [

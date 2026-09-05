@@ -135,7 +135,7 @@ export interface LeadResult {
   /** Forward speed of whatever is ahead. */
   speed: number;
   obstacle: Obstacle | null;
-  /** Signed lateral offset of the obstacle from our path (+ = to our right). */
+  /** Signed lateral offset of the obstacle from our path (+ = to our left, matching the steering controller). */
   lateral: number;
 }
 

@@ -17,7 +17,6 @@
  */
 
 import * as THREE from 'three';
-import { Palette } from '../artDirection';
 
 /* ------------------------------------------------------------------ */
 /* Surface description                                                 */
@@ -503,18 +502,6 @@ export interface CarUniforms {
   uGrime: { value: number };
 }
 
-/**
- * Two-band stand-in environment, straight out of the art direction.
- *
- * These are deliberately BRIGHT. They are what chrome, glass and lacquered
- * paint reflect, and at golden hour the sky dome is the single most luminous
- * thing in the world — a timid value here is exactly what makes car paint read
- * as matte clay.
- */
-const SKY_TINT = Palette.skyMidBand.clone().lerp(Palette.skyLowBand, 0.5).multiplyScalar(1.75);
-const HORIZON_TINT = Palette.skyHorizon.clone().multiplyScalar(1.55);
-const GROUND_TINT = Palette.asphaltWet.clone().lerp(Palette.skyAmbient, 0.5).multiplyScalar(0.7);
-
 export function makeCarUniforms(): CarUniforms {
   return {
     uChanA: { value: new THREE.Vector4(0, 0, 0, 0) },
@@ -539,21 +526,6 @@ varying vec3 vMatP;
 varying float vEmis;
 uniform float uEmis;
 uniform float uGrime;
-uniform vec3 uSkyTint;
-uniform vec3 uHorizonTint;
-uniform vec3 uGroundTint;
-
-/** Three-band environment: hot orange horizon rip, magenta sky above it,
- *  violet wet street below. Chrome, glass and lacquer need something to
- *  reflect or they read as flat clay, and this stays correct even before a
- *  real probe exists. The horizon band is what puts a warm streak down the
- *  flank of a car at golden hour. */
-vec3 gtaFakeEnv(vec3 n, vec3 v) {
-  vec3 upV = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
-  float t = dot(reflect(-v, n), upV);
-  vec3 above = mix(uHorizonTint, uSkyTint, smoothstep(0.02, 0.55, t));
-  return mix(uGroundTint, above, smoothstep(-0.16, 0.03, t));
-}
 `;
 
 /**
@@ -589,9 +561,6 @@ export function createCarMaterial(
     shader.uniforms.uChanB = uniforms.uChanB;
     shader.uniforms.uEmis = uniforms.uEmis;
     shader.uniforms.uGrime = uniforms.uGrime;
-    shader.uniforms.uSkyTint = { value: SKY_TINT };
-    shader.uniforms.uHorizonTint = { value: HORIZON_TINT };
-    shader.uniforms.uGroundTint = { value: GROUND_TINT };
 
     shader.vertexShader = VERT_HEAD + shader.vertexShader;
     shader.vertexShader = shader.vertexShader.replace(
@@ -618,45 +587,22 @@ export function createCarMaterial(
       '#include <lights_physical_fragment>',
       `#include <lights_physical_fragment>
        material.clearcoat *= vMatP.z * (1.0 - uGrime * 0.7);
-       material.clearcoatRoughness = clamp(material.clearcoatRoughness + uGrime * 0.35, 0.02, 1.0);`,
+       material.clearcoatRoughness = clamp(material.clearcoatRoughness + vMatP.x * 0.30 + uGrime * 0.35, 0.02, 1.0);`,
     );
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <emissivemap_fragment>',
       opts.glass
         ? `#include <emissivemap_fragment>
        totalEmissiveRadiance += diffuseColor.rgb * max(vEmis, 0.0) * uEmis;
-       {
-         // Glass mirrors the sky and goes fully opaque at grazing angles.
-         // The reflection has to be STRONG: a dark tint at 60% alpha over a
-         // dusk street is indistinguishable from an empty window aperture,
-         // which is precisely how this car ended up looking roofless.
-         vec3 gV = normalize(vViewPosition);
-         float gFres = pow(1.0 - clamp(abs(dot(normal, gV)), 0.0, 1.0), 2.9);
-         vec3 gEnv = gtaFakeEnv(normal, gV);
-         totalEmissiveRadiance += gEnv * (0.16 + gFres * 2.6) * (1.0 - uGrime * 0.4);
-         diffuseColor.a = clamp(mix(0.70, 1.0, gFres), 0.0, 1.0);
-       }`
+       // Scene PMREM supplies the reflection. Only lamp channels emit light;
+       // adding a second painted sky here made glass and chrome glow at night.
+       float facing = clamp(abs(dot(normal, normalize(vViewPosition))), 0.0, 1.0);
+       float fresnel = pow(1.0 - facing, 5.0);
+       diffuseColor.a = mix(0.24 + uGrime * 0.18, 0.94, fresnel);`
         : `#include <emissivemap_fragment>
-       totalEmissiveRadiance += diffuseColor.rgb * max(vEmis, 0.0) * uEmis;
-       {
-         vec3 cV = normalize(vViewPosition);
-         float cFres = pow(1.0 - clamp(abs(dot(normal, cV)), 0.0, 1.0), 3.0);
-         vec3 env = gtaFakeEnv(normal, cV);
-         // Chrome and polished metal reflect the environment tinted by their
-         // own colour.
-         totalEmissiveRadiance += env * diffuseColor.rgb
-           * vMatP.y * (0.34 + cFres * 1.1) * (1.0 - uGrime * 0.5);
-         // Lacquered paint gets a sky gradient down the flanks — the broad
-         // cool-to-warm falloff that makes a body read as curved metal rather
-         // than a flat swatch. Kept modest and half-tinted by the paint itself,
-         // because a strong untinted Fresnel lift at grazing angles washes the
-         // livery out to a single pale value.
-         vec3 coatTint = mix(vec3(1.0), normalize(diffuseColor.rgb + 0.02), 0.45);
-         totalEmissiveRadiance += env * coatTint * vMatP.z
-           * (0.03 + cFres * 0.20) * (1.0 - uGrime * 0.6);
-       }`,
+       totalEmissiveRadiance += diffuseColor.rgb * max(vEmis, 0.0) * uEmis;`,
     );
   };
-  m.customProgramCacheKey = () => (opts.glass ? 'gtaCarGlass' : 'gtaCarOpaque');
+  m.customProgramCacheKey = () => (opts.glass ? 'gtaCarGlassPhysicalV2' : 'gtaCarOpaquePhysicalV2');
   return m;
 }
